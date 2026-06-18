@@ -1,13 +1,20 @@
-
-import streamlit as st
-import pandas as pd
+from copy import deepcopy
 from datetime import datetime
 
+import pandas as pd
+import streamlit as st
+
 from config import *
-from storage import load_settings, update_settings
-from screener import DEFAULT_FILTER_SET, screen_json_file
 from downloader import download_top_stocks, timeframe_config
 from emailer import send_results_email
+from screener import (
+    DEFAULT_FILTER_SET,
+    FILTER_TYPE_DEFAULTS,
+    FILTER_TYPE_LABELS,
+    normalize_filter_set,
+    screen_json_file,
+)
+from storage import load_settings, update_settings
 
 st.set_page_config(layout="wide")
 
@@ -16,10 +23,9 @@ settings = load_settings()
 st.title("NSE Stock Screener")
 
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["Data","MA Screener","Pattern Screener","Results"]
+    ["Data", "MA Screener", "Pattern Screener", "Results"]
 )
 
-results = []
 
 with tab1:
     st.header("Data Management")
@@ -42,8 +48,8 @@ with tab1:
 
     download_tf = st.selectbox(
         "Download Timeframe",
-        ["DAY","WEEK","MONTH"],
-        index=["DAY","WEEK","MONTH"].index(settings.get("download_tf", "DAY")),
+        ["DAY", "WEEK", "MONTH"],
+        index=["DAY", "WEEK", "MONTH"].index(settings.get("download_tf", "DAY")),
     )
 
     if excel_file.exists():
@@ -81,6 +87,7 @@ with tab1:
                     limit=1000,
                     progress_callback=show_download_progress,
                 )
+
             downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
             progress_bar.progress(1.0)
             last_download_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -94,9 +101,11 @@ with tab1:
                 f"Last download: {last_download_at}"
             )
             st.success(f"Downloaded {downloaded_count} of {len(download_rows)} stocks")
+
             failed = [row for row in download_rows if not row["Downloaded"]]
             if failed:
                 st.dataframe(pd.DataFrame(failed), use_container_width=True)
+
 
 with tab2:
     st.header("MA Screener")
@@ -113,194 +122,187 @@ with tab2:
     )
 
     if selected_favorite == "Custom":
-        base_filter_set = settings.get("screener_filter_set", DEFAULT_FILTER_SET)
+        loaded_filter_set = normalize_filter_set(settings.get("screener_filter_set", DEFAULT_FILTER_SET))
     else:
-        base_filter_set = favorite_filter_sets[selected_favorite]
+        loaded_filter_set = normalize_filter_set(favorite_filter_sets[selected_favorite])
 
-    filter_widget_prefix = f"filter_set_{selected_favorite}"
+    if st.session_state.get("loaded_favorite_filter_set") != selected_favorite:
+        st.session_state["current_filter_set"] = deepcopy(loaded_filter_set)
+        st.session_state["loaded_favorite_filter_set"] = selected_favorite
+        st.session_state["next_filter_id"] = (
+            max((int(item.get("id", 0)) for item in loaded_filter_set), default=0) + 1
+        )
 
-    def filter_defaults(name):
-        defaults = DEFAULT_FILTER_SET[name].copy()
-        defaults.update(base_filter_set.get(name, {}))
-        return defaults
+    if "current_filter_set" not in st.session_state:
+        st.session_state["current_filter_set"] = deepcopy(loaded_filter_set)
+
+    if "next_filter_id" not in st.session_state:
+        st.session_state["next_filter_id"] = (
+            max((int(item.get("id", 0)) for item in st.session_state["current_filter_set"]), default=0) + 1
+        )
+
+    current_filter_set = st.session_state["current_filter_set"]
 
     tf = st.selectbox(
         "Timeframe",
-        ["DAY","WEEK","MONTH"],
-        index=["DAY","WEEK","MONTH"].index(settings.get("tf", "DAY")),
+        ["DAY", "WEEK", "MONTH"],
+        index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
     )
 
-    ma_rising_defaults = filter_defaults("ma_rising")
-    st.subheader("MA Rising")
-    col1, col2 = st.columns([1, 2])
+    st.subheader("Add Filter")
+    col1, col2 = st.columns([3, 1])
     with col1:
-        ma_rising_enabled = st.checkbox(
-            "Use MA Rising",
-            value=bool(ma_rising_defaults.get("enabled", False)),
-            key=f"{filter_widget_prefix}_ma_rising_enabled",
+        filter_type_to_add = st.selectbox(
+            "Filter Category",
+            list(FILTER_TYPE_LABELS.keys()),
+            format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
     with col2:
-        ma_rising_period = st.number_input(
-            "MA",
-            min_value=2,
-            max_value=1000,
-            value=int(ma_rising_defaults.get("ma", 200)),
-            key=f"{filter_widget_prefix}_ma_rising_period",
-        )
+        add_filter = st.button("Add Filter")
 
-    short_above_defaults = filter_defaults("short_above_long")
-    st.subheader("Short MA Above Long MA")
-    col1, col2, col3 = st.columns([1, 2, 2])
-    with col1:
-        short_above_enabled = st.checkbox(
-            "Use Short Above Long",
-            value=bool(short_above_defaults.get("enabled", False)),
-            key=f"{filter_widget_prefix}_short_above_enabled",
-        )
-    with col2:
-        short_above_short_ma = st.number_input(
-            "Short MA",
-            min_value=2,
-            max_value=500,
-            value=int(short_above_defaults.get("short_ma", 50)),
-            key=f"{filter_widget_prefix}_short_above_short_ma",
-        )
-    with col3:
-        short_above_long_ma = st.number_input(
-            "Long MA",
-            min_value=2,
-            max_value=1000,
-            value=int(short_above_defaults.get("long_ma", 200)),
-            key=f"{filter_widget_prefix}_short_above_long_ma",
-        )
+    if add_filter:
+        current_filter_set.append({
+            "id": st.session_state["next_filter_id"],
+            "type": filter_type_to_add,
+            "params": deepcopy(FILTER_TYPE_DEFAULTS[filter_type_to_add]),
+        })
+        st.session_state["next_filter_id"] += 1
+        st.rerun()
 
-    price_near_defaults = filter_defaults("price_near_long")
-    st.subheader("Current Price Near And Above Long MA")
-    col1, col2, col3 = st.columns([1, 2, 2])
-    with col1:
-        price_near_enabled = st.checkbox(
-            "Use Price Near Long",
-            value=bool(price_near_defaults.get("enabled", False)),
-            key=f"{filter_widget_prefix}_price_near_enabled",
-        )
-    with col2:
-        price_near_long_ma = st.number_input(
-            "Long MA",
-            min_value=2,
-            max_value=1000,
-            value=int(price_near_defaults.get("long_ma", 200)),
-            key=f"{filter_widget_prefix}_price_near_long_ma",
-        )
-    with col3:
-        price_near_threshold = st.number_input(
-            "Within Percent",
-            min_value=0.1,
-            max_value=100.0,
-            value=float(price_near_defaults.get("threshold_pct", 5.0)),
-            step=0.1,
-            key=f"{filter_widget_prefix}_price_near_threshold",
-        )
+    st.subheader("Current Filter Set")
 
-    golden_cross_defaults = filter_defaults("golden_cross")
-    st.subheader("Short MA Crossed Long MA - Golden Cross")
-    col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
-    with col1:
-        golden_cross_enabled = st.checkbox(
-            "Use Golden Cross",
-            value=bool(golden_cross_defaults.get("enabled", False)),
-            key=f"{filter_widget_prefix}_golden_cross_enabled",
-        )
-    with col2:
-        golden_cross_short_ma = st.number_input(
-            "Short MA",
-            min_value=2,
-            max_value=500,
-            value=int(golden_cross_defaults.get("short_ma", 50)),
-            key=f"{filter_widget_prefix}_golden_cross_short_ma",
-        )
-    with col3:
-        golden_cross_long_ma = st.number_input(
-            "Long MA",
-            min_value=2,
-            max_value=1000,
-            value=int(golden_cross_defaults.get("long_ma", 200)),
-            key=f"{filter_widget_prefix}_golden_cross_long_ma",
-        )
-    with col4:
-        golden_cross_lookback = st.number_input(
-            "Last N Time Frame Units",
-            min_value=1,
-            max_value=1000,
-            value=int(golden_cross_defaults.get("lookback_units", 20)),
-            key=f"{filter_widget_prefix}_golden_cross_lookback",
-        )
+    if not current_filter_set:
+        st.info("No filters added yet. Add at least one filter before running the screener.")
 
-    down_from_max_defaults = filter_defaults("long_ma_down_from_max")
-    st.subheader("Long MA Down From Recent Max")
-    col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
-    with col1:
-        down_from_max_enabled = st.checkbox(
-            "Use Long MA Down",
-            value=bool(down_from_max_defaults.get("enabled", False)),
-            key=f"{filter_widget_prefix}_down_from_max_enabled",
-        )
-    with col2:
-        down_from_max_long_ma = st.number_input(
-            "Long MA",
-            min_value=2,
-            max_value=1000,
-            value=int(down_from_max_defaults.get("long_ma", 200)),
-            key=f"{filter_widget_prefix}_down_from_max_long_ma",
-        )
-    with col3:
-        down_from_max_pct = st.number_input(
-            "Down Percent",
-            min_value=0.1,
-            max_value=100.0,
-            value=float(down_from_max_defaults.get("down_pct", 5.0)),
-            step=0.1,
-            key=f"{filter_widget_prefix}_down_from_max_pct",
-        )
-    with col4:
-        down_from_max_lookback = st.number_input(
-            "Last M Time Frame Units",
-            min_value=2,
-            max_value=2000,
-            value=int(down_from_max_defaults.get("lookback_units", 50)),
-            key=f"{filter_widget_prefix}_down_from_max_lookback",
-        )
+    rendered_filter_set = []
 
-    filter_set = {
-        "ma_rising": {
-            "enabled": ma_rising_enabled,
-            "ma": int(ma_rising_period),
-        },
-        "short_above_long": {
-            "enabled": short_above_enabled,
-            "short_ma": int(short_above_short_ma),
-            "long_ma": int(short_above_long_ma),
-        },
-        "price_near_long": {
-            "enabled": price_near_enabled,
-            "long_ma": int(price_near_long_ma),
-            "threshold_pct": float(price_near_threshold),
-        },
-        "golden_cross": {
-            "enabled": golden_cross_enabled,
-            "short_ma": int(golden_cross_short_ma),
-            "long_ma": int(golden_cross_long_ma),
-            "lookback_units": int(golden_cross_lookback),
-        },
-        "long_ma_down_from_max": {
-            "enabled": down_from_max_enabled,
-            "long_ma": int(down_from_max_long_ma),
-            "down_pct": float(down_from_max_pct),
-            "lookback_units": int(down_from_max_lookback),
-        },
-    }
+    for index, filter_item in enumerate(current_filter_set, start=1):
+        filter_id = filter_item["id"]
+        filter_type = filter_item["type"]
+        params = deepcopy(FILTER_TYPE_DEFAULTS[filter_type])
+        params.update(filter_item.get("params", {}))
 
-    active_filter_count = sum(1 for config in filter_set.values() if config["enabled"])
-    st.info(f"Active filters in current set: {active_filter_count}")
+        with st.expander(f"{index}. {FILTER_TYPE_LABELS[filter_type]}", expanded=True):
+            remove_filter = st.button("Remove Filter", key=f"remove_filter_{filter_id}")
+            if remove_filter:
+                st.session_state["current_filter_set"] = [
+                    item for item in current_filter_set if item["id"] != filter_id
+                ]
+                st.rerun()
+
+            if filter_type == "ma_rising":
+                params["ma"] = int(st.number_input(
+                    "MA",
+                    min_value=2,
+                    max_value=1000,
+                    value=int(params.get("ma", 200)),
+                    key=f"filter_{filter_id}_ma",
+                ))
+
+            elif filter_type == "short_above_long":
+                col1, col2 = st.columns(2)
+                with col1:
+                    params["short_ma"] = int(st.number_input(
+                        "Short MA",
+                        min_value=2,
+                        max_value=500,
+                        value=int(params.get("short_ma", 50)),
+                        key=f"filter_{filter_id}_short_ma",
+                    ))
+                with col2:
+                    params["long_ma"] = int(st.number_input(
+                        "Long MA",
+                        min_value=2,
+                        max_value=1000,
+                        value=int(params.get("long_ma", 200)),
+                        key=f"filter_{filter_id}_long_ma",
+                    ))
+
+            elif filter_type == "price_near_long":
+                col1, col2 = st.columns(2)
+                with col1:
+                    params["long_ma"] = int(st.number_input(
+                        "Long MA",
+                        min_value=2,
+                        max_value=1000,
+                        value=int(params.get("long_ma", 200)),
+                        key=f"filter_{filter_id}_price_long_ma",
+                    ))
+                with col2:
+                    params["threshold_pct"] = float(st.number_input(
+                        "Within Percent",
+                        min_value=0.1,
+                        max_value=100.0,
+                        value=float(params.get("threshold_pct", 5.0)),
+                        step=0.1,
+                        key=f"filter_{filter_id}_threshold_pct",
+                    ))
+
+            elif filter_type == "golden_cross":
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    params["short_ma"] = int(st.number_input(
+                        "Short MA",
+                        min_value=2,
+                        max_value=500,
+                        value=int(params.get("short_ma", 50)),
+                        key=f"filter_{filter_id}_golden_short_ma",
+                    ))
+                with col2:
+                    params["long_ma"] = int(st.number_input(
+                        "Long MA",
+                        min_value=2,
+                        max_value=1000,
+                        value=int(params.get("long_ma", 200)),
+                        key=f"filter_{filter_id}_golden_long_ma",
+                    ))
+                with col3:
+                    params["lookback_units"] = int(st.number_input(
+                        "Last N Time Frame Units",
+                        min_value=1,
+                        max_value=1000,
+                        value=int(params.get("lookback_units", 20)),
+                        key=f"filter_{filter_id}_golden_lookback",
+                    ))
+
+            elif filter_type == "long_ma_down_from_max":
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    params["long_ma"] = int(st.number_input(
+                        "Long MA",
+                        min_value=2,
+                        max_value=1000,
+                        value=int(params.get("long_ma", 200)),
+                        key=f"filter_{filter_id}_down_long_ma",
+                    ))
+                with col2:
+                    params["down_pct"] = float(st.number_input(
+                        "Down Percent",
+                        min_value=0.1,
+                        max_value=100.0,
+                        value=float(params.get("down_pct", 5.0)),
+                        step=0.1,
+                        key=f"filter_{filter_id}_down_pct",
+                    ))
+                with col3:
+                    params["lookback_units"] = int(st.number_input(
+                        "Last M Time Frame Units",
+                        min_value=2,
+                        max_value=2000,
+                        value=int(params.get("lookback_units", 50)),
+                        key=f"filter_{filter_id}_down_lookback",
+                    ))
+
+        rendered_filter_set.append({
+            "id": filter_id,
+            "type": filter_type,
+            "params": params,
+        })
+
+    st.session_state["current_filter_set"] = rendered_filter_set
+    filter_set = normalize_filter_set(rendered_filter_set)
+    active_filter_count = len(filter_set)
+    st.info(f"Filters in current set: {active_filter_count}")
 
     st.subheader("Favorite Filter Sets")
     col1, col2, col3 = st.columns([3, 1, 1])
@@ -317,6 +319,8 @@ with tab2:
         clean_name = favorite_name.strip()
         if not clean_name:
             st.error("Enter a favorite name before saving.")
+        elif not filter_set:
+            st.error("Add at least one filter before saving a favorite.")
         else:
             favorite_filter_sets[clean_name] = filter_set
             selected_favorite_for_settings = clean_name
@@ -345,18 +349,16 @@ with tab2:
     run = st.button("Run Screener")
 
     if run:
-
         if active_filter_count == 0:
-            st.error("Select at least one filter before running the screener.")
+            st.error("Add at least one filter before running the screener.")
             st.stop()
 
-        if short_above_enabled and short_above_short_ma >= short_above_long_ma:
-            st.error("Short MA must be less than Long MA in the Short MA Above Long MA filter.")
-            st.stop()
-
-        if golden_cross_enabled and golden_cross_short_ma >= golden_cross_long_ma:
-            st.error("Short MA must be less than Long MA in the Golden Cross filter.")
-            st.stop()
+        for filter_item in filter_set:
+            params = filter_item["params"]
+            label = FILTER_TYPE_LABELS[filter_item["type"]]
+            if filter_item["type"] in {"short_above_long", "golden_cross"} and params["short_ma"] >= params["long_ma"]:
+                st.error(f"Short MA must be less than Long MA in: {label}.")
+                st.stop()
 
         target_dir = timeframe_config(tf)["target_dir"]
         rows = []
@@ -385,9 +387,11 @@ with tab2:
         progress_text.success(f"Screened {len(stock_files)} stocks. Matches found: {len(rows)}")
         st.success(f"{len(rows)} stocks found")
 
+
 with tab3:
     st.header("Pattern Screener")
     st.info("Add Cup&Handle, Double Bottom, Bull Flag scanners here.")
+
 
 with tab4:
     st.header("Results")
@@ -396,13 +400,14 @@ with tab4:
 
     if rows:
         df = pd.DataFrame(rows)
+        df.index = range(1, len(df) + 1)
         st.dataframe(df, use_container_width=True)
 
         st.download_button(
             "Download Results CSV",
             df.to_csv(index=False),
             "results.csv",
-            "text/csv"
+            "text/csv",
         )
 
         st.subheader("Email Results")

@@ -1,21 +1,32 @@
 
 import json
+from copy import deepcopy
 
 import pandas as pd
 
-DEFAULT_FILTER_SET = {
-    "ma_rising": {"enabled": True, "ma": 200},
-    "short_above_long": {"enabled": False, "short_ma": 50, "long_ma": 200},
-    "price_near_long": {"enabled": True, "long_ma": 200, "threshold_pct": 5.0},
-    "golden_cross": {"enabled": False, "short_ma": 50, "long_ma": 200, "lookback_units": 20},
-    "long_ma_down_from_max": {"enabled": False, "long_ma": 200, "down_pct": 5.0, "lookback_units": 50},
+FILTER_TYPE_LABELS = {
+    "ma_rising": "MA Rising",
+    "short_above_long": "Short MA Above Long MA",
+    "price_near_long": "Current Price Near And Above Long MA",
+    "golden_cross": "Short MA Crossed Long MA - Golden Cross",
+    "long_ma_down_from_max": "Long MA Down From Recent Max",
 }
 
-def filter_config(filter_set, filter_name):
-    return filter_set.get(filter_name, DEFAULT_FILTER_SET[filter_name])
+FILTER_TYPE_DEFAULTS = {
+    "ma_rising": {"ma": 200},
+    "short_above_long": {"short_ma": 50, "long_ma": 200},
+    "price_near_long": {"long_ma": 200, "threshold_pct": 5.0},
+    "golden_cross": {"short_ma": 50, "long_ma": 200, "lookback_units": 20},
+    "long_ma_down_from_max": {"long_ma": 200, "down_pct": 5.0, "lookback_units": 50},
+}
 
-def enabled_filter_names(filter_set):
-    return [name for name, config in filter_set.items() if config.get("enabled")]
+DEFAULT_FILTER_SET = [
+    {"id": 1, "type": "ma_rising", "params": {"ma": 200}},
+    {"id": 2, "type": "price_near_long", "params": {"long_ma": 200, "threshold_pct": 5.0}},
+]
+
+def filter_label(filter_item):
+    return FILTER_TYPE_LABELS.get(filter_item["type"], filter_item["type"])
 
 def long_ma_rising_from_two_bars_back(series):
     values = series.dropna()
@@ -62,9 +73,9 @@ def long_ma_down_from_max(series, down_pct, lookback_units):
 
 def required_ma_periods(filter_set):
     periods = set()
-    for name, config in filter_set.items():
-        if not config.get("enabled"):
-            continue
+    for filter_item in filter_set:
+        name = filter_item["type"]
+        config = filter_item["params"]
 
         if name == "ma_rising":
             periods.add(int(config["ma"]))
@@ -76,16 +87,45 @@ def required_ma_periods(filter_set):
 
     return sorted(periods)
 
+def normalize_filter_item(filter_item, fallback_id):
+    filter_type = filter_item.get("type")
+    if filter_type not in FILTER_TYPE_DEFAULTS:
+        return None
+
+    params = deepcopy(FILTER_TYPE_DEFAULTS[filter_type])
+    params.update(filter_item.get("params", {}))
+
+    return {
+        "id": filter_item.get("id", fallback_id),
+        "type": filter_type,
+        "params": params,
+    }
+
 def normalize_filter_set(filter_set=None):
     if not filter_set:
-        return DEFAULT_FILTER_SET.copy()
+        return deepcopy(DEFAULT_FILTER_SET)
 
-    normalized = {}
-    for name, defaults in DEFAULT_FILTER_SET.items():
-        config = defaults.copy()
-        config.update(filter_set.get(name, {}))
-        normalized[name] = config
-    return normalized
+    if isinstance(filter_set, list):
+        normalized = []
+        for index, filter_item in enumerate(filter_set, start=1):
+            normalized_item = normalize_filter_item(filter_item, index)
+            if normalized_item:
+                normalized.append(normalized_item)
+        return normalized
+
+    if isinstance(filter_set, dict):
+        normalized = []
+        next_id = 1
+        for filter_type, defaults in FILTER_TYPE_DEFAULTS.items():
+            legacy_config = filter_set.get(filter_type, {})
+            if legacy_config.get("enabled"):
+                params = deepcopy(defaults)
+                params.update({key: value for key, value in legacy_config.items() if key != "enabled"})
+                normalized.append({"id": next_id, "type": filter_type, "params": params})
+                next_id += 1
+        return normalized
+
+    return deepcopy(DEFAULT_FILTER_SET)
 
 def screen_json_file(path, filter_set=None, **legacy_kwargs):
     if not path.exists():
@@ -112,8 +152,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         }
 
     filter_set = normalize_filter_set(filter_set)
-    active_filters = enabled_filter_names(filter_set)
-    if not active_filters:
+    if not filter_set:
         return None
 
     df = pd.DataFrame(json.loads(path.read_text()))
@@ -140,7 +179,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
     result = {
         "Symbol": path.stem,
         "Price": round(price, 2),
-        "MatchedFilters": ", ".join(active_filters),
+        "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
 
     for period in ma_periods:
@@ -149,62 +188,62 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
             return None
         result[ma_label] = round(last[ma_label], 2)
 
-    ma_rising_config = filter_config(filter_set, "ma_rising")
-    if ma_rising_config.get("enabled"):
-        ma_label = f"SMA{int(ma_rising_config['ma'])}"
-        passed, rising_rate_pct = ma_rising_from_two_bars_back(df, ma_label)
-        result["MARising"] = passed
-        result["MARisingRatePct"] = round(rising_rate_pct, 2) if rising_rate_pct is not None else None
-        if not passed:
-            return None
+    for filter_index, filter_item in enumerate(filter_set, start=1):
+        filter_type = filter_item["type"]
+        config = filter_item["params"]
+        prefix = f"F{filter_index}_{filter_type}"
 
-    short_above_config = filter_config(filter_set, "short_above_long")
-    if short_above_config.get("enabled"):
-        short_label = f"SMA{int(short_above_config['short_ma'])}"
-        long_label = f"SMA{int(short_above_config['long_ma'])}"
-        passed = last[short_label] > last[long_label]
-        result["ShortMAAboveLongMA"] = passed
-        if not passed:
-            return None
+        if filter_type == "ma_rising":
+            ma_label = f"SMA{int(config['ma'])}"
+            passed, rising_rate_pct = ma_rising_from_two_bars_back(df, ma_label)
+            result[f"{prefix}_Passed"] = passed
+            result[f"{prefix}_RisingRatePct"] = round(rising_rate_pct, 2) if rising_rate_pct is not None else None
+            if not passed:
+                return None
 
-    price_near_config = filter_config(filter_set, "price_near_long")
-    if price_near_config.get("enabled"):
-        long_label = f"SMA{int(price_near_config['long_ma'])}"
-        distance_pct = pct_close_to_ma(price, last[long_label])
-        passed = (
-            distance_pct is not None
-            and price >= last[long_label]
-            and distance_pct <= float(price_near_config["threshold_pct"])
-        )
-        result["PercentCloseToLongMA"] = round(distance_pct, 2) if distance_pct is not None else None
-        result["PriceNearAndAboveLongMA"] = passed
-        if not passed:
-            return None
+        elif filter_type == "short_above_long":
+            short_label = f"SMA{int(config['short_ma'])}"
+            long_label = f"SMA{int(config['long_ma'])}"
+            passed = last[short_label] > last[long_label]
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
 
-    golden_cross_config = filter_config(filter_set, "golden_cross")
-    if golden_cross_config.get("enabled"):
-        short_label = f"SMA{int(golden_cross_config['short_ma'])}"
-        long_label = f"SMA{int(golden_cross_config['long_ma'])}"
-        passed = crossed_up(
-            df[short_label],
-            df[long_label],
-            int(golden_cross_config["lookback_units"]),
-        )
-        result["GoldenCross"] = passed
-        if not passed:
-            return None
+        elif filter_type == "price_near_long":
+            long_label = f"SMA{int(config['long_ma'])}"
+            distance_pct = pct_close_to_ma(price, last[long_label])
+            passed = (
+                distance_pct is not None
+                and price >= last[long_label]
+                and distance_pct <= float(config["threshold_pct"])
+            )
+            result[f"{prefix}_DistancePct"] = round(distance_pct, 2) if distance_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
 
-    down_config = filter_config(filter_set, "long_ma_down_from_max")
-    if down_config.get("enabled"):
-        long_label = f"SMA{int(down_config['long_ma'])}"
-        passed, down_from_max_pct = long_ma_down_from_max(
-            df[long_label],
-            float(down_config["down_pct"]),
-            int(down_config["lookback_units"]),
-        )
-        result["LongMADownFromMaxPct"] = round(down_from_max_pct, 2) if down_from_max_pct is not None else None
-        result["LongMADownFromMax"] = passed
-        if not passed:
-            return None
+        elif filter_type == "golden_cross":
+            short_label = f"SMA{int(config['short_ma'])}"
+            long_label = f"SMA{int(config['long_ma'])}"
+            passed = crossed_up(
+                df[short_label],
+                df[long_label],
+                int(config["lookback_units"]),
+            )
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+        elif filter_type == "long_ma_down_from_max":
+            long_label = f"SMA{int(config['long_ma'])}"
+            passed, down_from_max_pct = long_ma_down_from_max(
+                df[long_label],
+                float(config["down_pct"]),
+                int(config["lookback_units"]),
+            )
+            result[f"{prefix}_DownFromMaxPct"] = round(down_from_max_pct, 2) if down_from_max_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
 
     return result
