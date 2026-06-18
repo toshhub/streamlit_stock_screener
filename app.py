@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from config import *
+from charting import create_stock_chart, results_hover_table_html
 from downloader import download_top_stocks, timeframe_config
 from emailer import send_results_email
 from screener import (
@@ -148,6 +149,10 @@ with tab2:
         "Timeframe",
         ["DAY", "WEEK", "MONTH"],
         index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
+    )
+    create_charts = st.checkbox(
+        "Create charts for matched stocks",
+        value=bool(settings.get("create_charts", False)),
     )
 
     st.subheader("Add Filter")
@@ -343,6 +348,7 @@ with tab2:
 
     update_settings({
         "tf": tf,
+        "create_charts": create_charts,
         "selected_favorite_filter_set": selected_favorite_for_settings,
         "screener_filter_set": filter_set,
     })
@@ -373,6 +379,10 @@ with tab2:
                 filter_set=filter_set,
             )
             if r:
+                if create_charts:
+                    chart_path = create_stock_chart(f, filter_set)
+                    if chart_path:
+                        r["ChartPath"] = chart_path
                 rows.append(r)
 
             total = len(stock_files)
@@ -402,11 +412,16 @@ with tab4:
     if rows:
         df = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)
-        st.dataframe(df, use_container_width=True)
+        display_df = df.drop(columns=["ChartPath"], errors="ignore")
+
+        if "ChartPath" in df.columns:
+            st.markdown(results_hover_table_html(df), unsafe_allow_html=True)
+        else:
+            st.dataframe(display_df, use_container_width=True)
 
         st.download_button(
             "Download Results CSV",
-            df.to_csv(index=False),
+            display_df.to_csv(index=False),
             "results.csv",
             "text/csv",
         )
@@ -456,7 +471,7 @@ with tab4:
                         recipient_email,
                         email_subject,
                         email_body,
-                        df.to_csv(index=False),
+                        display_df.to_csv(index=False),
                     )
                     st.success("Email sent successfully.")
                 except Exception as exc:
