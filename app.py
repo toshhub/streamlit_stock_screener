@@ -142,6 +142,7 @@ with tab2:
         )
 
     current_filter_set = st.session_state["current_filter_set"]
+    filter_widget_prefix = f"filter_{selected_favorite}"
 
     tf = st.selectbox(
         "Timeframe",
@@ -183,7 +184,7 @@ with tab2:
         params.update(filter_item.get("params", {}))
 
         with st.expander(f"{index}. {FILTER_TYPE_LABELS[filter_type]}", expanded=True):
-            remove_filter = st.button("Remove Filter", key=f"remove_filter_{filter_id}")
+            remove_filter = st.button("Remove Filter", key=f"{filter_widget_prefix}_remove_filter_{filter_id}")
             if remove_filter:
                 st.session_state["current_filter_set"] = [
                     item for item in current_filter_set if item["id"] != filter_id
@@ -196,7 +197,7 @@ with tab2:
                     min_value=2,
                     max_value=1000,
                     value=int(params.get("ma", 200)),
-                    key=f"filter_{filter_id}_ma",
+                    key=f"{filter_widget_prefix}_{filter_id}_ma",
                 ))
 
             elif filter_type == "short_above_long":
@@ -207,7 +208,7 @@ with tab2:
                         min_value=2,
                         max_value=500,
                         value=int(params.get("short_ma", 50)),
-                        key=f"filter_{filter_id}_short_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_short_ma",
                     ))
                 with col2:
                     params["long_ma"] = int(st.number_input(
@@ -215,7 +216,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"filter_{filter_id}_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_long_ma",
                     ))
 
             elif filter_type == "price_near_long":
@@ -226,7 +227,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"filter_{filter_id}_price_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_price_long_ma",
                     ))
                 with col2:
                     params["threshold_pct"] = float(st.number_input(
@@ -235,7 +236,7 @@ with tab2:
                         max_value=100.0,
                         value=float(params.get("threshold_pct", 5.0)),
                         step=0.1,
-                        key=f"filter_{filter_id}_threshold_pct",
+                        key=f"{filter_widget_prefix}_{filter_id}_threshold_pct",
                     ))
 
             elif filter_type == "golden_cross":
@@ -246,7 +247,7 @@ with tab2:
                         min_value=2,
                         max_value=500,
                         value=int(params.get("short_ma", 50)),
-                        key=f"filter_{filter_id}_golden_short_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_short_ma",
                     ))
                 with col2:
                     params["long_ma"] = int(st.number_input(
@@ -254,7 +255,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"filter_{filter_id}_golden_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_long_ma",
                     ))
                 with col3:
                     params["lookback_units"] = int(st.number_input(
@@ -262,7 +263,7 @@ with tab2:
                         min_value=1,
                         max_value=1000,
                         value=int(params.get("lookback_units", 20)),
-                        key=f"filter_{filter_id}_golden_lookback",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_lookback",
                     ))
 
             elif filter_type == "long_ma_down_from_max":
@@ -273,7 +274,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"filter_{filter_id}_down_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_long_ma",
                     ))
                 with col2:
                     params["down_pct"] = float(st.number_input(
@@ -282,7 +283,7 @@ with tab2:
                         max_value=100.0,
                         value=float(params.get("down_pct", 5.0)),
                         step=0.1,
-                        key=f"filter_{filter_id}_down_pct",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_pct",
                     ))
                 with col3:
                     params["lookback_units"] = int(st.number_input(
@@ -290,7 +291,7 @@ with tab2:
                         min_value=2,
                         max_value=2000,
                         value=int(params.get("lookback_units", 50)),
-                        key=f"filter_{filter_id}_down_lookback",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_lookback",
                     ))
 
         rendered_filter_set.append({
