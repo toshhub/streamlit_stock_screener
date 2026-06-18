@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+env/
+
+data/daily/
+data/weekly/
+data/monthly/
+data/charts/
+data/metadata/
+
+.streamlit/secrets.toml
