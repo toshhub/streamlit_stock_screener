@@ -1,5 +1,6 @@
 
 import json
+import re
 import urllib.parse
 import urllib.request
 from copy import deepcopy
@@ -69,6 +70,30 @@ def get_quote_api_pe_ratio(yahoo_symbol):
 
     return clean_pe_ratio(quotes[0].get("trailingPE"))
 
+def get_screener_in_pe_ratio(symbol):
+    screener_symbol = urllib.parse.quote(symbol, safe="")
+    url = f"https://www.screener.in/company/{screener_symbol}/consolidated/"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+
+    with urllib.request.urlopen(request, timeout=15) as response:
+        html = response.read().decode("utf-8", errors="ignore")
+
+    match = re.search(
+        r"Stock P/E\s*</span>\s*<span[^>]*class=\"[^\"]*number[^\"]*\"[^>]*>\s*([0-9,.]+)",
+        html,
+        re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(r"Stock P/E\s+([0-9,.]+)", re.sub(r"<[^>]+>", " ", html), re.IGNORECASE)
+
+    if not match:
+        return ""
+
+    return clean_pe_ratio(match.group(1).replace(",", ""))
+
 @lru_cache(maxsize=2048)
 def get_pe_ratio(symbol):
     pe_cache = load_pe_ratios()
@@ -80,9 +105,10 @@ def get_pe_ratio(symbol):
     for source_name, pe_lookup in [
         ("yfinance", get_yfinance_pe_ratio),
         ("Yahoo quote API", get_quote_api_pe_ratio),
+        ("Screener.in", get_screener_in_pe_ratio),
     ]:
         try:
-            pe = pe_lookup(yahoo_symbol)
+            pe = pe_lookup(symbol if source_name == "Screener.in" else yahoo_symbol)
             if pe != "":
                 pe_cache[symbol] = pe
                 save_pe_ratios(pe_cache)
