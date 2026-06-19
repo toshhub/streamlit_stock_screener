@@ -15,11 +15,15 @@ from screener import (
     normalize_filter_set,
     screen_json_file,
 )
-from storage import load_settings, update_settings
+from storage import load_favourite_filter_sets, load_settings, save_favourite_filter_sets, update_settings
 
 st.set_page_config(layout="wide")
 
 settings = load_settings()
+favorite_filter_sets = load_favourite_filter_sets()
+if not favorite_filter_sets and settings.get("favorite_filter_sets"):
+    favorite_filter_sets = settings["favorite_filter_sets"]
+    save_favourite_filter_sets(favorite_filter_sets)
 
 st.markdown(
     """
@@ -144,7 +148,6 @@ with tab1:
 with tab2:
     st.header("MA Screener")
 
-    favorite_filter_sets = settings.get("favorite_filter_sets", {})
     favorite_names = ["Custom"] + sorted(favorite_filter_sets.keys())
     saved_selected_favorite = settings.get("selected_favorite_filter_set", "Custom")
     favorite_index = favorite_names.index(saved_selected_favorite) if saved_selected_favorite in favorite_names else 0
@@ -362,9 +365,9 @@ with tab2:
             st.error("Add at least one filter before saving a favorite.")
         else:
             favorite_filter_sets[clean_name] = filter_set
+            save_favourite_filter_sets(favorite_filter_sets)
             selected_favorite_for_settings = clean_name
             update_settings({
-                "favorite_filter_sets": favorite_filter_sets,
                 "selected_favorite_filter_set": clean_name,
                 "screener_filter_set": filter_set,
             })
@@ -372,9 +375,9 @@ with tab2:
 
     if remove_favorite and selected_favorite != "Custom":
         favorite_filter_sets.pop(selected_favorite, None)
+        save_favourite_filter_sets(favorite_filter_sets)
         selected_favorite_for_settings = "Custom"
         update_settings({
-            "favorite_filter_sets": favorite_filter_sets,
             "selected_favorite_filter_set": "Custom",
         })
         st.success(f"Removed favorite filter set: {selected_favorite}")
