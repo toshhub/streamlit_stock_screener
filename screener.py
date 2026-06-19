@@ -181,9 +181,6 @@ def required_ma_periods(filter_set):
 
     return sorted(periods)
 
-def filter_set_requires_pe(filter_set):
-    return any(filter_item["type"] == "pe_less_than" for filter_item in filter_set)
-
 def normalize_filter_item(filter_item, fallback_id):
     filter_type = filter_item.get("type")
     if filter_type not in FILTER_TYPE_DEFAULTS:
@@ -279,8 +276,6 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
-    if filter_set_requires_pe(filter_set):
-        result["PE Ratio"] = get_pe_ratio(path.stem)
 
     for period in ma_periods:
         ma_label = f"SMA{period}"
@@ -288,7 +283,14 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
             return None
         result[ma_label] = round(last[ma_label], 2)
 
-    for filter_index, filter_item in enumerate(filter_set, start=1):
+    indexed_filter_set = list(enumerate(filter_set, start=1))
+    ordered_filter_set = [
+        item for item in indexed_filter_set if item[1]["type"] != "pe_less_than"
+    ] + [
+        item for item in indexed_filter_set if item[1]["type"] == "pe_less_than"
+    ]
+
+    for filter_index, filter_item in ordered_filter_set:
         filter_type = filter_item["type"]
         config = filter_item["params"]
         prefix = f"F{filter_index}_{filter_type}"
@@ -347,6 +349,8 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
                 return None
 
         elif filter_type == "pe_less_than":
+            if result["PE Ratio"] == "":
+                result["PE Ratio"] = get_pe_ratio(path.stem)
             pe = result["PE Ratio"]
             passed = pe != "" and float(pe) < float(config["max_pe"])
             result[f"{prefix}_Passed"] = passed

@@ -62,6 +62,13 @@
         "short_ma": 200,
         "long_ma": 935
       }
+    },
+    {
+      "id": 7,
+      "type": "pe_less_than",
+      "params": {
+        "max_pe": 30.0
+      }
     }
   ],
   "download_limit": 1500,
