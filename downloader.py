@@ -39,6 +39,17 @@ def download_symbol(symbol, interval, period, out_file):
 def timeframe_config(timeframe):
     return TIMEFRAME_CONFIG.get(timeframe, TIMEFRAME_CONFIG["DAY"])
 
+def clear_downloaded_json_files(timeframe):
+    target_dir = timeframe_config(timeframe)["target_dir"]
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    deleted_count = 0
+    for json_file in target_dir.glob("*.json"):
+        json_file.unlink()
+        deleted_count += 1
+
+    return deleted_count
+
 def clean_symbol(value):
     if pd.isna(value):
         return None

@@ -6,7 +6,7 @@ import streamlit as st
 
 from config import *
 from charting import create_stock_chart, results_hover_table_html
-from downloader import download_top_stocks, timeframe_config
+from downloader import clear_downloaded_json_files, download_top_stocks, timeframe_config
 from emailer import send_results_email
 from screener import (
     DEFAULT_FILTER_SET,
@@ -20,6 +20,26 @@ from storage import load_settings, update_settings
 st.set_page_config(layout="wide")
 
 settings = load_settings()
+
+st.markdown(
+    """
+    <style>
+    div.stButton > button[kind="primary"] {
+        background-color: #90ee90;
+        border-color: #90ee90;
+        color: #0f3d13;
+    }
+
+    div.stButton > button[kind="primary"]:hover,
+    div.stButton > button[kind="primary"]:focus {
+        background-color: #7fdf7f;
+        border-color: #7fdf7f;
+        color: #0f3d13;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("NSE Stock Screener")
 
@@ -52,6 +72,12 @@ with tab1:
         ["DAY", "WEEK", "MONTH"],
         index=["DAY", "WEEK", "MONTH"].index(settings.get("download_tf", "DAY")),
     )
+    download_limit = st.number_input(
+        "Number of stocks to download",
+        min_value=1,
+        value=int(settings.get("download_limit", 1000)),
+        step=50,
+    )
 
     if excel_file.exists():
         st.success(f"Default Excel Found: {excel_file.name}")
@@ -64,9 +90,12 @@ with tab1:
         excel_file.write_bytes(uploaded.getbuffer())
         st.success("Excel replaced")
 
-    update_settings({"download_tf": download_tf})
+    update_settings({
+        "download_tf": download_tf,
+        "download_limit": download_limit,
+    })
 
-    if st.button("Download Top 1000 Stocks"):
+    if st.button("Download Stocks Data", type="primary"):
         if not excel_file.exists():
             st.error("Upload MCAP_JUGAAD.xlsx before downloading stock data.")
         else:
@@ -81,11 +110,15 @@ with tab1:
                     f"Processing {done}/{total}: {symbol}"
                 )
 
-            with st.spinner("Downloading top 1000 stocks from yfinance..."):
+            deleted_count = clear_downloaded_json_files(download_tf)
+            if deleted_count:
+                progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
+
+            with st.spinner(f"Downloading top {download_limit} stocks from yfinance..."):
                 download_rows = download_top_stocks(
                     excel_file,
                     download_tf,
-                    limit=1000,
+                    limit=download_limit,
                     progress_callback=show_download_progress,
                 )
 
@@ -353,7 +386,7 @@ with tab2:
         "screener_filter_set": filter_set,
     })
 
-    run = st.button("Run Screener")
+    run = st.button("Run Screener", type="primary")
 
     if run:
         if active_filter_count == 0:
