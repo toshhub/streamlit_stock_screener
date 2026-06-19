@@ -17,6 +17,7 @@ FILTER_TYPE_LABELS = {
     "price_near_long": "Current Price Near And Above Long MA",
     "golden_cross": "Short MA Crossed Long MA - Golden Cross",
     "long_ma_down_from_max": "Long MA Down From Recent Max",
+    "pe_less_than": "PE < N",
 }
 
 FILTER_TYPE_DEFAULTS = {
@@ -25,6 +26,7 @@ FILTER_TYPE_DEFAULTS = {
     "price_near_long": {"long_ma": 200, "threshold_pct": 5.0},
     "golden_cross": {"short_ma": 50, "long_ma": 200, "lookback_units": 20},
     "long_ma_down_from_max": {"long_ma": 200, "down_pct": 5.0, "lookback_units": 50},
+    "pe_less_than": {"max_pe": 30.0},
 }
 
 DEFAULT_FILTER_SET = [
@@ -179,6 +181,9 @@ def required_ma_periods(filter_set):
 
     return sorted(periods)
 
+def filter_set_requires_pe(filter_set):
+    return any(filter_item["type"] == "pe_less_than" for filter_item in filter_set)
+
 def normalize_filter_item(filter_item, fallback_id):
     filter_type = filter_item.get("type")
     if filter_type not in FILTER_TYPE_DEFAULTS:
@@ -274,6 +279,8 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
+    if filter_set_requires_pe(filter_set):
+        result["PE Ratio"] = get_pe_ratio(path.stem)
 
     for period in ma_periods:
         ma_label = f"SMA{period}"
@@ -339,5 +346,13 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
             if not passed:
                 return None
 
-    result["PE Ratio"] = get_pe_ratio(path.stem)
+        elif filter_type == "pe_less_than":
+            pe = result["PE Ratio"]
+            passed = pe != "" and float(pe) < float(config["max_pe"])
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+    if result["PE Ratio"] == "":
+        result["PE Ratio"] = get_pe_ratio(path.stem)
     return result

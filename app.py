@@ -335,6 +335,16 @@ with tab2:
                         key=f"{filter_widget_prefix}_{filter_id}_down_lookback",
                     ))
 
+            elif filter_type == "pe_less_than":
+                params["max_pe"] = float(st.number_input(
+                    "PE Less Than",
+                    min_value=0.1,
+                    max_value=500.0,
+                    value=float(params.get("max_pe", 30.0)),
+                    step=0.1,
+                    key=f"{filter_widget_prefix}_{filter_id}_max_pe",
+                ))
+
         rendered_filter_set.append({
             "id": filter_id,
             "type": filter_type,

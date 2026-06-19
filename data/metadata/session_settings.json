@@ -1,0 +1,70 @@
+{
+  "tf": "DAY",
+  "threshold": 5,
+  "download_tf": "DAY",
+  "short_ma": 50,
+  "long_ma": 200,
+  "support_threshold": 5.0,
+  "cross_lookback_days": 20,
+  "cross_threshold": 5.0,
+  "gmail_id": "innocence60@gmail.com",
+  "recipient_email": "innocence60@gmail.com",
+  "email_subject": "NSE Stock Screener Results",
+  "email_body": "Attached are the latest filtered stock screener results.",
+  "create_charts": false,
+  "selected_favorite_filter_set": "50-200 Golden Cross Weekly Bullish",
+  "screener_filter_set": [
+    {
+      "id": 1,
+      "type": "ma_rising",
+      "params": {
+        "ma": 200
+      }
+    },
+    {
+      "id": 2,
+      "type": "price_near_long",
+      "params": {
+        "long_ma": 200,
+        "threshold_pct": 10.0
+      }
+    },
+    {
+      "id": 3,
+      "type": "short_above_long",
+      "params": {
+        "short_ma": 50,
+        "long_ma": 200
+      }
+    },
+    {
+      "id": 4,
+      "type": "golden_cross",
+      "params": {
+        "short_ma": 50,
+        "long_ma": 200,
+        "lookback_units": 80
+      }
+    },
+    {
+      "id": 5,
+      "type": "long_ma_down_from_max",
+      "params": {
+        "long_ma": 200,
+        "down_pct": 18.0,
+        "lookback_units": 350
+      }
+    },
+    {
+      "id": 6,
+      "type": "short_above_long",
+      "params": {
+        "short_ma": 200,
+        "long_ma": 935
+      }
+    }
+  ],
+  "download_limit": 1500,
+  "last_download_at": "2026-06-19 11:41:18",
+  "last_download_tf": "DAY"
+}
