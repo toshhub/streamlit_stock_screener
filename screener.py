@@ -1,10 +1,14 @@
 
 import json
+import urllib.parse
+import urllib.request
 from copy import deepcopy
 from functools import lru_cache
 
 import pandas as pd
 import yfinance as yf
+
+from storage import load_pe_ratios, save_pe_ratios
 
 FILTER_TYPE_LABELS = {
     "ma_rising": "MA Rising",
@@ -30,15 +34,65 @@ DEFAULT_FILTER_SET = [
 def filter_label(filter_item):
     return FILTER_TYPE_LABELS.get(filter_item["type"], filter_item["type"])
 
+def clean_pe_ratio(pe):
+    if pe is None:
+        return ""
+
+    try:
+        pe = float(pe)
+    except (TypeError, ValueError):
+        return ""
+
+    if pe <= 0:
+        return ""
+
+    return round(pe, 2)
+
+def get_yfinance_pe_ratio(yahoo_symbol):
+    ticker = yf.Ticker(yahoo_symbol)
+    return clean_pe_ratio(ticker.info.get("trailingPE"))
+
+def get_quote_api_pe_ratio(yahoo_symbol):
+    params = urllib.parse.urlencode({"symbols": yahoo_symbol})
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?{params}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+
+    with urllib.request.urlopen(request, timeout=10) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    quotes = data.get("quoteResponse", {}).get("result", [])
+    if not quotes:
+        return ""
+
+    return clean_pe_ratio(quotes[0].get("trailingPE"))
+
 @lru_cache(maxsize=2048)
 def get_pe_ratio(symbol):
-    try:
-        ticker = yf.Ticker(symbol + ".NS")
-        pe = ticker.info.get("trailingPE")
-        return round(float(pe), 2) if pe is not None else ""
-    except Exception as exc:
-        print(f"PE not available for {symbol}: {exc}")
-        return ""
+    pe_cache = load_pe_ratios()
+    if symbol in pe_cache:
+        return pe_cache[symbol]
+
+    yahoo_symbol = symbol + ".NS"
+    errors = []
+    for source_name, pe_lookup in [
+        ("yfinance", get_yfinance_pe_ratio),
+        ("Yahoo quote API", get_quote_api_pe_ratio),
+    ]:
+        try:
+            pe = pe_lookup(yahoo_symbol)
+            if pe != "":
+                pe_cache[symbol] = pe
+                save_pe_ratios(pe_cache)
+                return pe
+        except Exception as exc:
+            errors.append(f"{source_name}: {exc}")
+
+    if errors:
+        print(f"PE not available for {symbol}: {'; '.join(errors)}")
+    return ""
 
 def long_ma_rising_from_two_bars_back(series):
     values = series.dropna()
