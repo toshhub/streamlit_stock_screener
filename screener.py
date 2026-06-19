@@ -1,8 +1,10 @@
 
 import json
 from copy import deepcopy
+from functools import lru_cache
 
 import pandas as pd
+import yfinance as yf
 
 FILTER_TYPE_LABELS = {
     "ma_rising": "MA Rising",
@@ -27,6 +29,16 @@ DEFAULT_FILTER_SET = [
 
 def filter_label(filter_item):
     return FILTER_TYPE_LABELS.get(filter_item["type"], filter_item["type"])
+
+@lru_cache(maxsize=2048)
+def get_pe_ratio(symbol):
+    try:
+        ticker = yf.Ticker(symbol + ".NS")
+        pe = ticker.info.get("trailingPE")
+        return round(float(pe), 2) if pe is not None else ""
+    except Exception as exc:
+        print(f"PE not available for {symbol}: {exc}")
+        return ""
 
 def long_ma_rising_from_two_bars_back(series):
     values = series.dropna()
@@ -178,6 +190,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
 
     result = {
         "Symbol": path.stem,
+        "PE Ratio": "",
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
@@ -246,4 +259,5 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
             if not passed:
                 return None
 
+    result["PE Ratio"] = get_pe_ratio(path.stem)
     return result
