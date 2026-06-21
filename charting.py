@@ -114,7 +114,8 @@ def results_hover_table_html(df):
         text-align: left;
         vertical-align: top;
       }
-      .hover-results-table th { background: #f8fafc; font-weight: 600; cursor: pointer; user-select: none; }
+      .hover-results-table th { background: #f8fafc; font-weight: 600; user-select: none; }
+      .hover-results-table th.sortable { cursor: pointer; color: #2563eb; }
       .stock-hover { position: relative; color: #2563eb; font-weight: 600; cursor: default; }
       .stock-hover .chart-tooltip {
         display: none;
@@ -135,7 +136,11 @@ def results_hover_table_html(df):
     """
 
     header_cells = "".join(
-        f"<th onclick=\"sortHoverTable({index})\">{html.escape(str(column))}</th>"
+        (
+            f"<th class=\"sortable\" onclick=\"sortPeRatioColumn({index})\">{html.escape(str(column))}</th>"
+            if column == "PE Ratio"
+            else f"<th>{html.escape(str(column))}</th>"
+        )
         for index, column in enumerate(visible_df.columns)
     )
     rows = []
@@ -160,25 +165,20 @@ def results_hover_table_html(df):
 
     script = """
     <script>
-      const sortDirections = {};
-      function sortHoverTable(columnIndex) {
+      let peSortDirection = "desc";
+      function parsePeRatio(value) {
+        const parsed = parseFloat(value.replace(/,/g, ""));
+        return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+      }
+      function sortPeRatioColumn(columnIndex) {
         const table = document.querySelector(".hover-results-table");
         const tbody = table.tBodies[0];
         const rows = Array.from(tbody.rows);
-        const direction = sortDirections[columnIndex] === "asc" ? "desc" : "asc";
-        sortDirections[columnIndex] = direction;
+        peSortDirection = peSortDirection === "asc" ? "desc" : "asc";
         rows.sort((a, b) => {
-          const av = a.cells[columnIndex].innerText.trim();
-          const bv = b.cells[columnIndex].innerText.trim();
-          const an = parseFloat(av.replace(/,/g, ""));
-          const bn = parseFloat(bv.replace(/,/g, ""));
-          let result;
-          if (!Number.isNaN(an) && !Number.isNaN(bn)) {
-            result = an - bn;
-          } else {
-            result = av.localeCompare(bv);
-          }
-          return direction === "asc" ? result : -result;
+          const av = parsePeRatio(a.cells[columnIndex].innerText.trim());
+          const bv = parsePeRatio(b.cells[columnIndex].innerText.trim());
+          return peSortDirection === "asc" ? av - bv : bv - av;
         });
         rows.forEach(row => tbody.appendChild(row));
       }

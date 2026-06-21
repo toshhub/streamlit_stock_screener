@@ -71,17 +71,29 @@ def detect_swings_from_df(df, lookback_days, reversal_pct):
     reversal = float(reversal_pct) / 100
     prices = window["Close"].tolist()
     swings = []
-    extreme_idx = 0
-    extreme_price = prices[0]
+    extreme_idx = len(prices) - 1
+    extreme_price = prices[-1]
     trend = None
 
-    for index, price in enumerate(prices[1:], start=1):
+    def add_swing(swing_type, index, price):
+        swings.append({
+            "type": swing_type,
+            "index": index,
+            "date": window.iloc[index]["Date"],
+            "price": float(price),
+            "days_since": len(window) - 1 - index,
+        })
+
+    for index in range(len(prices) - 2, -1, -1):
+        price = prices[index]
         if trend is None:
             if price >= extreme_price * (1 + reversal):
+                add_swing("L", extreme_idx, extreme_price)
                 trend = "up"
                 extreme_idx = index
                 extreme_price = price
             elif price <= extreme_price * (1 - reversal):
+                add_swing("H", extreme_idx, extreme_price)
                 trend = "down"
                 extreme_idx = index
                 extreme_price = price
@@ -99,13 +111,7 @@ def detect_swings_from_df(df, lookback_days, reversal_pct):
                 extreme_idx = index
                 extreme_price = price
             elif price <= extreme_price * (1 - reversal):
-                swings.append({
-                    "type": "H",
-                    "index": extreme_idx,
-                    "date": window.iloc[extreme_idx]["Date"],
-                    "price": float(extreme_price),
-                    "days_since": len(window) - 1 - extreme_idx,
-                })
+                add_swing("H", extreme_idx, extreme_price)
                 trend = "down"
                 extreme_idx = index
                 extreme_price = price
@@ -114,18 +120,12 @@ def detect_swings_from_df(df, lookback_days, reversal_pct):
                 extreme_idx = index
                 extreme_price = price
             elif price >= extreme_price * (1 + reversal):
-                swings.append({
-                    "type": "L",
-                    "index": extreme_idx,
-                    "date": window.iloc[extreme_idx]["Date"],
-                    "price": float(extreme_price),
-                    "days_since": len(window) - 1 - extreme_idx,
-                })
+                add_swing("L", extreme_idx, extreme_price)
                 trend = "up"
                 extreme_idx = index
                 extreme_price = price
 
-    return swings
+    return list(reversed(swings))
 
 
 def build_swing_context(df, swings):

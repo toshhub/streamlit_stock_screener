@@ -42,98 +42,112 @@
       }
     }
   ],
-  "50 support": [
-    {
-      "id": 1,
-      "type": "ma_rising",
-      "params": {
-        "ma": 50
+  "50 support": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 200
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 200,
+          "threshold_pct": 10.0
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200
+        }
+      },
+      {
+        "id": 4,
+        "type": "golden_cross",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200,
+          "lookback_units": 80
+        }
+      },
+      {
+        "id": 5,
+        "type": "long_ma_down_from_max",
+        "params": {
+          "long_ma": 200,
+          "down_pct": 18.0,
+          "lookback_units": 350
+        }
       }
-    },
-    {
-      "id": 2,
-      "type": "price_near_long",
-      "params": {
-        "long_ma": 50,
-        "threshold_pct": 5.0
-      }
-    },
-    {
-      "id": 3,
-      "type": "short_above_long",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200
-      }
-    },
-    {
-      "id": 4,
-      "type": "golden_cross",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200,
-        "lookback_units": 120
-      }
-    },
-    {
-      "id": 6,
-      "type": "long_ma_down_from_max",
-      "params": {
-        "long_ma": 200,
-        "down_pct": 15.0,
-        "lookback_units": 400
-      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
     }
-  ],
-  "50-200 Golden Cross Weekly Bullish": [
-    {
-      "id": 1,
-      "type": "ma_rising",
-      "params": {
-        "ma": 200
+  },
+  "50-200 Golden Cross Weekly Bullish": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 200
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 200,
+          "threshold_pct": 20.0
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200
+        }
+      },
+      {
+        "id": 4,
+        "type": "golden_cross",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200,
+          "lookback_units": 80
+        }
+      },
+      {
+        "id": 5,
+        "type": "long_ma_down_from_max",
+        "params": {
+          "long_ma": 200,
+          "down_pct": 18.0,
+          "lookback_units": 350
+        }
+      },
+      {
+        "id": 7,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 935,
+          "threshold_pct": 40.0
+        }
       }
-    },
-    {
-      "id": 2,
-      "type": "price_near_long",
-      "params": {
-        "long_ma": 200,
-        "threshold_pct": 10.0
-      }
-    },
-    {
-      "id": 3,
-      "type": "short_above_long",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200
-      }
-    },
-    {
-      "id": 4,
-      "type": "golden_cross",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200,
-        "lookback_units": 80
-      }
-    },
-    {
-      "id": 5,
-      "type": "long_ma_down_from_max",
-      "params": {
-        "long_ma": 200,
-        "down_pct": 18.0,
-        "lookback_units": 350
-      }
-    },
-    {
-      "id": 6,
-      "type": "short_above_long",
-      "params": {
-        "short_ma": 200,
-        "long_ma": 935
-      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
     }
-  ]
+  }
 }
