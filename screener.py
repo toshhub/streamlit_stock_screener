@@ -17,6 +17,7 @@ FILTER_TYPE_LABELS = {
     "price_near_long": "Current Price Near And Above Long MA",
     "golden_cross": "Short MA Crossed Long MA - Golden Cross",
     "long_ma_down_from_max": "Long MA Down From Recent Max",
+    "green_candle_today": "Green Candle Today",
     "pe_less_than": "PE < N",
 }
 
@@ -26,6 +27,7 @@ FILTER_TYPE_DEFAULTS = {
     "price_near_long": {"long_ma": 200, "threshold_pct": 5.0},
     "golden_cross": {"short_ma": 50, "long_ma": 200, "lookback_units": 20},
     "long_ma_down_from_max": {"long_ma": 200, "down_pct": 5.0, "lookback_units": 50},
+    "green_candle_today": {"min_gain_pct": 1.0},
     "pe_less_than": {"max_pe": 30.0},
 }
 
@@ -165,6 +167,23 @@ def long_ma_down_from_max(series, down_pct, lookback_units):
     down_from_max_pct = (max_value - current_value) / max_value * 100
     return down_from_max_pct >= down_pct, down_from_max_pct
 
+def green_candle_today(df, min_gain_pct):
+    if len(df) < 2 or "Open" not in df.columns:
+        return False, None
+
+    latest = df.iloc[-1]
+    previous = df.iloc[-2]
+    open_price = latest["Open"]
+    close_price = latest["Close"]
+    previous_close = previous["Close"]
+
+    if pd.isna(open_price) or pd.isna(close_price) or pd.isna(previous_close) or previous_close == 0:
+        return False, None
+
+    gain_pct = (close_price - previous_close) / previous_close * 100
+    passed = close_price > open_price and gain_pct >= float(min_gain_pct)
+    return passed, gain_pct
+
 def required_ma_periods(filter_set):
     periods = set()
     for filter_item in filter_set:
@@ -258,6 +277,8 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         df = df.sort_values("Date")
 
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    if "Open" in df.columns:
+        df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     df = df.dropna(subset=["Close"])
     if len(df) < max_ma:
         return None
@@ -342,6 +363,13 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
                 int(config["lookback_units"]),
             )
             result[f"{prefix}_DownFromMaxPct"] = round(down_from_max_pct, 2) if down_from_max_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+        elif filter_type == "green_candle_today":
+            passed, gain_pct = green_candle_today(df, float(config["min_gain_pct"]))
+            result[f"{prefix}_GainPct"] = round(gain_pct, 2) if gain_pct is not None else None
             result[f"{prefix}_Passed"] = passed
             if not passed:
                 return None

@@ -407,6 +407,16 @@ with tab2:
                     key=f"{filter_widget_prefix}_{filter_id}_max_pe",
                 ))
 
+            elif filter_type == "green_candle_today":
+                params["min_gain_pct"] = float(st.number_input(
+                    "Minimum Gain Percent",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(params.get("min_gain_pct", 1.0)),
+                    step=0.1,
+                    key=f"{filter_widget_prefix}_{filter_id}_green_min_gain_pct",
+                ))
+
         rendered_filter_set.append({
             "id": filter_id,
             "type": filter_type,

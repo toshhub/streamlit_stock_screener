@@ -26,7 +26,7 @@
       "type": "price_near_long",
       "params": {
         "long_ma": 200,
-        "threshold_pct": 20.0
+        "threshold_pct": 15.0
       }
     },
     {
