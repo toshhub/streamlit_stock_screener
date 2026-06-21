@@ -5,9 +5,10 @@ import pandas as pd
 import streamlit as st
 
 from config import *
-from charting import create_stock_chart, results_hover_table_html
+from charting import create_stock_chart, sortable_results_table
 from downloader import clear_downloaded_json_files, download_top_stocks, timeframe_config
 from emailer import send_results_email
+from pattern import evaluate_pattern_filters, validate_expression
 from screener import (
     DEFAULT_FILTER_SET,
     FILTER_TYPE_DEFAULTS,
@@ -47,8 +48,34 @@ st.markdown(
 
 st.title("NSE Stock Screener")
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["Data", "MA Screener", "Pattern Screener", "Results"]
+
+def sync_pattern_lookback_from_slider():
+    st.session_state["pattern_lookback_days_number"] = st.session_state["pattern_lookback_days_slider"]
+
+
+def sync_pattern_lookback_from_number():
+    st.session_state["pattern_lookback_days_slider"] = st.session_state["pattern_lookback_days_number"]
+
+
+def sync_pattern_reversal_from_slider():
+    st.session_state["pattern_reversal_pct_number"] = st.session_state["pattern_reversal_pct_slider"]
+
+
+def sync_pattern_reversal_from_number():
+    st.session_state["pattern_reversal_pct_slider"] = st.session_state["pattern_reversal_pct_number"]
+
+
+def initialize_pattern_expression_state():
+    if "pattern_expression_filters" not in st.session_state:
+        saved_expressions = settings.get("pattern_expressions", [])
+        st.session_state["pattern_expression_filters"] = [
+            {"id": index, "expression": expression}
+            for index, expression in enumerate(saved_expressions, start=1)
+        ]
+        st.session_state["next_pattern_expression_id"] = len(saved_expressions) + 1
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Data", "MA Screener", "Pattern Screener", "Run Screening", "Results"]
 )
 
 
@@ -148,30 +175,16 @@ with tab1:
 with tab2:
     st.header("MA Screener")
 
-    favorite_names = ["Custom"] + sorted(favorite_filter_sets.keys())
-    saved_selected_favorite = settings.get("selected_favorite_filter_set", "Custom")
-    favorite_index = favorite_names.index(saved_selected_favorite) if saved_selected_favorite in favorite_names else 0
-
-    selected_favorite = st.selectbox(
-        "Favorite Filter Set",
-        favorite_names,
-        index=favorite_index,
-    )
-
-    if selected_favorite == "Custom":
-        loaded_filter_set = normalize_filter_set(settings.get("screener_filter_set", DEFAULT_FILTER_SET))
+    if "screener_filter_set" in settings:
+        loaded_filter_set = normalize_filter_set(settings.get("screener_filter_set"), use_default=False)
     else:
-        loaded_filter_set = normalize_filter_set(favorite_filter_sets[selected_favorite])
-
-    if st.session_state.get("loaded_favorite_filter_set") != selected_favorite:
-        st.session_state["current_filter_set"] = deepcopy(loaded_filter_set)
-        st.session_state["loaded_favorite_filter_set"] = selected_favorite
-        st.session_state["next_filter_id"] = (
-            max((int(item.get("id", 0)) for item in loaded_filter_set), default=0) + 1
-        )
+        loaded_filter_set = normalize_filter_set(DEFAULT_FILTER_SET)
 
     if "current_filter_set" not in st.session_state:
         st.session_state["current_filter_set"] = deepcopy(loaded_filter_set)
+        st.session_state["next_filter_id"] = (
+            max((int(item.get("id", 0)) for item in loaded_filter_set), default=0) + 1
+        )
 
     if "next_filter_id" not in st.session_state:
         st.session_state["next_filter_id"] = (
@@ -179,17 +192,7 @@ with tab2:
         )
 
     current_filter_set = st.session_state["current_filter_set"]
-    filter_widget_prefix = f"filter_{selected_favorite}"
-
-    tf = st.selectbox(
-        "Timeframe",
-        ["DAY", "WEEK", "MONTH"],
-        index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
-    )
-    create_charts = st.checkbox(
-        "Create charts for matched stocks",
-        value=bool(settings.get("create_charts", False)),
-    )
+    filter_widget_prefix = "ma_filter"
 
     st.subheader("Add Filter")
     col1, col2 = st.columns([3, 1])
@@ -214,7 +217,7 @@ with tab2:
     st.subheader("Current Filter Set")
 
     if not current_filter_set:
-        st.info("No filters added yet. Add at least one filter before running the screener.")
+        st.info("No MA filters selected. Screening will pass stocks through this tab.")
 
     rendered_filter_set = []
 
@@ -352,61 +355,284 @@ with tab2:
         })
 
     st.session_state["current_filter_set"] = rendered_filter_set
-    filter_set = normalize_filter_set(rendered_filter_set)
+    filter_set = normalize_filter_set(rendered_filter_set, use_default=False)
     active_filter_count = len(filter_set)
     st.info(f"Filters in current set: {active_filter_count}")
 
-    st.subheader("Favorite Filter Sets")
-    col1, col2, col3 = st.columns([3, 1, 1])
+    update_settings({
+        "screener_filter_set": filter_set,
+    })
+
+
+with tab3:
+    st.header("Pattern Screener")
+
+    initialize_pattern_expression_state()
+
+    if "pattern_lookback_days_slider" not in st.session_state:
+        st.session_state["pattern_lookback_days_slider"] = int(settings.get("pattern_lookback_days", 120))
+    if "pattern_lookback_days_number" not in st.session_state:
+        st.session_state["pattern_lookback_days_number"] = int(settings.get("pattern_lookback_days", 120))
+    if "pattern_reversal_pct_slider" not in st.session_state:
+        st.session_state["pattern_reversal_pct_slider"] = float(settings.get("pattern_reversal_pct", 5.0))
+    if "pattern_reversal_pct_number" not in st.session_state:
+        st.session_state["pattern_reversal_pct_number"] = float(settings.get("pattern_reversal_pct", 5.0))
+
+    col1, col2 = st.columns(2)
     with col1:
-        favorite_name = st.text_input("Favorite Name", value=selected_favorite if selected_favorite != "Custom" else "")
+        st.slider(
+            "Lookback Days",
+            min_value=10,
+            max_value=1000,
+            step=5,
+            key="pattern_lookback_days_slider",
+            on_change=sync_pattern_lookback_from_slider,
+        )
     with col2:
-        save_favorite = st.button("Save Favorite")
-    with col3:
-        remove_favorite = st.button("Remove Favorite", disabled=selected_favorite == "Custom")
+        st.number_input(
+            "Lookback Days ",
+            min_value=10,
+            max_value=1000,
+            step=1,
+            key="pattern_lookback_days_number",
+            on_change=sync_pattern_lookback_from_number,
+        )
 
-    selected_favorite_for_settings = selected_favorite
+    col1, col2 = st.columns(2)
+    with col1:
+        st.slider(
+            "Swing Reversal %",
+            min_value=0.5,
+            max_value=50.0,
+            step=0.5,
+            key="pattern_reversal_pct_slider",
+            on_change=sync_pattern_reversal_from_slider,
+        )
+    with col2:
+        st.number_input(
+            "Swing Reversal % ",
+            min_value=0.5,
+            max_value=50.0,
+            step=0.1,
+            key="pattern_reversal_pct_number",
+            on_change=sync_pattern_reversal_from_number,
+        )
 
-    if save_favorite:
-        clean_name = favorite_name.strip()
-        if not clean_name:
-            st.error("Enter a favorite name before saving.")
-        elif not filter_set:
-            st.error("Add at least one filter before saving a favorite.")
-        else:
-            favorite_filter_sets[clean_name] = filter_set
-            save_favourite_filter_sets(favorite_filter_sets)
-            selected_favorite_for_settings = clean_name
-            update_settings({
-                "selected_favorite_filter_set": clean_name,
-                "screener_filter_set": filter_set,
-            })
-            st.success(f"Saved favorite filter set: {clean_name}")
+    pattern_lookback_days = int(st.session_state["pattern_lookback_days_number"])
+    pattern_reversal_pct = float(st.session_state["pattern_reversal_pct_number"])
 
-    if remove_favorite and selected_favorite != "Custom":
-        favorite_filter_sets.pop(selected_favorite, None)
-        save_favourite_filter_sets(favorite_filter_sets)
-        selected_favorite_for_settings = "Custom"
-        update_settings({
-            "selected_favorite_filter_set": "Custom",
+    st.subheader("Swing Expression Filters")
+    if st.button("Add Filter", key="add_pattern_filter"):
+        st.session_state["pattern_expression_filters"].append({
+            "id": st.session_state["next_pattern_expression_id"],
+            "expression": "",
         })
-        st.success(f"Removed favorite filter set: {selected_favorite}")
+        st.session_state["next_pattern_expression_id"] += 1
+        st.rerun()
+
+    pattern_expression_filters = st.session_state["pattern_expression_filters"]
+    valid_pattern_expressions = []
+    invalid_pattern_errors = []
+
+    if not pattern_expression_filters:
+        st.info("No swing filters selected. Pattern screening will pass stocks through this tab.")
+
+    for index, expression_filter in enumerate(pattern_expression_filters, start=1):
+        filter_id = expression_filter["id"]
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            expression = st.text_input(
+                f"Expression {index}",
+                value=expression_filter.get("expression", ""),
+                key=f"pattern_expression_{filter_id}",
+            )
+        with col2:
+            remove_expression = st.button("Remove", key=f"remove_pattern_expression_{filter_id}")
+
+        if remove_expression:
+            st.session_state["pattern_expression_filters"] = [
+                item for item in pattern_expression_filters if item["id"] != filter_id
+            ]
+            st.rerun()
+
+        expression_filter["expression"] = expression
+        is_valid, error = validate_expression(expression)
+        if is_valid:
+            st.success("Valid expression")
+            valid_pattern_expressions.append(expression.strip())
+        else:
+            st.error(error)
+            invalid_pattern_errors.append(f"Expression {index}: {error}")
+
+    update_settings({
+        "pattern_lookback_days": pattern_lookback_days,
+        "pattern_reversal_pct": pattern_reversal_pct,
+        "pattern_expressions": [
+            item.get("expression", "")
+            for item in st.session_state["pattern_expression_filters"]
+        ],
+    })
+
+with tab4:
+    st.header("Run Screening")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        tf = st.selectbox(
+            "Screening Timeframe",
+            ["DAY", "WEEK", "MONTH"],
+            index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
+        )
+    with col2:
+        create_charts = st.checkbox(
+            "Create charts",
+            value=bool(settings.get("create_charts", False)),
+        )
+    with col3:
+        pattern_create_charts = st.checkbox(
+            "Show swing labels",
+            value=bool(settings.get("pattern_create_charts", False)),
+            disabled=not create_charts,
+        )
 
     update_settings({
         "tf": tf,
         "create_charts": create_charts,
-        "selected_favorite_filter_set": selected_favorite_for_settings,
-        "screener_filter_set": filter_set,
+        "pattern_create_charts": pattern_create_charts,
     })
 
-    run = st.button("Run Screener", type="primary")
+    favorite_names = sorted(favorite_filter_sets.keys())
+    selected_saved_filter = None
+    selected_run_filter_name = "Current Filters"
+    if favorite_names:
+        favorite_options = ["Current Filters"] + favorite_names
+        saved_selected_favorite = settings.get("selected_favorite_filter_set", "Current Filters")
+        favorite_index = favorite_options.index(saved_selected_favorite) if saved_selected_favorite in favorite_options else 0
+        selected_run_filter_name = st.selectbox(
+            "Filter Set To Run",
+            favorite_options,
+            index=favorite_index,
+        )
+        selected_saved_filter = selected_run_filter_name if selected_run_filter_name != "Current Filters" else None
+        col1, col2 = st.columns(2)
+        with col1:
+            load_favorite = st.button("Load Selected Into Tabs", disabled=selected_saved_filter is None)
+        with col2:
+            remove_favorite = st.button("Remove Selected Favorite", disabled=selected_saved_filter is None)
 
-    if run:
-        if active_filter_count == 0:
-            st.error("Add at least one filter before running the screener.")
+        if load_favorite and selected_saved_filter:
+            saved_filter = favorite_filter_sets[selected_saved_filter]
+            if isinstance(saved_filter, list):
+                ma_filter_set = saved_filter
+                pattern_settings = {}
+            else:
+                ma_filter_set = saved_filter.get("ma_filter_set", [])
+                pattern_settings = saved_filter.get("pattern", {})
+
+            loaded_ma_filter_set = normalize_filter_set(ma_filter_set, use_default=False)
+            st.session_state["current_filter_set"] = deepcopy(loaded_ma_filter_set)
+            st.session_state["next_filter_id"] = (
+                max((int(item.get("id", 0)) for item in loaded_ma_filter_set), default=0) + 1
+            )
+
+            loaded_expressions = pattern_settings.get("expressions", [])
+            st.session_state["pattern_expression_filters"] = [
+                {"id": index, "expression": expression}
+                for index, expression in enumerate(loaded_expressions, start=1)
+            ]
+            st.session_state["next_pattern_expression_id"] = len(loaded_expressions) + 1
+
+            if pattern_settings:
+                lookback_days = int(pattern_settings.get("lookback_days", pattern_lookback_days))
+                reversal_pct = float(pattern_settings.get("reversal_pct", pattern_reversal_pct))
+                st.session_state["pattern_lookback_days_slider"] = lookback_days
+                st.session_state["pattern_lookback_days_number"] = lookback_days
+                st.session_state["pattern_reversal_pct_slider"] = reversal_pct
+                st.session_state["pattern_reversal_pct_number"] = reversal_pct
+
+            update_settings({
+                "selected_favorite_filter_set": selected_saved_filter,
+                "screener_filter_set": loaded_ma_filter_set,
+                "pattern_lookback_days": int(pattern_settings.get("lookback_days", pattern_lookback_days)),
+                "pattern_reversal_pct": float(pattern_settings.get("reversal_pct", pattern_reversal_pct)),
+                "pattern_expressions": loaded_expressions,
+            })
+            st.success(f"Loaded favorite filters: {selected_saved_filter}")
+            st.rerun()
+
+        if remove_favorite and selected_saved_filter:
+            favorite_filter_sets.pop(selected_saved_filter, None)
+            save_favourite_filter_sets(favorite_filter_sets)
+            update_settings({"selected_favorite_filter_set": ""})
+            st.success(f"Removed favorite filters: {selected_saved_filter}")
+            st.rerun()
+    else:
+        st.info("No saved favorite filters yet.")
+
+    st.subheader("Save Current Filters")
+    favorite_name = st.text_input("Favorite Filter Name", value="")
+    if st.button("Save Favorite Filters"):
+        clean_name = favorite_name.strip()
+        if not clean_name:
+            st.error("Enter a favorite filter name before saving.")
+        else:
+            favorite_filter_sets[clean_name] = {
+                "ma_filter_set": filter_set,
+                "pattern": {
+                    "lookback_days": pattern_lookback_days,
+                    "reversal_pct": pattern_reversal_pct,
+                    "expressions": [
+                        item.get("expression", "")
+                        for item in st.session_state["pattern_expression_filters"]
+                    ],
+                },
+            }
+            save_favourite_filter_sets(favorite_filter_sets)
+            update_settings({"selected_favorite_filter_set": clean_name})
+            st.success(f"Saved favorite filters: {clean_name}")
+
+    st.subheader("Run Screener")
+    run_combined = st.button("Run Screening", type="primary")
+
+    if run_combined:
+        run_filter_set = filter_set
+        run_lookback_days = pattern_lookback_days
+        run_reversal_pct = pattern_reversal_pct
+        run_pattern_expressions = valid_pattern_expressions
+        run_invalid_pattern_errors = invalid_pattern_errors
+
+        if selected_saved_filter:
+            saved_filter = favorite_filter_sets[selected_saved_filter]
+            if isinstance(saved_filter, list):
+                run_filter_set = normalize_filter_set(saved_filter, use_default=False)
+                saved_pattern_settings = {}
+            else:
+                run_filter_set = normalize_filter_set(saved_filter.get("ma_filter_set", []), use_default=False)
+                saved_pattern_settings = saved_filter.get("pattern", {})
+
+            run_lookback_days = int(saved_pattern_settings.get("lookback_days", pattern_lookback_days))
+            run_reversal_pct = float(saved_pattern_settings.get("reversal_pct", pattern_reversal_pct))
+            saved_expressions = [
+                expression.strip()
+                for expression in saved_pattern_settings.get("expressions", [])
+                if expression.strip()
+            ]
+            run_pattern_expressions = []
+            run_invalid_pattern_errors = []
+            for index, expression in enumerate(saved_expressions, start=1):
+                is_valid, error = validate_expression(expression)
+                if is_valid:
+                    run_pattern_expressions.append(expression)
+                else:
+                    run_invalid_pattern_errors.append(f"Saved expression {index}: {error}")
+
+            update_settings({"selected_favorite_filter_set": selected_saved_filter})
+
+        if run_invalid_pattern_errors:
+            st.error("Fix invalid swing expressions before running the screener.")
             st.stop()
 
-        for filter_item in filter_set:
+        for filter_item in run_filter_set:
             params = filter_item["params"]
             label = FILTER_TYPE_LABELS[filter_item["type"]]
             if filter_item["type"] in {"short_above_long", "golden_cross"} and params["short_ma"] >= params["long_ma"]:
@@ -422,14 +648,25 @@ with tab2:
         for index, f in enumerate(stock_files, start=1):
             r = screen_json_file(
                 f,
-                filter_set=filter_set,
+                filter_set=run_filter_set,
             )
             if r:
-                if create_charts:
-                    chart_path = create_stock_chart(f, filter_set)
-                    if chart_path:
-                        r["ChartPath"] = chart_path
-                rows.append(r)
+                pattern_passed, swings, pattern_error = evaluate_pattern_filters(
+                    f,
+                    run_lookback_days,
+                    run_reversal_pct,
+                    run_pattern_expressions,
+                )
+                if pattern_passed:
+                    if create_charts or pattern_create_charts:
+                        chart_path = create_stock_chart(
+                            f,
+                            run_filter_set,
+                            swing_annotations=swings if pattern_create_charts else None,
+                        )
+                        if chart_path:
+                            r["ChartPath"] = chart_path
+                    rows.append(r)
 
             total = len(stock_files)
             progress = index / total if total else 0
@@ -445,12 +682,7 @@ with tab2:
         st.success(f"{len(rows)} stocks found")
 
 
-with tab3:
-    st.header("Pattern Screener")
-    st.info("Add Cup&Handle, Double Bottom, Bull Flag scanners here.")
-
-
-with tab4:
+with tab5:
     st.header("Results")
 
     rows = st.session_state.get("results", [])
@@ -461,7 +693,7 @@ with tab4:
         display_df = df.drop(columns=["ChartPath"], errors="ignore")
 
         if "ChartPath" in df.columns:
-            st.markdown(results_hover_table_html(df), unsafe_allow_html=True)
+            sortable_results_table(df)
         else:
             st.dataframe(display_df, use_container_width=True)
 

@@ -4,6 +4,7 @@ import json
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import streamlit.components.v1 as components
 
 from config import CHARTS_DIR
 from screener import required_ma_periods
@@ -32,7 +33,7 @@ def load_price_data(path):
     return df.dropna(subset=["Close"])
 
 
-def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=260):
+def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=260, swing_annotations=None):
     df = load_price_data(json_path)
     ma_periods = required_ma_periods(filter_set)
     if df.empty:
@@ -56,6 +57,31 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
             color=MA_COLORS[index % len(MA_COLORS)],
             linewidth=1.4,
         )
+
+    if swing_annotations:
+        latest_by_type = {
+            "H": [swing for swing in reversed(swing_annotations) if swing["type"] == "H"][:3],
+            "L": [swing for swing in reversed(swing_annotations) if swing["type"] == "L"][:3],
+        }
+        chart_dates = set(chart_df["Date"])
+        for swing_type, swings in latest_by_type.items():
+            color = "#dc2626" if swing_type == "H" else "#16a34a"
+            marker = "v" if swing_type == "H" else "^"
+            for label_index, swing in enumerate(swings, start=1):
+                if swing["date"] not in chart_dates:
+                    continue
+                label = f"{swing_type}{label_index}"
+                plt.scatter([swing["date"]], [swing["price"]], color=color, marker=marker, s=58, zorder=5)
+                plt.annotate(
+                    label,
+                    (swing["date"], swing["price"]),
+                    textcoords="offset points",
+                    xytext=(0, 9 if swing_type == "H" else -15),
+                    ha="center",
+                    color=color,
+                    fontsize=9,
+                    fontweight="bold",
+                )
 
     plt.title(json_path.stem)
     plt.xlabel("Date")
@@ -88,7 +114,7 @@ def results_hover_table_html(df):
         text-align: left;
         vertical-align: top;
       }
-      .hover-results-table th { background: #f8fafc; font-weight: 600; }
+      .hover-results-table th { background: #f8fafc; font-weight: 600; cursor: pointer; user-select: none; }
       .stock-hover { position: relative; color: #2563eb; font-weight: 600; cursor: default; }
       .stock-hover .chart-tooltip {
         display: none;
@@ -108,7 +134,10 @@ def results_hover_table_html(df):
     </style>
     """
 
-    header_cells = "".join(f"<th>{html.escape(str(column))}</th>" for column in visible_df.columns)
+    header_cells = "".join(
+        f"<th onclick=\"sortHoverTable({index})\">{html.escape(str(column))}</th>"
+        for index, column in enumerate(visible_df.columns)
+    )
     rows = []
     for row_index, row in visible_df.iterrows():
         cells = []
@@ -129,4 +158,35 @@ def results_hover_table_html(df):
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
-    return f"{styles}<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    script = """
+    <script>
+      const sortDirections = {};
+      function sortHoverTable(columnIndex) {
+        const table = document.querySelector(".hover-results-table");
+        const tbody = table.tBodies[0];
+        const rows = Array.from(tbody.rows);
+        const direction = sortDirections[columnIndex] === "asc" ? "desc" : "asc";
+        sortDirections[columnIndex] = direction;
+        rows.sort((a, b) => {
+          const av = a.cells[columnIndex].innerText.trim();
+          const bv = b.cells[columnIndex].innerText.trim();
+          const an = parseFloat(av.replace(/,/g, ""));
+          const bn = parseFloat(bv.replace(/,/g, ""));
+          let result;
+          if (!Number.isNaN(an) && !Number.isNaN(bn)) {
+            result = an - bn;
+          } else {
+            result = av.localeCompare(bv);
+          }
+          return direction === "asc" ? result : -result;
+        });
+        rows.forEach(row => tbody.appendChild(row));
+      }
+    </script>
+    """
+
+    return f"{styles}{script}<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def sortable_results_table(df, height=700):
+    components.html(results_hover_table_html(df), height=height, scrolling=True)

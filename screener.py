@@ -195,9 +195,9 @@ def normalize_filter_item(filter_item, fallback_id):
         "params": params,
     }
 
-def normalize_filter_set(filter_set=None):
+def normalize_filter_set(filter_set=None, use_default=True):
     if not filter_set:
-        return deepcopy(DEFAULT_FILTER_SET)
+        return deepcopy(DEFAULT_FILTER_SET) if use_default else []
 
     if isinstance(filter_set, list):
         normalized = []
@@ -219,7 +219,7 @@ def normalize_filter_set(filter_set=None):
                 next_id += 1
         return normalized
 
-    return deepcopy(DEFAULT_FILTER_SET)
+    return deepcopy(DEFAULT_FILTER_SET) if use_default else []
 
 def screen_json_file(path, filter_set=None, **legacy_kwargs):
     if not path.exists():
@@ -245,9 +245,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
             "long_ma_down_from_max": {"enabled": False, "long_ma": long_ma, "down_pct": 5.0, "lookback_units": 50},
         }
 
-    filter_set = normalize_filter_set(filter_set)
-    if not filter_set:
-        return None
+    filter_set = normalize_filter_set(filter_set, use_default=False)
 
     df = pd.DataFrame(json.loads(path.read_text()))
     ma_periods = required_ma_periods(filter_set)
