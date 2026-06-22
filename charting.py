@@ -206,7 +206,7 @@ def results_hover_table_html(df):
 
         function showTooltip(el) {
           if (activeTooltip && activeTooltip !== el) {
-            activeTooltip.classList.remove('tooltip-visible');
+            hideTooltip(activeTooltip);
           }
           el.classList.add('tooltip-visible');
           var tip = el.querySelector('.chart-tooltip');
