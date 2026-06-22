@@ -6,6 +6,7 @@ SETTINGS_FILE = META_DIR / "session_settings.json"
 LEGACY_SETTINGS_FILE = META_DIR / "app_settings.json"
 FAVOURITE_FILTERS_FILE = META_DIR / "favourite_filters.json"
 PE_RATIOS_FILE = META_DIR / "pe_ratios.json"
+RESULTS_FILE = META_DIR / "last_results.json"
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -40,3 +41,13 @@ def load_pe_ratios():
 
 def save_pe_ratios(data):
     PE_RATIOS_FILE.write_text(json.dumps(data, indent=2))
+
+def save_results(rows):
+    """Persist screener results to disk so they survive app restarts."""
+    RESULTS_FILE.write_text(json.dumps(rows, indent=2, default=str))
+
+def load_results():
+    """Load persisted screener results. Returns empty list if not found."""
+    if RESULTS_FILE.exists():
+        return json.loads(RESULTS_FILE.read_text())
+    return []

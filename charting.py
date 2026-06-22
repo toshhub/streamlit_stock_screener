@@ -46,7 +46,11 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{json_path.stem}.png"
 
-    plt.figure(figsize=(9, 4.8))
+    plt.figure(figsize=(10, 5.5))
+
+    last_date = chart_df["Date"].iloc[-1]
+    x_lim_right = chart_df["Date"].iloc[-1] + pd.Timedelta(days=(chart_df["Date"].iloc[-1] - chart_df["Date"].iloc[0]).days * 0.12)
+
     plt.plot(chart_df["Date"], chart_df["Close"], label="Close", color="#111827", linewidth=1.8)
 
     for index, period in enumerate(ma_periods):
@@ -57,6 +61,39 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
             color=MA_COLORS[index % len(MA_COLORS)],
             linewidth=1.4,
         )
+
+    # Annotate latest values at the right edge, stacked vertically to avoid overlap
+    annotation_entries = []
+    latest_close = chart_df["Close"].iloc[-1]
+    annotation_entries.append((latest_close, "Close", "#111827"))
+    for index, period in enumerate(ma_periods):
+        last_ma = chart_df[f"SMA{period}"].iloc[-1]
+        if pd.notna(last_ma):
+            annotation_entries.append((last_ma, f"SMA{period}", MA_COLORS[index % len(MA_COLORS)]))
+
+    # Sort by y-value so we can stagger vertical offsets
+    annotation_entries.sort(key=lambda entry: entry[0])
+
+    n = len(annotation_entries)
+    vertical_spacing = 15  # points between each label
+    start_offset = -((n - 1) * vertical_spacing) / 2.0  # center the group
+
+    for i, (y_value, label_text, col) in enumerate(annotation_entries):
+        y_offset = start_offset + i * vertical_spacing
+        plt.annotate(
+            f"{y_value:.2f}",
+            (last_date, y_value),
+            textcoords="offset points",
+            xytext=(8, y_offset),
+            ha="left",
+            va="center",
+            color=col,
+            fontsize=8.5,
+            fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=col, alpha=0.85),
+        )
+
+    plt.xlim(chart_df["Date"].iloc[0], x_lim_right)
 
     if swing_annotations:
         latest_by_type = {
@@ -116,23 +153,56 @@ def results_hover_table_html(df):
       }
       .hover-results-table th { background: #f8fafc; font-weight: 600; user-select: none; }
       .hover-results-table th.sortable { cursor: pointer; color: #2563eb; }
-      .stock-hover { position: relative; color: #2563eb; font-weight: 600; cursor: default; }
+      .stock-hover { color: #2563eb; font-weight: 600; cursor: default; }
       .stock-hover .chart-tooltip {
         display: none;
         position: fixed;
         z-index: 9999;
-        left: 270px;
-        top: 120px;
         width: 720px;
         max-width: calc(100vw - 320px);
         padding: 10px;
         background: white;
         border: 1px solid #cbd5e1;
         box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
+        border-radius: 8px;
+        pointer-events: none;
       }
       .stock-hover:hover .chart-tooltip { display: block; }
       .chart-tooltip img { width: 100%; height: auto; display: block; }
     </style>
+    <script>
+      (function() {
+        function positionTooltips() {
+          document.querySelectorAll('.stock-hover').forEach(function(el) {
+            el.addEventListener('mouseenter', function(e) {
+              var tip = el.querySelector('.chart-tooltip');
+              if (!tip) return;
+              var rect = el.getBoundingClientRect();
+              var tipW = 720;
+              var maxW = window.innerWidth - 32;
+              if (maxW < tipW) tipW = maxW;
+              var left = rect.right + 12;
+              if (left + tipW > window.innerWidth - 10) {
+                left = rect.left - tipW - 12;
+              }
+              var top = rect.top;
+              if (top + 400 > window.innerHeight) {
+                top = window.innerHeight - 420;
+              }
+              if (top < 0) top = 8;
+              tip.style.left = left + 'px';
+              tip.style.top = top + 'px';
+              tip.style.width = tipW + 'px';
+            });
+          });
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', positionTooltips);
+        } else {
+          positionTooltips();
+        }
+      })();
+    </script>
     """
 
     header_cells = "".join(

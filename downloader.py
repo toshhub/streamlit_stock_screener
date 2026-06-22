@@ -1,6 +1,7 @@
 
 import json
 import re
+import time
 
 import pandas as pd
 import yfinance as yf
@@ -18,23 +19,38 @@ def flatten_columns(df):
         df.columns = [c[0] if c[0] else c[1] for c in df.columns]
     return df
 
-def download_symbol(symbol, interval, period, out_file):
-    data = yf.download(
-        symbol + ".NS",
-        interval=interval,
-        period=period,
-        auto_adjust=True,
-        progress=False,
-    )
-    if data.empty:
-        return False
+def download_symbol(symbol, interval, period, out_file, max_retries=2):
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            data = yf.download(
+                symbol + ".NS",
+                interval=interval,
+                period=period,
+                auto_adjust=True,
+                progress=False,
+            )
+            if data.empty:
+                last_error = "No data returned (empty DataFrame)"
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+                return False
 
-    data = flatten_columns(data)
-    data.reset_index(inplace=True)
-    if 'Date' in data.columns:
-        data['Date'] = data['Date'].astype(str)
-    out_file.write_text(json.dumps(data.to_dict(orient='records'), indent=2))
-    return True
+            data = flatten_columns(data)
+            data.reset_index(inplace=True)
+            if 'Date' in data.columns:
+                data['Date'] = data['Date'].astype(str)
+            out_file.write_text(json.dumps(data.to_dict(orient='records'), indent=2))
+            return True
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_retries:
+                time.sleep(2)
+                continue
+            raise
+
+    return False
 
 def timeframe_config(timeframe):
     return TIMEFRAME_CONFIG.get(timeframe, TIMEFRAME_CONFIG["DAY"])

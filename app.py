@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from datetime import datetime
 
@@ -16,9 +17,16 @@ from screener import (
     normalize_filter_set,
     screen_json_file,
 )
-from storage import load_favourite_filter_sets, load_settings, save_favourite_filter_sets, update_settings
+from storage import (
+    load_favourite_filter_sets,
+    load_results,
+    load_settings,
+    save_favourite_filter_sets,
+    save_results,
+    update_settings,
+)
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
 settings = load_settings()
 favorite_filter_sets = load_favourite_filter_sets()
@@ -26,27 +34,112 @@ if not favorite_filter_sets and settings.get("favorite_filter_sets"):
     favorite_filter_sets = settings["favorite_filter_sets"]
     save_favourite_filter_sets(favorite_filter_sets)
 
+# ---- Inject custom CSS ----
 st.markdown(
     """
     <style>
+    /* Primary button - green */
     div.stButton > button[kind="primary"] {
-        background-color: #90ee90;
-        border-color: #90ee90;
-        color: #0f3d13;
+        background-color: #4CAF50;
+        border-color: #4CAF50;
+        color: #ffffff;
+        font-weight: bold;
+        border-radius: 8px;
+        padding: 0.5rem 1.5rem;
+        transition: all 0.2s ease;
     }
-
     div.stButton > button[kind="primary"]:hover,
     div.stButton > button[kind="primary"]:focus {
-        background-color: #7fdf7f;
-        border-color: #7fdf7f;
-        color: #0f3d13;
+        background-color: #43A047;
+        border-color: #43A047;
+        color: #ffffff;
+        box-shadow: 0 2px 8px rgba(76,175,80,0.4);
+    }
+
+    /* Favorite save button - yellow */
+    button[kind="secondary"][data-testid="baseButton-secondary"] {
+        background-color: #FFC107 !important;
+        border-color: #FFC107 !important;
+        color: #000000 !important;
+        font-weight: bold;
+    }
+
+    /* Run Screener button - prominent */
+    div.stButton > button[kind="primary"]#run-screener-btn {
+        background-color: #1565C0 !important;
+        border-color: #1565C0 !important;
+        font-size: 1.1rem;
+        padding: 0.6rem 2rem;
+    }
+
+    /* Tab styling */
+    div.stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%);
+        border-radius: 12px 12px 0 0;
+        padding: 6px 8px 0 8px;
+    }
+    div.stTabs [data-baseweb="tab"] {
+        border-radius: 10px 10px 0 0;
+        padding: 10px 24px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #ffffffcc;
+        background: rgba(255,255,255,0.08);
+        border: none;
+        transition: all 0.2s ease;
+    }
+    div.stTabs [data-baseweb="tab"]:hover {
+        background: rgba(255,255,255,0.18);
+        color: #ffffff;
+    }
+    div.stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background: #ffffff;
+        color: #1a237e;
+        font-weight: 700;
+    }
+
+    /* Filter row badges */
+    .filter-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 16px;
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: #fff;
+        margin: 2px 4px;
+    }
+
+    /* Data availability cards */
+    .data-status-card {
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 6px 0;
+        color: #fff;
+        font-weight: 600;
+    }
+    .data-status-available {
+        background: linear-gradient(135deg, #2E7D32, #43A047);
+    }
+    .data-status-empty {
+        background: linear-gradient(135deg, #757575, #9E9E9E);
+    }
+
+    /* Section headers */
+    .section-header {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-top: 18px;
+        margin-bottom: 8px;
+        padding-bottom: 4px;
+        border-bottom: 2px solid #e0e0e0;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("NSE Stock Screener")
+st.title("📈 NSE Stock Screener")
 
 
 def sync_pattern_lookback_from_slider():
@@ -134,59 +227,113 @@ def sync_selected_favorite_filter():
     apply_filter_selection_to_state(st.session_state["selected_favorite_filter_set"])
 
 
-tab1, tab2, tab3 = st.tabs(["Data", "Screener", "Results"])
+def _get_last_date_from_json_dir(json_dir, top_n=10):
+    """Scan up to `top_n` JSON files in `json_dir` and return the latest 'Date' found, or None."""
+    if not json_dir or not json_dir.exists():
+        return None
+    files = sorted(json_dir.glob("*.json"))[:top_n]
+    latest = None
+    for f in files:
+        try:
+            records = json.loads(f.read_text())
+            if records:
+                last_rec = records[-1]
+                date_str = last_rec.get("Date")
+                if date_str:
+                    dt = pd.Timestamp(date_str).to_pydatetime()
+                    if latest is None or dt > latest:
+                        latest = dt
+        except Exception:
+            continue
+    return latest
 
 
+def render_data_availability_status():
+    """Render data availability cards for all timeframes."""
+    st.markdown(
+        '<p class="section-header">📊 Data Availability Status</p>',
+        unsafe_allow_html=True,
+    )
+
+    timeframes = [
+        ("Daily", DAILY_DIR),
+        ("Weekly", WEEKLY_DIR),
+        ("Monthly", MONTHLY_DIR),
+    ]
+
+    any_available = False
+    for label, directory in timeframes:
+        file_count = len(list(directory.glob("*.json"))) if directory.exists() else 0
+        last_date = _get_last_date_from_json_dir(directory)
+        if file_count > 0 and last_date:
+            any_available = True
+            date_formatted = last_date.strftime("%d-%m-%Y")
+            st.markdown(
+                f'<div class="data-status-card data-status-available">'
+                f'✅ <b>{label}</b> — {file_count} stocks | '
+                f'Latest data: <b>{date_formatted}</b>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="data-status-card data-status-empty">'
+                f'❌ <b>{label}</b> — No stocks data available'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+    if not any_available:
+        st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
+
+
+tab1, tab2, tab3 = st.tabs(["📥 Data", "🔍 Screener", "📊 Results"])
+
+
+# =====================================================================
+# TAB 1: DATA MANAGEMENT
+# =====================================================================
 with tab1:
-    st.header("Data Management")
+    st.header("📥 Data Management")
+
+    render_data_availability_status()
+
+    st.markdown(
+        '<p class="section-header">⬇️ Download Fresh Stock Data</p>',
+        unsafe_allow_html=True,
+    )
 
     excel_file = EXCEL_DIR / "MCAP_JUGAAD.xlsx"
-    last_download_at = settings.get("last_download_at")
-    last_download_tf = settings.get("last_download_tf")
-    last_download_status = st.empty()
-
-    def show_last_download_status(downloaded_at, downloaded_tf):
-        if downloaded_at:
-            label = f"Last stock data download: {downloaded_at}"
-            if downloaded_tf:
-                label += f" ({downloaded_tf})"
-            last_download_status.info(label)
-        else:
-            last_download_status.info("Last stock data download: Not available")
-
-    show_last_download_status(last_download_at, last_download_tf)
 
     download_tf = st.selectbox(
-        "Download Timeframe",
+        "📅 Download Timeframe",
         ["DAY", "WEEK", "MONTH"],
         index=["DAY", "WEEK", "MONTH"].index(settings.get("download_tf", "DAY")),
     )
     download_limit = st.number_input(
-        "Number of stocks to download",
+        "🔢 Number of stocks to download",
         min_value=1,
         value=int(settings.get("download_limit", 1000)),
         step=50,
     )
 
     if excel_file.exists():
-        st.success(f"Default Excel Found: {excel_file.name}")
+        st.success(f"✅ Default Excel Found: {excel_file.name}")
     else:
-        st.warning("Upload initial MCAP_JUGAAD.xlsx")
+        st.warning("⚠️ Upload initial MCAP_JUGAAD.xlsx")
 
-    uploaded = st.file_uploader("Replace Excel", type=["xlsx"])
-
+    uploaded = st.file_uploader("📂 Replace Excel", type=["xlsx"])
     if uploaded:
         excel_file.write_bytes(uploaded.getbuffer())
-        st.success("Excel replaced")
+        st.success("✅ Excel replaced")
 
     update_settings({
         "download_tf": download_tf,
         "download_limit": download_limit,
     })
 
-    if st.button("Download Stocks Data", type="primary"):
+    if st.button("⬇️ Download Stocks Data", type="primary"):
         if not excel_file.exists():
-            st.error("Upload MCAP_JUGAAD.xlsx before downloading stock data.")
+            st.error("❌ Upload MCAP_JUGAAD.xlsx before downloading stock data.")
         else:
             progress_bar = st.progress(0)
             progress_text = st.empty()
@@ -203,7 +350,7 @@ with tab1:
             if deleted_count:
                 progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
 
-            with st.spinner(f"Downloading top {download_limit} stocks from yfinance..."):
+            with st.spinner(f"⬇️ Downloading top {download_limit} stocks from yfinance..."):
                 download_rows = download_top_stocks(
                     excel_file,
                     download_tf,
@@ -213,27 +360,35 @@ with tab1:
 
             downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
             progress_bar.progress(1.0)
-            last_download_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            last_download_at = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
             update_settings({
                 "last_download_at": last_download_at,
                 "last_download_tf": download_tf,
             })
-            show_last_download_status(last_download_at, download_tf)
             progress_text.success(
-                f"Downloaded {downloaded_count} of {len(download_rows)} stocks. "
+                f"✅ Downloaded {downloaded_count} of {len(download_rows)} stocks. "
                 f"Last download: {last_download_at}"
             )
-            st.success(f"Downloaded {downloaded_count} of {len(download_rows)} stocks")
+            st.success(f"✅ Downloaded {downloaded_count} of {len(download_rows)} stocks")
 
             failed = [row for row in download_rows if not row["Downloaded"]]
             if failed:
-                st.dataframe(pd.DataFrame(failed), use_container_width=True)
+                st.markdown(
+                    pd.DataFrame(failed).to_html(index=False),
+                    unsafe_allow_html=True,
+                )
+
+            # Refresh data availability display
+            st.rerun()
 
 
+# =====================================================================
+# TAB 2: SCREENER
+# =====================================================================
 with tab2:
-    st.header("Screener")
-    st.subheader("MA Based Filtering")
+    st.header("🔍 Screener")
 
+    # ---- Initialize session state for filter set ----
     if "screener_filter_set" in settings:
         loaded_filter_set = normalize_filter_set(settings.get("screener_filter_set"), use_default=False)
     else:
@@ -253,7 +408,63 @@ with tab2:
     current_filter_set = st.session_state["current_filter_set"]
     filter_widget_prefix = "ma_filter"
 
-    st.subheader("Add Filter")
+    # ===== TOP SECTION: Favorite Filter Selection + Run Screener =====
+    st.markdown(
+        '<p class="section-header">⚡ Quick Run</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ---- Screening Timeframe ----
+    col_tf, col_charts = st.columns([1, 1])
+    with col_tf:
+        tf = st.selectbox(
+            "📅 Screening Timeframe",
+            ["DAY", "WEEK", "MONTH"],
+            index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
+        )
+    with col_charts:
+        create_charts = st.checkbox(
+            "📈 Create charts",
+            value=bool(settings.get("create_charts", False)),
+        )
+    update_settings({
+        "tf": tf,
+        "create_charts": create_charts,
+    })
+
+    # ---- Favorite Filter Set + Run Button side by side ----
+    col_fav, col_run = st.columns([3, 1])
+    with col_fav:
+        favorite_names = sorted(favorite_filter_sets.keys())
+        if favorite_names:
+            favorite_options = ["Current Filters"] + favorite_names
+            saved_selected_favorite = settings.get("selected_favorite_filter_set", "Current Filters")
+            favorite_index = favorite_options.index(saved_selected_favorite) if saved_selected_favorite in favorite_options else 0
+            if st.session_state.get("selected_favorite_filter_set") not in favorite_options:
+                st.session_state["selected_favorite_filter_set"] = favorite_options[favorite_index]
+            st.selectbox(
+                "⭐ Filter Set To Run",
+                favorite_options,
+                index=favorite_index,
+                key="selected_favorite_filter_set",
+                on_change=sync_selected_favorite_filter,
+                help="Select a saved favorite filter set to load its MA & pattern filters.",
+            )
+        else:
+            st.info("No saved favorite filters yet. Configure filters below and save them.")
+    with col_run:
+        st.write("")  # spacer
+        run_combined = st.button("▶️ Run Screener", type="primary", use_container_width=True)
+
+    # Placeholder for progress bar — will be filled when screener runs
+    screener_progress_placeholder = st.empty()
+
+    st.divider()
+
+    # ===== MA Based Filtering =====
+    st.subheader("📐 MA Based Filtering")
+
+    # ---- Add Filter Row ----
     col1, col2 = st.columns([3, 1])
     with col1:
         filter_type_to_add = st.selectbox(
@@ -262,7 +473,7 @@ with tab2:
             format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
     with col2:
-        add_filter = st.button("Add Filter")
+        add_filter = st.button("➕ Add Filter")
 
     if add_filter:
         current_filter_set.append({
@@ -273,7 +484,7 @@ with tab2:
         st.session_state["next_filter_id"] += 1
         st.rerun()
 
-    st.subheader("Current Filter Set")
+    st.markdown('<p class="section-header">📋 Current Filter Set</p>', unsafe_allow_html=True)
 
     if not current_filter_set:
         st.info("No MA filters selected. Screening will pass stocks through this tab.")
@@ -286,8 +497,15 @@ with tab2:
         params = deepcopy(FILTER_TYPE_DEFAULTS[filter_type])
         params.update(filter_item.get("params", {}))
 
-        with st.expander(f"{index}. {FILTER_TYPE_LABELS[filter_type]}", expanded=True):
-            remove_filter = st.button("Remove Filter", key=f"{filter_widget_prefix}_remove_filter_{filter_id}")
+        filter_label = FILTER_TYPE_LABELS[filter_type]
+
+        expander_label = f"{index}. {filter_label}"
+
+        with st.expander(expander_label, expanded=True):
+            remove_filter = st.button(
+                "❌ Remove Filter",
+                key=f"{filter_widget_prefix}_remove_filter_{filter_id}",
+            )
             if remove_filter:
                 st.session_state["current_filter_set"] = [
                     item for item in current_filter_set if item["id"] != filter_id
@@ -426,14 +644,16 @@ with tab2:
     st.session_state["current_filter_set"] = rendered_filter_set
     filter_set = normalize_filter_set(rendered_filter_set, use_default=False)
     active_filter_count = len(filter_set)
-    st.info(f"Filters in current set: {active_filter_count}")
+    st.info(f"📌 Filters in current set: {active_filter_count}")
 
     update_settings({
         "screener_filter_set": filter_set,
     })
 
     st.divider()
-    st.subheader("Pattern Based Filtering")
+
+    # ===== Pattern Based Filtering =====
+    st.subheader("🔄 Pattern Based Filtering")
 
     initialize_pattern_expression_state()
 
@@ -449,7 +669,7 @@ with tab2:
     col1, col2 = st.columns(2)
     with col1:
         st.slider(
-            "Lookback Days",
+            "📅 Lookback Days",
             min_value=10,
             max_value=1000,
             step=5,
@@ -458,7 +678,7 @@ with tab2:
         )
     with col2:
         st.number_input(
-            "Lookback Days ",
+            "📅 Lookback Days",
             min_value=10,
             max_value=1000,
             step=1,
@@ -469,7 +689,7 @@ with tab2:
     col1, col2 = st.columns(2)
     with col1:
         st.slider(
-            "Swing Reversal %",
+            "📉 Swing Reversal %",
             min_value=0.5,
             max_value=50.0,
             step=0.5,
@@ -478,7 +698,7 @@ with tab2:
         )
     with col2:
         st.number_input(
-            "Swing Reversal % ",
+            "📉 Swing Reversal %",
             min_value=0.5,
             max_value=50.0,
             step=0.1,
@@ -489,8 +709,8 @@ with tab2:
     pattern_lookback_days = int(st.session_state["pattern_lookback_days_number"])
     pattern_reversal_pct = float(st.session_state["pattern_reversal_pct_number"])
 
-    st.subheader("Swing Expression Filters")
-    if st.button("Add Filter", key="add_pattern_filter"):
+    st.markdown('<p class="section-header">📝 Swing Expression Filters</p>', unsafe_allow_html=True)
+    if st.button("➕ Add Expression", key="add_pattern_filter"):
         st.session_state["pattern_expression_filters"].append({
             "id": st.session_state["next_pattern_expression_id"],
             "expression": "",
@@ -515,7 +735,10 @@ with tab2:
                 key=f"pattern_expression_{filter_id}",
             )
         with col2:
-            remove_expression = st.button("Remove", key=f"remove_pattern_expression_{filter_id}")
+            remove_expression = st.button(
+                "❌ Remove",
+                key=f"remove_pattern_expression_{filter_id}",
+            )
 
         if remove_expression:
             st.session_state["pattern_expression_filters"] = [
@@ -530,10 +753,10 @@ with tab2:
 
         is_valid, error = validate_expression(expression)
         if is_valid:
-            st.success("Valid expression")
+            st.success("✅ Valid expression")
             valid_pattern_expressions.append(expression.strip())
         else:
-            st.error(error)
+            st.error(f"❌ {error}")
             invalid_pattern_errors.append(f"Expression {index}: {error}")
 
     update_settings({
@@ -544,46 +767,19 @@ with tab2:
             for item in st.session_state["pattern_expression_filters"]
         ],
     })
+
     st.divider()
-    st.subheader("Run Screener")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        tf = st.selectbox(
-            "Screening Timeframe",
-            ["DAY", "WEEK", "MONTH"],
-            index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
-        )
-    with col2:
-        create_charts = st.checkbox(
-            "Create charts",
-            value=bool(settings.get("create_charts", False)),
-        )
-    update_settings({
-        "tf": tf,
-        "create_charts": create_charts,
-    })
+    # ===== Save Current Filters =====
+    st.markdown('<p class="section-header">💾 Save Current Filters</p>', unsafe_allow_html=True)
+    col_save_name, col_save_btn = st.columns([3, 1])
+    with col_save_name:
+        favorite_name = st.text_input("Favorite Filter Name", value="", placeholder="e.g. Golden Cross + PE < 30")
+    with col_save_btn:
+        st.write("")  # spacer
+        save_fav = st.button("⭐ Add To Favorites", use_container_width=True)
 
-    favorite_names = sorted(favorite_filter_sets.keys())
-    if favorite_names:
-        favorite_options = ["Current Filters"] + favorite_names
-        saved_selected_favorite = settings.get("selected_favorite_filter_set", "Current Filters")
-        favorite_index = favorite_options.index(saved_selected_favorite) if saved_selected_favorite in favorite_options else 0
-        if st.session_state.get("selected_favorite_filter_set") not in favorite_options:
-            st.session_state["selected_favorite_filter_set"] = favorite_options[favorite_index]
-        st.selectbox(
-            "Filter Set To Run",
-            favorite_options,
-            index=favorite_index,
-            key="selected_favorite_filter_set",
-            on_change=sync_selected_favorite_filter,
-        )
-    else:
-        st.info("No saved favorite filters yet.")
-
-    st.subheader("Save Current Filters")
-    favorite_name = st.text_input("Favorite Filter Name", value="")
-    if st.button("Save Favorite Filters"):
+    if save_fav:
         clean_name = favorite_name.strip()
         if not clean_name:
             st.error("Enter a favorite filter name before saving.")
@@ -601,10 +797,10 @@ with tab2:
             }
             save_favourite_filter_sets(favorite_filter_sets)
             update_settings({"selected_favorite_filter_set": clean_name})
-            st.success(f"Saved favorite filters: {clean_name}")
+            st.success(f"⭐ Saved favorite filters: {clean_name}")
+            st.rerun()
 
-    run_combined = st.button("Run Screener", type="primary")
-
+    # ===== RUN SCREENER LOGIC =====
     if run_combined:
         run_filter_set = filter_set
         run_lookback_days = pattern_lookback_days
@@ -626,56 +822,72 @@ with tab2:
         target_dir = timeframe_config(tf)["target_dir"]
         rows = []
         stock_files = list(target_dir.glob("*.json"))
-        progress_bar = st.progress(0)
-        progress_text = st.empty()
 
-        for index, f in enumerate(stock_files, start=1):
-            r = screen_json_file(
-                f,
-                filter_set=run_filter_set,
-            )
-            if r:
-                pattern_passed = True
-                swings = []
-                pattern_error = ""
-                if run_pattern_expressions:
-                    pattern_passed, swings, pattern_error = evaluate_pattern_filters(
-                        f,
-                        run_lookback_days,
-                        run_reversal_pct,
-                        run_pattern_expressions,
-                    )
-                if pattern_passed:
-                    if create_charts:
-                        has_pattern_filters = bool(run_pattern_expressions)
-                        chart_path = create_stock_chart(
+        # Render progress bar inside the placeholder below the Run button
+        with screener_progress_placeholder.container():
+            progress_bar = st.progress(0)
+            progress_text = st.empty()
+
+            for index, f in enumerate(stock_files, start=1):
+                r = screen_json_file(
+                    f,
+                    filter_set=run_filter_set,
+                )
+                if r:
+                    pattern_passed = True
+                    swings = []
+                    pattern_error = ""
+                    if run_pattern_expressions:
+                        pattern_passed, swings, pattern_error = evaluate_pattern_filters(
                             f,
-                            run_filter_set,
-                            swing_annotations=swings if has_pattern_filters else None,
+                            run_lookback_days,
+                            run_reversal_pct,
+                            run_pattern_expressions,
                         )
-                        if chart_path:
-                            r["ChartPath"] = chart_path
-                    rows.append(r)
+                    if pattern_passed:
+                        if create_charts:
+                            has_pattern_filters = bool(run_pattern_expressions)
+                            chart_path = create_stock_chart(
+                                f,
+                                run_filter_set,
+                                swing_annotations=swings if has_pattern_filters else None,
+                            )
+                            if chart_path:
+                                r["ChartPath"] = chart_path
+                        rows.append(r)
 
-            total = len(stock_files)
-            progress = index / total if total else 0
-            progress_bar.progress(progress)
-            progress_text.info(
-                f"Screened {index} of {total} stocks. "
-                f"Matches found: {len(rows)}. Processing: {f.stem}"
-            )
+                total = len(stock_files)
+                progress = index / total if total else 0
+                progress_bar.progress(progress)
+                progress_text.info(
+                    f"🔍 Screened {index} of {total} stocks. "
+                    f"Matches found: {len(rows)}. Processing: {f.stem}"
+                )
 
-        st.session_state["results"] = rows
-        progress_bar.progress(1.0)
-        progress_text.success(f"Screened {len(stock_files)} stocks. Matches found: {len(rows)}")
-        st.success(f"{len(rows)} stocks found")
+            # Persist results both in-memory and on-disk
+            st.session_state["results"] = rows
+            save_results(rows)
 
+            progress_bar.progress(1.0)
+            progress_text.success(f"✅ Screened {len(stock_files)} stocks. Matches found: {len(rows)}")
+            st.success(f"🎯 {len(rows)} stocks found")
+
+
+# =====================================================================
+# TAB 3: RESULTS
+# =====================================================================
 with tab3:
-    st.header("Results")
+    st.header("📊 Results")
+
+    # Load persisted results if session state is empty
+    if "results" not in st.session_state:
+        st.session_state["results"] = load_results()
 
     rows = st.session_state.get("results", [])
 
     if rows:
+        st.info(f"📌 Showing last screener run results — {len(rows)} stock(s) matched")
+
         df = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)
         display_df = df.rename(columns={"MatchedFilters": "Filters Used"})
@@ -690,36 +902,37 @@ with tab3:
             sortable_results_table(display_df)
 
         st.download_button(
-            "Download Results CSV",
+            "📥 Download Results CSV",
             display_df.to_csv(index=False),
             "results.csv",
             "text/csv",
         )
 
-        st.subheader("Email Results")
+        st.divider()
+        st.subheader("📧 Email Results")
         st.caption("Use a Gmail App Password. Your password is used only for this send and is not saved.")
 
         gmail_id = st.text_input(
-            "Gmail ID",
+            "📧 Gmail ID",
             value=settings.get("gmail_id", ""),
             placeholder="yourname@gmail.com",
         )
         gmail_app_password = st.text_input(
-            "Gmail App Password",
+            "🔑 Gmail App Password",
             type="password",
             placeholder="16-digit app password",
         )
         recipient_email = st.text_input(
-            "Recipient Email",
+            "📩 Recipient Email",
             value=settings.get("recipient_email", ""),
             placeholder="recipient@example.com",
         )
         email_subject = st.text_input(
-            "Subject",
+            "📋 Subject",
             value=settings.get("email_subject", "NSE Stock Screener Results"),
         )
         email_body = st.text_area(
-            "Message",
+            "📝 Message",
             value=settings.get("email_body", "Attached are the latest filtered stock screener results."),
         )
 
@@ -730,9 +943,9 @@ with tab3:
             "email_body": email_body,
         })
 
-        if st.button("Send Results Email"):
+        if st.button("✉️ Send Results Email"):
             if not gmail_id or not gmail_app_password or not recipient_email:
-                st.error("Enter Gmail ID, Gmail App Password, and recipient email.")
+                st.error("❌ Enter Gmail ID, Gmail App Password, and recipient email.")
             else:
                 try:
                     send_results_email(
@@ -743,8 +956,8 @@ with tab3:
                         email_body,
                         display_df.to_csv(index=False),
                     )
-                    st.success("Email sent successfully.")
+                    st.success("✅ Email sent successfully.")
                 except Exception as exc:
-                    st.error(f"Email failed: {exc}")
+                    st.error(f"❌ Email failed: {exc}")
     else:
-        st.info("Run screener first.")
+        st.info("No results yet. Run the screener from the '🔍 Screener' tab to see results here.")
