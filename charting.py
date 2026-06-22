@@ -144,7 +144,8 @@ def results_hover_table_html(df):
 
     styles = """
     <style>
-      .hover-results-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      .results-table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .hover-results-table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 400px; }
       .hover-results-table th, .hover-results-table td {
         border-bottom: 1px solid #e5e7eb;
         padding: 7px 9px;
@@ -153,13 +154,13 @@ def results_hover_table_html(df):
       }
       .hover-results-table th { background: #f8fafc; font-weight: 600; user-select: none; }
       .hover-results-table th.sortable { cursor: pointer; color: #2563eb; }
-      .stock-hover { color: #2563eb; font-weight: 600; cursor: default; }
+      .stock-hover { color: #2563eb; font-weight: 600; cursor: pointer; }
       .stock-hover .chart-tooltip {
         display: none;
         position: fixed;
         z-index: 9999;
-        width: 720px;
-        max-width: calc(100vw - 320px);
+        width: min(720px, calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
         padding: 10px;
         background: white;
         border: 1px solid #cbd5e1;
@@ -167,39 +168,116 @@ def results_hover_table_html(df):
         border-radius: 8px;
         pointer-events: none;
       }
-      .stock-hover:hover .chart-tooltip { display: block; }
+      /* Show tooltip on hover (desktop) and on tap via .tooltip-visible class (mobile) */
+      .stock-hover:hover .chart-tooltip,
+      .stock-hover.tooltip-visible .chart-tooltip { display: block; }
       .chart-tooltip img { width: 100%; height: auto; display: block; }
+      /* Mobile: keep table cells from wrapping excessively */
+      @media screen and (max-width: 600px) {
+        .hover-results-table { font-size: 12px; }
+        .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
+      }
     </style>
     <script>
       (function() {
-        function positionTooltips() {
+        var activeTooltip = null;
+
+        function positionTooltip(el, tip) {
+          var rect = el.getBoundingClientRect();
+          var tipW = tip.offsetWidth || Math.min(720, window.innerWidth - 24);
+          var tipH = tip.offsetHeight || 400;
+          var cushion = 8;
+          // Try right side first, fallback to left, then center
+          var left = rect.right + cushion;
+          if (left + tipW > window.innerWidth - cushion) {
+            left = rect.left - tipW - cushion;
+          }
+          if (left < cushion) {
+            left = Math.max(cushion, (window.innerWidth - tipW) / 2);
+          }
+          var top = rect.top;
+          if (top + tipH > window.innerHeight - cushion) {
+            top = Math.max(cushion, window.innerHeight - tipH - cushion);
+          }
+          if (top < cushion) top = cushion;
+          tip.style.left = left + 'px';
+          tip.style.top = top + 'px';
+        }
+
+        function showTooltip(el) {
+          if (activeTooltip && activeTooltip !== el) {
+            activeTooltip.classList.remove('tooltip-visible');
+          }
+          el.classList.add('tooltip-visible');
+          var tip = el.querySelector('.chart-tooltip');
+          if (tip) {
+            tip.style.display = 'block';
+            positionTooltip(el, tip);
+          }
+          activeTooltip = el;
+        }
+
+        function hideTooltip(el) {
+          el.classList.remove('tooltip-visible');
+          var tip = el.querySelector('.chart-tooltip');
+          if (tip) tip.style.display = '';
+        }
+
+        function bindEvents() {
           document.querySelectorAll('.stock-hover').forEach(function(el) {
+            // Desktop hover
             el.addEventListener('mouseenter', function(e) {
               var tip = el.querySelector('.chart-tooltip');
               if (!tip) return;
-              var rect = el.getBoundingClientRect();
-              var tipW = 720;
-              var maxW = window.innerWidth - 32;
-              if (maxW < tipW) tipW = maxW;
-              var left = rect.right + 12;
-              if (left + tipW > window.innerWidth - 10) {
-                left = rect.left - tipW - 12;
+              tip.style.display = 'block';
+              positionTooltip(el, tip);
+            });
+            el.addEventListener('mouseleave', function(e) {
+              if (!el.classList.contains('tooltip-visible')) {
+                var tip = el.querySelector('.chart-tooltip');
+                if (tip) tip.style.display = '';
               }
-              var top = rect.top;
-              if (top + 400 > window.innerHeight) {
-                top = window.innerHeight - 420;
+            });
+            // Mobile tap
+            el.addEventListener('click', function(e) {
+              e.stopPropagation();
+              if (el.classList.contains('tooltip-visible')) {
+                hideTooltip(el);
+              } else {
+                showTooltip(el);
               }
-              if (top < 0) top = 8;
-              tip.style.left = left + 'px';
-              tip.style.top = top + 'px';
-              tip.style.width = tipW + 'px';
             });
           });
+          // Tap anywhere else to close
+          document.addEventListener('click', function() {
+            if (activeTooltip) {
+              hideTooltip(activeTooltip);
+              activeTooltip = null;
+            }
+          });
+          // Reposition on scroll/resize
+          window.addEventListener('scroll', function() {
+            if (activeTooltip) {
+              var tip = activeTooltip.querySelector('.chart-tooltip');
+              if (tip && tip.style.display === 'block') {
+                positionTooltip(activeTooltip, tip);
+              }
+            }
+          }, {passive: true});
+          window.addEventListener('resize', function() {
+            if (activeTooltip) {
+              var tip = activeTooltip.querySelector('.chart-tooltip');
+              if (tip && tip.style.display === 'block') {
+                positionTooltip(activeTooltip, tip);
+              }
+            }
+          });
         }
+
         if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', positionTooltips);
+          document.addEventListener('DOMContentLoaded', bindEvents);
         } else {
-          positionTooltips();
+          bindEvents();
         }
       })();
     </script>
@@ -255,7 +333,7 @@ def results_hover_table_html(df):
     </script>
     """
 
-    return f"{styles}{script}<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
 
 
 def sortable_results_table(df, height=700):
