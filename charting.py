@@ -33,7 +33,7 @@ def load_price_data(path):
     return df.dropna(subset=["Close"])
 
 
-def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=260, swing_annotations=None):
+def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=780, swing_annotations=None):
     df = load_price_data(json_path)
     ma_periods = required_ma_periods(filter_set)
     if df.empty:
@@ -283,10 +283,13 @@ def results_hover_table_html(df):
     </script>
     """
 
+    # Columns that support click-to-sort: all except Symbol and Filters Used (text columns)
+    _sort_exempt = {"Symbol", "Filters Used"}
+
     header_cells = "".join(
         (
-            f"<th class=\"sortable\" onclick=\"sortPeRatioColumn({index})\">{html.escape(str(column))}</th>"
-            if column == "PE Ratio"
+            f"<th class=\"sortable\" onclick=\"sortNumericColumn({index})\">{html.escape(str(column))}</th>"
+            if column not in _sort_exempt
             else f"<th>{html.escape(str(column))}</th>"
         )
         for index, column in enumerate(visible_df.columns)
@@ -313,20 +316,34 @@ def results_hover_table_html(df):
 
     script = """
     <script>
-      let peSortDirection = "desc";
-      function parsePeRatio(value) {
-        const parsed = parseFloat(value.replace(/,/g, ""));
+      // Per-column sort directions (keyed by columnIndex)
+      const numericSortDirections = {};
+
+      function parseNumeric(value) {
+        // Remove commas, percentage signs, and whitespace; treat empty as +Infinity (sorts to bottom)
+        const cleaned = value.replace(/[,%\\s]/g, "").trim();
+        if (cleaned === "" || cleaned === "-" || cleaned === "N/A") {
+          return Number.POSITIVE_INFINITY;
+        }
+        const parsed = parseFloat(cleaned);
         return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
       }
-      function sortPeRatioColumn(columnIndex) {
+
+      function sortNumericColumn(columnIndex) {
         const table = document.querySelector(".hover-results-table");
+        if (!table || !table.tBodies || !table.tBodies.length) return;
         const tbody = table.tBodies[0];
         const rows = Array.from(tbody.rows);
-        peSortDirection = peSortDirection === "asc" ? "desc" : "asc";
+
+        // Toggle direction for this specific column (default desc on first click)
+        const prev = numericSortDirections[columnIndex] || "desc";
+        const dir = prev === "asc" ? "desc" : "asc";
+        numericSortDirections[columnIndex] = dir;
+
         rows.sort((a, b) => {
-          const av = parsePeRatio(a.cells[columnIndex].innerText.trim());
-          const bv = parsePeRatio(b.cells[columnIndex].innerText.trim());
-          return peSortDirection === "asc" ? av - bv : bv - av;
+          const av = parseNumeric(a.cells[columnIndex].innerText);
+          const bv = parseNumeric(b.cells[columnIndex].innerText);
+          return dir === "asc" ? av - bv : bv - av;
         });
         rows.forEach(row => tbody.appendChild(row));
       }

@@ -333,7 +333,10 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         ma_label = f"SMA{period}"
         if pd.isna(last[ma_label]):
             return None
-        result[ma_label] = round(last[ma_label], 2)
+        sma_value = round(last[ma_label], 2)
+        result[ma_label] = sma_value
+        pct_diff = pct_close_to_ma(price, sma_value)
+        result[f"Diff{ma_label}"] = round(pct_diff, 2) if pct_diff is not None else None
 
     indexed_filter_set = list(enumerate(filter_set, start=1))
     ordered_filter_set = [

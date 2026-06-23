@@ -454,6 +454,15 @@ with tab2:
             if selected_fav != prev_selection:
                 st.session_state["_prev_favorite_selection"] = selected_fav
                 apply_filter_selection_to_state(selected_fav)
+                # Auto-fill the Favorite Filter Name for quick save/favorite update
+                st.session_state["_favorite_name_to_save"] = (
+                    selected_fav if selected_fav != "Current Filters" else ""
+                )
+            # Initialize on first load / ensure key exists
+            if "_favorite_name_to_save" not in st.session_state:
+                st.session_state["_favorite_name_to_save"] = (
+                    prev_selection if prev_selection != "Current Filters" else ""
+                )
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
     with col_run:
@@ -828,7 +837,11 @@ with tab2:
     st.markdown('<p class="section-header">💾 Save Current Filters</p>', unsafe_allow_html=True)
     col_save_name, col_save_btn = st.columns([3, 1])
     with col_save_name:
-        favorite_name = st.text_input("Favorite Filter Name", value="", placeholder="e.g. Golden Cross + PE < 30")
+        favorite_name = st.text_input(
+            "Favorite Filter Name",
+            key="_favorite_name_to_save",
+            placeholder="e.g. Golden Cross + PE < 30",
+        )
     with col_save_btn:
         st.write("")  # spacer
         save_fav = st.button("⭐ Add To Favorites", use_container_width=True)
@@ -971,7 +984,18 @@ with tab3:
         df = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)
         display_df = df.rename(columns={"MatchedFilters": "Filters Used"})
-        result_columns = ["Symbol", "PE Ratio", "Filters Used"]
+
+        # Base columns that always appear (if present)
+        result_columns = ["Symbol", "PE Ratio"]
+
+        # Insert DiffSMA* columns (absolute % diff from price to each MA) right after PE Ratio
+        diff_ma_cols = sorted(
+            [col for col in display_df.columns if col.startswith("DiffSMA")],
+            key=lambda c: int(c.replace("DiffSMA", "")),
+        )
+        result_columns.extend(diff_ma_cols)
+
+        result_columns.append("Filters Used")
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 
         if "ChartPath" in df.columns:

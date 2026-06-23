@@ -7,18 +7,18 @@
   "support_threshold": 5.0,
   "cross_lookback_days": 20,
   "cross_threshold": 5.0,
-  "gmail_id": "innocence60@gmail.com",
+  "gmail_id": "",
   "recipient_email": "innocence60@gmail.com",
   "email_subject": "NSE Stock Screener Results",
   "email_body": "Attached are the latest filtered stock screener results.",
   "create_charts": true,
-  "selected_favorite_filter_set": "50-200 Support",
+  "selected_favorite_filter_set": "200 Support",
   "screener_filter_set": [
     {
       "id": 1,
       "type": "ma_rising",
       "params": {
-        "ma": 50
+        "ma": 200
       }
     },
     {
@@ -26,7 +26,24 @@
       "type": "price_near_long",
       "params": {
         "long_ma": 200,
-        "threshold_pct": 15.0
+        "threshold_pct": 10.0
+      }
+    },
+    {
+      "id": 3,
+      "type": "short_above_long",
+      "params": {
+        "short_ma": 50,
+        "long_ma": 200
+      }
+    },
+    {
+      "id": 8,
+      "type": "long_ma_up_from_min",
+      "params": {
+        "long_ma": 200,
+        "up_pct": 15.0,
+        "lookback_units": 120
       }
     },
     {
@@ -35,14 +52,6 @@
       "params": {
         "short_ma": 200,
         "long_ma": 935
-      }
-    },
-    {
-      "id": 10,
-      "type": "price_near_long",
-      "params": {
-        "long_ma": 50,
-        "threshold_pct": 15.0
       }
     }
   ],
