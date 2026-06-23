@@ -200,6 +200,9 @@ def apply_filter_selection_to_state(filter_name):
     reversal_pct = float(pattern_settings.get("reversal_pct", settings.get("pattern_reversal_pct", 5.0)))
 
     clear_filter_widget_state()
+    # Bump widget key version so Streamlit frontend creates fresh widgets
+    # with the loaded values instead of reusing cached values from old keys.
+    st.session_state["_widget_key_version"] = st.session_state.get("_widget_key_version", 1) + 1
     st.session_state["current_filter_set"] = deepcopy(loaded_ma_filter_set)
     st.session_state["next_filter_id"] = (
         max((int(item.get("id", 0)) for item in loaded_ma_filter_set), default=0) + 1
@@ -221,10 +224,6 @@ def apply_filter_selection_to_state(filter_name):
         "pattern_reversal_pct": reversal_pct,
         "pattern_expressions": loaded_expressions,
     })
-
-
-def sync_selected_favorite_filter():
-    apply_filter_selection_to_state(st.session_state["selected_favorite_filter_set"])
 
 
 def _get_last_date_from_json_dir(json_dir, top_n=10):
@@ -405,7 +404,6 @@ with tab2:
             max((int(item.get("id", 0)) for item in st.session_state["current_filter_set"]), default=0) + 1
         )
 
-    current_filter_set = st.session_state["current_filter_set"]
     filter_widget_prefix = "ma_filter"
 
     # ===== TOP SECTION: Favorite Filter Selection + Run Screener =====
@@ -438,18 +436,24 @@ with tab2:
         favorite_names = sorted(favorite_filter_sets.keys())
         if favorite_names:
             favorite_options = ["Current Filters"] + favorite_names
-            saved_selected_favorite = settings.get("selected_favorite_filter_set", "Current Filters")
-            favorite_index = favorite_options.index(saved_selected_favorite) if saved_selected_favorite in favorite_options else 0
-            if st.session_state.get("selected_favorite_filter_set") not in favorite_options:
-                st.session_state["selected_favorite_filter_set"] = favorite_options[favorite_index]
-            st.selectbox(
+            if "_prev_favorite_selection" not in st.session_state:
+                st.session_state["_prev_favorite_selection"] = settings.get(
+                    "selected_favorite_filter_set", "Current Filters"
+                )
+            prev_selection = st.session_state["_prev_favorite_selection"]
+            try:
+                default_index = favorite_options.index(prev_selection)
+            except ValueError:
+                default_index = 0
+            selected_fav = st.selectbox(
                 "⭐ Filter Set To Run",
                 favorite_options,
-                index=favorite_index,
-                key="selected_favorite_filter_set",
-                on_change=sync_selected_favorite_filter,
+                index=default_index,
                 help="Select a saved favorite filter set to load its MA & pattern filters.",
             )
+            if selected_fav != prev_selection:
+                st.session_state["_prev_favorite_selection"] = selected_fav
+                apply_filter_selection_to_state(selected_fav)
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
     with col_run:
@@ -458,6 +462,9 @@ with tab2:
 
     # Placeholder for progress bar — will be filled when screener runs
     screener_progress_placeholder = st.empty()
+
+    # Read current_filter_set from session state now (after selectbox may have updated it)
+    current_filter_set = st.session_state["current_filter_set"]
 
     st.divider()
 
@@ -484,6 +491,11 @@ with tab2:
         st.session_state["next_filter_id"] += 1
         st.rerun()
 
+    # Use a widget-key version so that when a favourite is loaded new widget
+    # instances are created and their value= parameters take effect instead of
+    # Streamlit reusing frontend-cached values from the previous filter set.
+    widget_key_version = st.session_state.get("_widget_key_version", 1)
+
     st.markdown('<p class="section-header">📋 Current Filter Set</p>', unsafe_allow_html=True)
 
     if not current_filter_set:
@@ -494,8 +506,13 @@ with tab2:
     for index, filter_item in enumerate(current_filter_set, start=1):
         filter_id = filter_item["id"]
         filter_type = filter_item["type"]
-        params = deepcopy(FILTER_TYPE_DEFAULTS[filter_type])
-        params.update(filter_item.get("params", {}))
+        # Start from the item's own saved params so that custom field values
+        # stored in favourite_filter_sets are preserved on load.
+        params = deepcopy(filter_item.get("params", {}))
+        # Back-fill any missing keys from the type defaults.
+        for k, v in FILTER_TYPE_DEFAULTS[filter_type].items():
+            if k not in params:
+                params[k] = deepcopy(v)
 
         filter_label = FILTER_TYPE_LABELS[filter_type]
 
@@ -504,7 +521,7 @@ with tab2:
         with st.expander(expander_label, expanded=True):
             remove_filter = st.button(
                 "❌ Remove Filter",
-                key=f"{filter_widget_prefix}_remove_filter_{filter_id}",
+                key=f"{filter_widget_prefix}_remove_filter_{filter_id}_v{widget_key_version}",
             )
             if remove_filter:
                 st.session_state["current_filter_set"] = [
@@ -518,7 +535,7 @@ with tab2:
                     min_value=2,
                     max_value=1000,
                     value=int(params.get("ma", 200)),
-                    key=f"{filter_widget_prefix}_{filter_id}_ma",
+                    key=f"{filter_widget_prefix}_{filter_id}_ma_v{widget_key_version}",
                 ))
 
             elif filter_type == "short_above_long":
@@ -529,7 +546,7 @@ with tab2:
                         min_value=2,
                         max_value=500,
                         value=int(params.get("short_ma", 50)),
-                        key=f"{filter_widget_prefix}_{filter_id}_short_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_short_ma_v{widget_key_version}",
                     ))
                 with col2:
                     params["long_ma"] = int(st.number_input(
@@ -537,7 +554,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"{filter_widget_prefix}_{filter_id}_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_long_ma_v{widget_key_version}",
                     ))
 
             elif filter_type == "price_near_long":
@@ -548,7 +565,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"{filter_widget_prefix}_{filter_id}_price_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_price_long_ma_v{widget_key_version}",
                     ))
                 with col2:
                     params["threshold_pct"] = float(st.number_input(
@@ -557,7 +574,7 @@ with tab2:
                         max_value=100.0,
                         value=float(params.get("threshold_pct", 5.0)),
                         step=0.1,
-                        key=f"{filter_widget_prefix}_{filter_id}_threshold_pct",
+                        key=f"{filter_widget_prefix}_{filter_id}_threshold_pct_v{widget_key_version}",
                     ))
 
             elif filter_type == "golden_cross":
@@ -568,7 +585,7 @@ with tab2:
                         min_value=2,
                         max_value=500,
                         value=int(params.get("short_ma", 50)),
-                        key=f"{filter_widget_prefix}_{filter_id}_golden_short_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_short_ma_v{widget_key_version}",
                     ))
                 with col2:
                     params["long_ma"] = int(st.number_input(
@@ -576,7 +593,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"{filter_widget_prefix}_{filter_id}_golden_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_long_ma_v{widget_key_version}",
                     ))
                 with col3:
                     params["lookback_units"] = int(st.number_input(
@@ -584,7 +601,7 @@ with tab2:
                         min_value=1,
                         max_value=1000,
                         value=int(params.get("lookback_units", 20)),
-                        key=f"{filter_widget_prefix}_{filter_id}_golden_lookback",
+                        key=f"{filter_widget_prefix}_{filter_id}_golden_lookback_v{widget_key_version}",
                     ))
 
             elif filter_type == "long_ma_down_from_max":
@@ -595,7 +612,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"{filter_widget_prefix}_{filter_id}_down_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_long_ma_v{widget_key_version}",
                     ))
                 with col2:
                     params["down_pct"] = float(st.number_input(
@@ -604,7 +621,7 @@ with tab2:
                         max_value=100.0,
                         value=float(params.get("down_pct", 5.0)),
                         step=0.1,
-                        key=f"{filter_widget_prefix}_{filter_id}_down_pct",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_pct_v{widget_key_version}",
                     ))
                 with col3:
                     params["lookback_units"] = int(st.number_input(
@@ -612,7 +629,7 @@ with tab2:
                         min_value=2,
                         max_value=2000,
                         value=int(params.get("lookback_units", 50)),
-                        key=f"{filter_widget_prefix}_{filter_id}_down_lookback",
+                        key=f"{filter_widget_prefix}_{filter_id}_down_lookback_v{widget_key_version}",
                     ))
 
             elif filter_type == "long_ma_up_from_min":
@@ -623,7 +640,7 @@ with tab2:
                         min_value=2,
                         max_value=1000,
                         value=int(params.get("long_ma", 200)),
-                        key=f"{filter_widget_prefix}_{filter_id}_up_long_ma",
+                        key=f"{filter_widget_prefix}_{filter_id}_up_long_ma_v{widget_key_version}",
                     ))
                 with col2:
                     params["up_pct"] = float(st.number_input(
@@ -632,7 +649,7 @@ with tab2:
                         max_value=100.0,
                         value=float(params.get("up_pct", 5.0)),
                         step=0.1,
-                        key=f"{filter_widget_prefix}_{filter_id}_up_pct",
+                        key=f"{filter_widget_prefix}_{filter_id}_up_pct_v{widget_key_version}",
                     ))
                 with col3:
                     params["lookback_units"] = int(st.number_input(
@@ -640,7 +657,7 @@ with tab2:
                         min_value=2,
                         max_value=2000,
                         value=int(params.get("lookback_units", 50)),
-                        key=f"{filter_widget_prefix}_{filter_id}_up_lookback",
+                        key=f"{filter_widget_prefix}_{filter_id}_up_lookback_v{widget_key_version}",
                     ))
 
             elif filter_type == "hitting_all_time_high":
@@ -649,7 +666,7 @@ with tab2:
                     min_value=2,
                     max_value=2000,
                     value=int(params.get("lookback_units", 50)),
-                    key=f"{filter_widget_prefix}_{filter_id}_ath_lookback",
+                    key=f"{filter_widget_prefix}_{filter_id}_ath_lookback_v{widget_key_version}",
                 ))
 
             elif filter_type == "pe_less_than":
@@ -659,7 +676,7 @@ with tab2:
                     max_value=500.0,
                     value=float(params.get("max_pe", 30.0)),
                     step=0.1,
-                    key=f"{filter_widget_prefix}_{filter_id}_max_pe",
+                    key=f"{filter_widget_prefix}_{filter_id}_max_pe_v{widget_key_version}",
                 ))
 
             elif filter_type == "green_candle_today":
@@ -669,7 +686,7 @@ with tab2:
                     max_value=100.0,
                     value=float(params.get("min_gain_pct", 1.0)),
                     step=0.1,
-                    key=f"{filter_widget_prefix}_{filter_id}_green_min_gain_pct",
+                    key=f"{filter_widget_prefix}_{filter_id}_green_min_gain_pct_v{widget_key_version}",
                 ))
 
         rendered_filter_set.append({
@@ -834,8 +851,34 @@ with tab2:
             }
             save_favourite_filter_sets(favorite_filter_sets)
             update_settings({"selected_favorite_filter_set": clean_name})
+            st.session_state["_prev_favorite_selection"] = clean_name
             st.success(f"⭐ Saved favorite filters: {clean_name}")
             st.rerun()
+
+    # ===== Remove Favorite Filters =====
+    if favorite_filter_sets:
+        st.divider()
+        st.markdown('<p class="section-header">🗑️ Remove Favorite</p>', unsafe_allow_html=True)
+        col_del_name, col_del_btn = st.columns([3, 1])
+        with col_del_name:
+            del_favorite_name = st.selectbox(
+                "Select favorite to remove",
+                sorted(favorite_filter_sets.keys()),
+                key="delete_favorite_select",
+            )
+        with col_del_btn:
+            st.write("")  # spacer
+            delete_fav = st.button("🗑️ Remove Favorite", use_container_width=True)
+
+        if delete_fav:
+            if del_favorite_name in favorite_filter_sets:
+                del favorite_filter_sets[del_favorite_name]
+                save_favourite_filter_sets(favorite_filter_sets)
+                if settings.get("selected_favorite_filter_set") == del_favorite_name:
+                    update_settings({"selected_favorite_filter_set": "Current Filters"})
+                st.session_state["_prev_favorite_selection"] = "Current Filters"
+                st.success(f"🗑️ Removed favorite: {del_favorite_name}")
+                st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:

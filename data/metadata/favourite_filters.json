@@ -1,48 +1,5 @@
 {
-  "50-200 Golden Cross": [
-    {
-      "id": 1,
-      "type": "ma_rising",
-      "params": {
-        "ma": 200
-      }
-    },
-    {
-      "id": 2,
-      "type": "price_near_long",
-      "params": {
-        "long_ma": 200,
-        "threshold_pct": 10.0
-      }
-    },
-    {
-      "id": 3,
-      "type": "short_above_long",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200
-      }
-    },
-    {
-      "id": 4,
-      "type": "golden_cross",
-      "params": {
-        "short_ma": 50,
-        "long_ma": 200,
-        "lookback_units": 80
-      }
-    },
-    {
-      "id": 5,
-      "type": "long_ma_down_from_max",
-      "params": {
-        "long_ma": 200,
-        "down_pct": 18.0,
-        "lookback_units": 350
-      }
-    }
-  ],
-  "50 support": {
+  "50-200 Golden Cross": {
     "ma_filter_set": [
       {
         "id": 1,
@@ -81,7 +38,7 @@
         "type": "long_ma_down_from_max",
         "params": {
           "long_ma": 200,
-          "down_pct": 18.0,
+          "down_pct": 15.0,
           "lookback_units": 350
         }
       }
@@ -106,7 +63,7 @@
         "type": "price_near_long",
         "params": {
           "long_ma": 200,
-          "threshold_pct": 15.0
+          "threshold_pct": 10.0
         }
       },
       {
@@ -131,7 +88,7 @@
         "type": "long_ma_down_from_max",
         "params": {
           "long_ma": 200,
-          "down_pct": 18.0,
+          "down_pct": 15.0,
           "lookback_units": 350
         }
       },
@@ -141,6 +98,144 @@
         "params": {
           "long_ma": 935,
           "threshold_pct": 40.0
+        }
+      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
+    }
+  },
+  "50 Support": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 50
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 50,
+          "threshold_pct": 5.0
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200
+        }
+      },
+      {
+        "id": 6,
+        "type": "long_ma_up_from_min",
+        "params": {
+          "long_ma": 200,
+          "up_pct": 10.0,
+          "lookback_units": 120
+        }
+      },
+      {
+        "id": 7,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 29,
+          "long_ma": 50
+        }
+      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
+    }
+  },
+  "200 Support": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 200
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 200,
+          "threshold_pct": 10.0
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200
+        }
+      },
+      {
+        "id": 8,
+        "type": "long_ma_up_from_min",
+        "params": {
+          "long_ma": 200,
+          "up_pct": 15.0,
+          "lookback_units": 120
+        }
+      },
+      {
+        "id": 9,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 200,
+          "long_ma": 935
+        }
+      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
+    }
+  },
+  "50-200 Support": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 50
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 200,
+          "threshold_pct": 15.0
+        }
+      },
+      {
+        "id": 9,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 200,
+          "long_ma": 935
+        }
+      },
+      {
+        "id": 10,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 50,
+          "threshold_pct": 15.0
         }
       }
     ],
