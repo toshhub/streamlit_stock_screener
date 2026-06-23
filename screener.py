@@ -17,8 +17,10 @@ FILTER_TYPE_LABELS = {
     "price_near_long": "Current Price Near And Above Long MA",
     "golden_cross": "Short MA Crossed Long MA - Golden Cross",
     "long_ma_down_from_max": "Long MA Down From Recent Max",
+    "long_ma_up_from_min": "Long MA Up From Recent Min",
     "green_candle_today": "Green Candle Today",
     "pe_less_than": "PE < N",
+    "hitting_all_time_high": "Hitting All Time High",
 }
 
 FILTER_TYPE_DEFAULTS = {
@@ -27,8 +29,10 @@ FILTER_TYPE_DEFAULTS = {
     "price_near_long": {"long_ma": 200, "threshold_pct": 5.0},
     "golden_cross": {"short_ma": 50, "long_ma": 200, "lookback_units": 20},
     "long_ma_down_from_max": {"long_ma": 200, "down_pct": 5.0, "lookback_units": 50},
+    "long_ma_up_from_min": {"long_ma": 200, "up_pct": 5.0, "lookback_units": 50},
     "green_candle_today": {"min_gain_pct": 1.0},
     "pe_less_than": {"max_pe": 30.0},
+    "hitting_all_time_high": {"lookback_units": 50},
 }
 
 DEFAULT_FILTER_SET = [
@@ -167,6 +171,35 @@ def long_ma_down_from_max(series, down_pct, lookback_units):
     down_from_max_pct = (max_value - current_value) / max_value * 100
     return down_from_max_pct >= down_pct, down_from_max_pct
 
+def long_ma_up_from_min(series, up_pct, lookback_units):
+    values = series.dropna().tail(lookback_units)
+    if len(values) < 2:
+        return False, None
+
+    current_value = values.iloc[-1]
+    min_value = values.min()
+    if min_value == 0:
+        return False, None
+
+    up_from_min_pct = (current_value - min_value) / min_value * 100
+    return up_from_min_pct >= up_pct, up_from_min_pct
+
+def hitting_all_time_high(df, lookback_units):
+    if len(df) < 2:
+        return False, None
+
+    closes = df["Close"].dropna().tail(lookback_units)
+    if len(closes) < 2:
+        return False, None
+
+    current_close = closes.iloc[-1]
+    max_close = closes.max()
+    if max_close == 0:
+        return False, None
+
+    distance_pct = (current_close - max_close) / max_close * 100
+    return current_close >= max_close, distance_pct
+
 def green_candle_today(df, min_gain_pct):
     if len(df) < 2 or "Open" not in df.columns:
         return False, None
@@ -195,7 +228,7 @@ def required_ma_periods(filter_set):
         elif name in {"short_above_long", "golden_cross"}:
             periods.add(int(config["short_ma"]))
             periods.add(int(config["long_ma"]))
-        elif name in {"price_near_long", "long_ma_down_from_max"}:
+        elif name in {"price_near_long", "long_ma_down_from_max", "long_ma_up_from_min"}:
             periods.add(int(config["long_ma"]))
 
     return sorted(periods)
@@ -363,6 +396,25 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
                 int(config["lookback_units"]),
             )
             result[f"{prefix}_DownFromMaxPct"] = round(down_from_max_pct, 2) if down_from_max_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+        elif filter_type == "long_ma_up_from_min":
+            long_label = f"SMA{int(config['long_ma'])}"
+            passed, up_from_min_pct = long_ma_up_from_min(
+                df[long_label],
+                float(config["up_pct"]),
+                int(config["lookback_units"]),
+            )
+            result[f"{prefix}_UpFromMinPct"] = round(up_from_min_pct, 2) if up_from_min_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+        elif filter_type == "hitting_all_time_high":
+            passed, distance_pct = hitting_all_time_high(df, int(config["lookback_units"]))
+            result[f"{prefix}_DistancePct"] = round(distance_pct, 2) if distance_pct is not None else None
             result[f"{prefix}_Passed"] = passed
             if not passed:
                 return None

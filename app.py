@@ -615,6 +615,43 @@ with tab2:
                         key=f"{filter_widget_prefix}_{filter_id}_down_lookback",
                     ))
 
+            elif filter_type == "long_ma_up_from_min":
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    params["long_ma"] = int(st.number_input(
+                        "Long MA",
+                        min_value=2,
+                        max_value=1000,
+                        value=int(params.get("long_ma", 200)),
+                        key=f"{filter_widget_prefix}_{filter_id}_up_long_ma",
+                    ))
+                with col2:
+                    params["up_pct"] = float(st.number_input(
+                        "Up Percent",
+                        min_value=0.1,
+                        max_value=100.0,
+                        value=float(params.get("up_pct", 5.0)),
+                        step=0.1,
+                        key=f"{filter_widget_prefix}_{filter_id}_up_pct",
+                    ))
+                with col3:
+                    params["lookback_units"] = int(st.number_input(
+                        "Last M Time Frame Units",
+                        min_value=2,
+                        max_value=2000,
+                        value=int(params.get("lookback_units", 50)),
+                        key=f"{filter_widget_prefix}_{filter_id}_up_lookback",
+                    ))
+
+            elif filter_type == "hitting_all_time_high":
+                params["lookback_units"] = int(st.number_input(
+                    "Last N Data Entries",
+                    min_value=2,
+                    max_value=2000,
+                    value=int(params.get("lookback_units", 50)),
+                    key=f"{filter_widget_prefix}_{filter_id}_ath_lookback",
+                ))
+
             elif filter_type == "pe_less_than":
                 params["max_pe"] = float(st.number_input(
                     "PE Less Than",
