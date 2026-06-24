@@ -12,21 +12,21 @@
   "email_subject": "NSE Stock Screener Results",
   "email_body": "Attached are the latest filtered stock screener results.",
   "create_charts": true,
-  "selected_favorite_filter_set": "200 Support",
+  "selected_favorite_filter_set": "50 Support",
   "screener_filter_set": [
     {
       "id": 1,
       "type": "ma_rising",
       "params": {
-        "ma": 200
+        "ma": 50
       }
     },
     {
       "id": 2,
       "type": "price_near_long",
       "params": {
-        "long_ma": 200,
-        "threshold_pct": 10.0
+        "long_ma": 50,
+        "threshold_pct": 5.0
       }
     },
     {
@@ -38,20 +38,20 @@
       }
     },
     {
-      "id": 8,
+      "id": 6,
       "type": "long_ma_up_from_min",
       "params": {
         "long_ma": 200,
-        "up_pct": 15.0,
+        "up_pct": 10.0,
         "lookback_units": 120
       }
     },
     {
-      "id": 9,
+      "id": 7,
       "type": "short_above_long",
       "params": {
-        "short_ma": 200,
-        "long_ma": 935
+        "short_ma": 29,
+        "long_ma": 50
       }
     }
   ],

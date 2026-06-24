@@ -337,6 +337,9 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         result[ma_label] = sma_value
         pct_diff = pct_close_to_ma(price, sma_value)
         result[f"Diff{ma_label}"] = round(pct_diff, 2) if pct_diff is not None else None
+        # Rate of Change of the MA from 2 bars back
+        _, roc_pct = long_ma_rising_from_two_bars_back(df[ma_label])
+        result[f"Roc{ma_label}"] = round(roc_pct, 2) if roc_pct is not None else None
 
     indexed_filter_set = list(enumerate(filter_set, start=1))
     ordered_filter_set = [

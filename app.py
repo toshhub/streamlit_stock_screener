@@ -421,9 +421,10 @@ with tab2:
             index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
         )
     with col_charts:
-        create_charts = st.checkbox(
+        create_charts = st.toggle(
             "📈 Create charts",
             value=bool(settings.get("create_charts", False)),
+            key="create_charts_toggle",
         )
     update_settings({
         "tf": tf,
@@ -436,33 +437,33 @@ with tab2:
         favorite_names = sorted(favorite_filter_sets.keys())
         if favorite_names:
             favorite_options = ["Current Filters"] + favorite_names
-            if "_prev_favorite_selection" not in st.session_state:
-                st.session_state["_prev_favorite_selection"] = settings.get(
+            # Initialize widget state on first load
+            if "_favorite_select_widget" not in st.session_state:
+                st.session_state["_favorite_select_widget"] = settings.get(
                     "selected_favorite_filter_set", "Current Filters"
                 )
-            prev_selection = st.session_state["_prev_favorite_selection"]
-            try:
-                default_index = favorite_options.index(prev_selection)
-            except ValueError:
-                default_index = 0
+
+            def on_favorite_filter_selected():
+                """Callback that fires immediately when the user picks a new favourite."""
+                selected = st.session_state["_favorite_select_widget"]
+                apply_filter_selection_to_state(selected)
+                if "_favorite_name_to_save" not in st.session_state:
+                    st.session_state["_favorite_name_to_save"] = ""
+
             selected_fav = st.selectbox(
                 "⭐ Filter Set To Run",
                 favorite_options,
-                index=default_index,
+                key="_favorite_select_widget",
+                on_change=on_favorite_filter_selected,
                 help="Select a saved favorite filter set to load its MA & pattern filters.",
             )
-            if selected_fav != prev_selection:
-                st.session_state["_prev_favorite_selection"] = selected_fav
-                apply_filter_selection_to_state(selected_fav)
-                # Auto-fill the Favorite Filter Name for quick save/favorite update
+            # Ensure the save-name field is pre-filled with the currently-selected favourite
+            if "_favorite_name_to_save" not in st.session_state:
                 st.session_state["_favorite_name_to_save"] = (
                     selected_fav if selected_fav != "Current Filters" else ""
                 )
-            # Initialize on first load / ensure key exists
-            if "_favorite_name_to_save" not in st.session_state:
-                st.session_state["_favorite_name_to_save"] = (
-                    prev_selection if prev_selection != "Current Filters" else ""
-                )
+            elif st.session_state.get("_favorite_name_to_save") == "" and selected_fav != "Current Filters":
+                st.session_state["_favorite_name_to_save"] = selected_fav
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
     with col_run:
@@ -864,7 +865,7 @@ with tab2:
             }
             save_favourite_filter_sets(favorite_filter_sets)
             update_settings({"selected_favorite_filter_set": clean_name})
-            st.session_state["_prev_favorite_selection"] = clean_name
+            st.session_state["_favorite_select_widget"] = clean_name
             st.success(f"⭐ Saved favorite filters: {clean_name}")
             st.rerun()
 
@@ -889,7 +890,7 @@ with tab2:
                 save_favourite_filter_sets(favorite_filter_sets)
                 if settings.get("selected_favorite_filter_set") == del_favorite_name:
                     update_settings({"selected_favorite_filter_set": "Current Filters"})
-                st.session_state["_prev_favorite_selection"] = "Current Filters"
+                st.session_state["_favorite_select_widget"] = "Current Filters"
                 st.success(f"🗑️ Removed favorite: {del_favorite_name}")
                 st.rerun()
 
@@ -994,6 +995,13 @@ with tab3:
             key=lambda c: int(c.replace("DiffSMA", "")),
         )
         result_columns.extend(diff_ma_cols)
+
+        # Insert RocSMA* columns (Rate of Change of MA from 2 bars back)
+        roc_ma_cols = sorted(
+            [col for col in display_df.columns if col.startswith("RocSMA")],
+            key=lambda c: int(c.replace("RocSMA", "")),
+        )
+        result_columns.extend(roc_ma_cols)
 
         result_columns.append("Filters Used")
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
