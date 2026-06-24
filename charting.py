@@ -283,8 +283,8 @@ def results_hover_table_html(df):
     </script>
     """
 
-    # Columns that support click-to-sort: all except Symbol and Filters Used (text columns)
-    _sort_exempt = {"Symbol", "Filters Used"}
+    # Columns that support click-to-sort: all except Symbol (text column)
+    _sort_exempt = {"Symbol"}
 
     header_cells = "".join(
         (

@@ -993,11 +993,18 @@ with tab3:
     rows = st.session_state.get("results", [])
 
     if rows:
-        st.info(f"📌 Showing last screener run results — {len(rows)} stock(s) matched")
+        # Determine heading: favorite filter name or "Custom Filter"
+        selected_filter_name = settings.get("selected_favorite_filter_set", "Current Filters")
+        if selected_filter_name and selected_filter_name != "Current Filters":
+            heading_label = selected_filter_name
+        else:
+            heading_label = "Custom Filter"
+
+        st.info(f"📌 Showing last screener run results — {len(rows)} stock(s) matched | **{heading_label}**")
 
         df = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)
-        display_df = df.rename(columns={"MatchedFilters": "Filters Used"})
+        display_df = df
 
         # Base columns that always appear (if present)
         result_columns = ["Symbol", "PE Ratio"]
@@ -1016,7 +1023,6 @@ with tab3:
         )
         result_columns.extend(roc_ma_cols)
 
-        result_columns.append("Filters Used")
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 
         if "ChartPath" in df.columns:
