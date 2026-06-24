@@ -182,26 +182,52 @@ def results_hover_table_html(df):
       (function() {
         var activeTooltip = null;
 
-        function positionTooltip(el, tip) {
+         function getViewportHeight() {
+           return (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+         }
+
+         function getViewportWidth() {
+           return (window.visualViewport && window.visualViewport.width) || window.innerWidth;
+         }
+
+         function positionTooltip(el, tip) {
           var rect = el.getBoundingClientRect();
-          var tipW = tip.offsetWidth || Math.min(720, window.innerWidth - 24);
-          var tipH = tip.offsetHeight || 400;
+          var vw = getViewportWidth();
+          var vh = getViewportHeight();
+          var tipW = tip.offsetWidth || Math.min(720, vw - 24);
+          // Use a more accurate height fallback: chart aspect ratio ~10:5.5 plus chrome
+          var measuredH = tip.offsetHeight;
+          var tipH = measuredH > 10 ? measuredH : Math.round(tipW * 0.62);
           var cushion = 8;
           // Try right side first, fallback to left, then center
           var left = rect.right + cushion;
-          if (left + tipW > window.innerWidth - cushion) {
+          if (left + tipW > vw - cushion) {
             left = rect.left - tipW - cushion;
           }
           if (left < cushion) {
-            left = Math.max(cushion, (window.innerWidth - tipW) / 2);
+            left = Math.max(cushion, (vw - tipW) / 2);
           }
-          var top = rect.top;
-          if (top + tipH > window.innerHeight - cushion) {
-            top = Math.max(cushion, window.innerHeight - tipH - cushion);
+          // Position vertically: prefer below the tapped element, flip above if clipped
+          var top = rect.bottom + cushion;
+          if (top + tipH > vh - cushion) {
+            // Not enough room below — show above the element
+            top = rect.top - tipH - cushion;
           }
-          if (top < cushion) top = cushion;
+          if (top < cushion) {
+            top = cushion;
+          }
           tip.style.left = left + 'px';
           tip.style.top = top + 'px';
+
+          // If we used a fallback height, re-measure after image loads and reposition
+          if (measuredH <= 10) {
+            var img = tip.querySelector('img');
+            if (img && !img.complete) {
+              img.addEventListener('load', function() {
+                positionTooltip(el, tip);
+              }, {once: true});
+            }
+          }
         }
 
         function showTooltip(el) {
