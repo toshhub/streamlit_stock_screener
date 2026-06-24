@@ -175,8 +175,40 @@ def results_hover_table_html(df):
       .stock-hover:hover .chart-tooltip,
       .stock-hover.tooltip-visible .chart-tooltip { display: block; }
       .chart-tooltip img { width: 100%; height: auto; max-height: calc(100vh - 60px); display: block; object-fit: contain; }
-      /* Mobile: keep table cells from wrapping excessively */
-      @media screen and (max-width: 600px) {
+
+      /* ---- Mobile portrait: fixed chart panel below table ---- */
+      .chart-panel-mobile { display: none; }
+      .stock-hover-mobile-active { background-color: #e0e7ff !important; border-radius: 4px; }
+
+      @media screen and (max-width: 600px) and (orientation: portrait) {
+        .hover-results-table { font-size: 11px; }
+        .hover-results-table th, .hover-results-table td { padding: 4px 5px; }
+        /* Hide floating tooltips on mobile portrait — use panel instead */
+        .chart-tooltip { display: none !important; }
+        /* Show the fixed chart panel */
+        .chart-panel-mobile {
+          display: block;
+          position: sticky;
+          bottom: 0;
+          z-index: 1000;
+          background: #fff;
+          border-top: 2px solid #cbd5e1;
+          padding: 8px;
+          max-height: 42vh;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.15);
+        }
+        .chart-panel-mobile img { width: 100%; height: auto; display: block; }
+        .chart-panel-mobile .panel-placeholder {
+          color: #9ca3af;
+          font-size: 13px;
+          text-align: center;
+          padding: 16px 0;
+        }
+      }
+      /* Mobile landscape / any orientation above 600px: keep floating tooltips */
+      @media screen and (max-width: 600px) and (orientation: landscape) {
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
       }
@@ -184,6 +216,11 @@ def results_hover_table_html(df):
     <script>
       (function() {
         var activeTooltip = null;
+        var activeMobileRow = null;
+
+        function isMobilePortrait() {
+          return window.innerWidth <= 600 && window.matchMedia('(orientation: portrait)').matches;
+        }
 
          function getViewportHeight() {
            return (window.visualViewport && window.visualViewport.height) || window.innerHeight;
@@ -199,7 +236,6 @@ def results_hover_table_html(df):
           var vh = getViewportHeight();
           var cushion = 8;
 
-          // Reset any forced height so the browser can auto-size first, then measure
           tip.style.maxHeight = '';
           tip.style.height = '';
 
@@ -208,15 +244,12 @@ def results_hover_table_html(df):
           var tipW = measuredW > 10 ? measuredW : Math.min(720, vw - 24);
           var tipH = measuredH > 10 ? measuredH : Math.round(tipW * 0.62);
 
-          // Clamp tooltip height to available viewport space (leave room for cushion on both sides)
           var maxAvailableH = vh - cushion * 2;
           if (tipH > maxAvailableH) {
             tip.style.maxHeight = maxAvailableH + 'px';
-            // Re-measure after clamping
             tipH = tip.offsetHeight > 10 ? tip.offsetHeight : maxAvailableH;
           }
 
-          // Try right side first, fallback to left, then center
           var left = rect.right + cushion;
           if (left + tipW > vw - cushion) {
             left = rect.left - tipW - cushion;
@@ -225,14 +258,11 @@ def results_hover_table_html(df):
             left = Math.max(cushion, (vw - tipW) / 2);
           }
 
-          // Position vertically within viewport bounds
           var top = rect.bottom + cushion;
           var bottomEdge = top + tipH;
           if (bottomEdge > vh - cushion) {
-            // Not enough room below — show above the element
             top = rect.top - tipH - cushion;
           }
-          // Final safety clamp — never let the tooltip overflow out of viewport
           if (top < cushion) {
             top = cushion;
           }
@@ -243,7 +273,6 @@ def results_hover_table_html(df):
           tip.style.left = left + 'px';
           tip.style.top = top + 'px';
 
-          // If we used a fallback height, re-measure after image loads and reposition
           if (measuredH <= 10) {
             var img = tip.querySelector('img');
             if (img && !img.complete) {
@@ -273,55 +302,98 @@ def results_hover_table_html(df):
           if (tip) tip.style.display = '';
         }
 
+        // ---- Mobile portrait: panel-based chart display ----
+        function showMobileChart(el) {
+          // Deselect previous
+          if (activeMobileRow && activeMobileRow !== el) {
+            activeMobileRow.classList.remove('stock-hover-mobile-active');
+          }
+          if (activeMobileRow === el) {
+            // Toggle off
+            el.classList.remove('stock-hover-mobile-active');
+            clearMobilePanel();
+            activeMobileRow = null;
+            return;
+          }
+          el.classList.add('stock-hover-mobile-active');
+          var src = el.getAttribute('data-chart-src');
+          var panel = document.getElementById('mobile-chart-panel');
+          if (panel && src) {
+            panel.innerHTML = '<img src="' + src + '" alt="Chart">';
+            // Scroll panel into view
+            panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+          }
+          activeMobileRow = el;
+        }
+
+        function clearMobilePanel() {
+          var panel = document.getElementById('mobile-chart-panel');
+          if (panel) {
+            panel.innerHTML = '<div class="panel-placeholder">📈 Tap a stock symbol to view its chart</div>';
+          }
+        }
+
         function bindEvents() {
+          var portrait = isMobilePortrait();
+
           document.querySelectorAll('.stock-hover').forEach(function(el) {
-            // Desktop hover
-            el.addEventListener('mouseenter', function(e) {
-              var tip = el.querySelector('.chart-tooltip');
-              if (!tip) return;
-              tip.style.display = 'block';
-              positionTooltip(el, tip);
-            });
-            el.addEventListener('mouseleave', function(e) {
-              if (!el.classList.contains('tooltip-visible')) {
+            if (portrait) {
+              // Mobile portrait: tap loads chart into fixed panel
+              el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                showMobileChart(el);
+              });
+            } else {
+              // Desktop / landscape: floating tooltip
+              el.addEventListener('mouseenter', function(e) {
                 var tip = el.querySelector('.chart-tooltip');
-                if (tip) tip.style.display = '';
+                if (!tip) return;
+                tip.style.display = 'block';
+                positionTooltip(el, tip);
+              });
+              el.addEventListener('mouseleave', function(e) {
+                if (!el.classList.contains('tooltip-visible')) {
+                  var tip = el.querySelector('.chart-tooltip');
+                  if (tip) tip.style.display = '';
+                }
+              });
+              el.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (el.classList.contains('tooltip-visible')) {
+                  hideTooltip(el);
+                } else {
+                  showTooltip(el);
+                }
+              });
+            }
+          });
+
+          if (!portrait) {
+            // Tap anywhere else to close floating tooltip
+            document.addEventListener('click', function() {
+              if (activeTooltip) {
+                hideTooltip(activeTooltip);
+                activeTooltip = null;
               }
             });
-            // Mobile tap
-            el.addEventListener('click', function(e) {
-              e.stopPropagation();
-              if (el.classList.contains('tooltip-visible')) {
-                hideTooltip(el);
-              } else {
-                showTooltip(el);
+            // Reposition tooltip on scroll/resize
+            window.addEventListener('scroll', function() {
+              if (activeTooltip) {
+                var tip = activeTooltip.querySelector('.chart-tooltip');
+                if (tip && tip.style.display === 'block') {
+                  positionTooltip(activeTooltip, tip);
+                }
+              }
+            }, {passive: true});
+            window.addEventListener('resize', function() {
+              if (activeTooltip) {
+                var tip = activeTooltip.querySelector('.chart-tooltip');
+                if (tip && tip.style.display === 'block') {
+                  positionTooltip(activeTooltip, tip);
+                }
               }
             });
-          });
-          // Tap anywhere else to close
-          document.addEventListener('click', function() {
-            if (activeTooltip) {
-              hideTooltip(activeTooltip);
-              activeTooltip = null;
-            }
-          });
-          // Reposition on scroll/resize
-          window.addEventListener('scroll', function() {
-            if (activeTooltip) {
-              var tip = activeTooltip.querySelector('.chart-tooltip');
-              if (tip && tip.style.display === 'block') {
-                positionTooltip(activeTooltip, tip);
-              }
-            }
-          }, {passive: true});
-          window.addEventListener('resize', function() {
-            if (activeTooltip) {
-              var tip = activeTooltip.querySelector('.chart-tooltip');
-              if (tip && tip.style.display === 'block') {
-                positionTooltip(activeTooltip, tip);
-              }
-            }
-          });
+          }
         }
 
         if (document.readyState === 'loading') {
@@ -360,7 +432,8 @@ def results_hover_table_html(df):
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
             if column == "Symbol" and chart_html:
-                escaped_value = f'<span class="stock-hover">{escaped_value}{chart_html}</span>'
+                data_uri = image_to_data_uri(chart_path)
+                escaped_value = f'<span class="stock-hover" data-chart-src="{html.escape(data_uri, quote=True)}">{escaped_value}{chart_html}</span>'
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
@@ -400,7 +473,7 @@ def results_hover_table_html(df):
     </script>
     """
 
-    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div><div class='chart-panel-mobile' id='mobile-chart-panel'><div class='panel-placeholder'>📈 Tap a stock symbol to view its chart</div></div>"
 
 
 def sortable_results_table(df, height=700):
