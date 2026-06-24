@@ -161,17 +161,20 @@ def results_hover_table_html(df):
         z-index: 9999;
         width: min(720px, calc(100vw - 24px));
         max-width: calc(100vw - 24px);
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
         padding: 10px;
         background: white;
         border: 1px solid #cbd5e1;
         box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
         border-radius: 8px;
         pointer-events: none;
+        -webkit-overflow-scrolling: touch;
       }
       /* Show tooltip on hover (desktop) and on tap via .tooltip-visible class (mobile) */
       .stock-hover:hover .chart-tooltip,
       .stock-hover.tooltip-visible .chart-tooltip { display: block; }
-      .chart-tooltip img { width: 100%; height: auto; display: block; }
+      .chart-tooltip img { width: 100%; height: auto; max-height: calc(100vh - 60px); display: block; object-fit: contain; }
       /* Mobile: keep table cells from wrapping excessively */
       @media screen and (max-width: 600px) {
         .hover-results-table { font-size: 12px; }
@@ -194,11 +197,25 @@ def results_hover_table_html(df):
           var rect = el.getBoundingClientRect();
           var vw = getViewportWidth();
           var vh = getViewportHeight();
-          var tipW = tip.offsetWidth || Math.min(720, vw - 24);
-          // Use a more accurate height fallback: chart aspect ratio ~10:5.5 plus chrome
-          var measuredH = tip.offsetHeight;
-          var tipH = measuredH > 10 ? measuredH : Math.round(tipW * 0.62);
           var cushion = 8;
+
+          // Reset any forced height so the browser can auto-size first, then measure
+          tip.style.maxHeight = '';
+          tip.style.height = '';
+
+          var measuredW = tip.offsetWidth;
+          var measuredH = tip.offsetHeight;
+          var tipW = measuredW > 10 ? measuredW : Math.min(720, vw - 24);
+          var tipH = measuredH > 10 ? measuredH : Math.round(tipW * 0.62);
+
+          // Clamp tooltip height to available viewport space (leave room for cushion on both sides)
+          var maxAvailableH = vh - cushion * 2;
+          if (tipH > maxAvailableH) {
+            tip.style.maxHeight = maxAvailableH + 'px';
+            // Re-measure after clamping
+            tipH = tip.offsetHeight > 10 ? tip.offsetHeight : maxAvailableH;
+          }
+
           // Try right side first, fallback to left, then center
           var left = rect.right + cushion;
           if (left + tipW > vw - cushion) {
@@ -207,15 +224,22 @@ def results_hover_table_html(df):
           if (left < cushion) {
             left = Math.max(cushion, (vw - tipW) / 2);
           }
-          // Position vertically: prefer below the tapped element, flip above if clipped
+
+          // Position vertically within viewport bounds
           var top = rect.bottom + cushion;
-          if (top + tipH > vh - cushion) {
+          var bottomEdge = top + tipH;
+          if (bottomEdge > vh - cushion) {
             // Not enough room below — show above the element
             top = rect.top - tipH - cushion;
           }
+          // Final safety clamp — never let the tooltip overflow out of viewport
           if (top < cushion) {
             top = cushion;
           }
+          if (top + tipH > vh - cushion) {
+            top = vh - tipH - cushion;
+          }
+
           tip.style.left = left + 'px';
           tip.style.top = top + 'px';
 
