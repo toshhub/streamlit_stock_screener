@@ -1,4 +1,3 @@
-
 import json
 import re
 import urllib.parse
@@ -32,7 +31,7 @@ FILTER_TYPE_DEFAULTS = {
     "long_ma_up_from_min": {"long_ma": 200, "up_pct": 5.0, "lookback_units": 50},
     "green_candle_today": {"min_gain_pct": 1.0},
     "pe_less_than": {"max_pe": 30.0},
-    "hitting_all_time_high": {"lookback_units": 50},
+    "hitting_all_time_high": {"ts_lookback": 200, "recent_n": 10},
 }
 
 DEFAULT_FILTER_SET = [
@@ -184,21 +183,31 @@ def long_ma_up_from_min(series, up_pct, lookback_units):
     up_from_min_pct = (current_value - min_value) / min_value * 100
     return up_from_min_pct >= up_pct, up_from_min_pct
 
-def hitting_all_time_high(df, lookback_units):
+def hitting_all_time_high(df, ts_lookback, recent_n):
+    """Return True only if the ATH (max close within ts_lookback data frames)
+    was hit within the most recent recent_n data frames.
+
+    ts_lookback: Number of previous data frames to search for the All-Time High.
+    recent_n: Check if ATH was hit in any of the last N data frames.
+    """
     if len(df) < 2:
         return False, None
 
-    closes = df["Close"].dropna().tail(lookback_units)
-    if len(closes) < 2:
+    ts_closes = df["Close"].dropna().tail(ts_lookback)
+    if len(ts_closes) < 2:
         return False, None
 
-    current_close = closes.iloc[-1]
-    max_close = closes.max()
+    max_close = ts_closes.max()
+    current_close = ts_closes.iloc[-1]
     if max_close == 0:
         return False, None
 
+    # Check if ATH was hit (close >= max_close) in the last recent_n bars
+    recent_closes = ts_closes.tail(recent_n)
+    ath_hit = (recent_closes >= max_close).any()
+
     distance_pct = (current_close - max_close) / max_close * 100
-    return current_close >= max_close, distance_pct
+    return ath_hit, distance_pct
 
 def green_candle_today(df, min_gain_pct):
     if len(df) < 2 or "Open" not in df.columns:
@@ -419,7 +428,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
                 return None
 
         elif filter_type == "hitting_all_time_high":
-            passed, distance_pct = hitting_all_time_high(df, int(config["lookback_units"]))
+            passed, distance_pct = hitting_all_time_high(df, int(config["ts_lookback"]), int(config["recent_n"]))
             result[f"{prefix}_DistancePct"] = round(distance_pct, 2) if distance_pct is not None else None
             result[f"{prefix}_Passed"] = passed
             if not passed:

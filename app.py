@@ -447,8 +447,9 @@ with tab2:
                 """Callback that fires immediately when the user picks a new favourite."""
                 selected = st.session_state["_favorite_select_widget"]
                 apply_filter_selection_to_state(selected)
-                if "_favorite_name_to_save" not in st.session_state:
-                    st.session_state["_favorite_name_to_save"] = ""
+                st.session_state["_favorite_name_to_save"] = (
+                    selected if selected != "Current Filters" else ""
+                )
 
             selected_fav = st.selectbox(
                 "⭐ Filter Set To Run",
@@ -671,13 +672,25 @@ with tab2:
                     ))
 
             elif filter_type == "hitting_all_time_high":
-                params["lookback_units"] = int(st.number_input(
-                    "Last N Data Entries",
-                    min_value=2,
-                    max_value=2000,
-                    value=int(params.get("lookback_units", 50)),
-                    key=f"{filter_widget_prefix}_{filter_id}_ath_lookback_v{widget_key_version}",
-                ))
+                col1, col2 = st.columns(2)
+                with col1:
+                    params["ts_lookback"] = int(st.number_input(
+                        "TimeSpan Lookback",
+                        min_value=2,
+                        max_value=5000,
+                        value=int(params.get("ts_lookback", 200)),
+                        key=f"{filter_widget_prefix}_{filter_id}_ath_ts_lookback_v{widget_key_version}",
+                        help="Number of previous data frames to search for the All-Time High.",
+                    ))
+                with col2:
+                    params["recent_n"] = int(st.number_input(
+                        "ATH Hit In Last N Frames",
+                        min_value=1,
+                        max_value=500,
+                        value=int(params.get("recent_n", 10)),
+                        key=f"{filter_widget_prefix}_{filter_id}_ath_recent_n_v{widget_key_version}",
+                        help="Return True only if ATH was hit in any of the last N data frames.",
+                    ))
 
             elif filter_type == "pe_less_than":
                 params["max_pe"] = float(st.number_input(
@@ -865,7 +878,7 @@ with tab2:
             }
             save_favourite_filter_sets(favorite_filter_sets)
             update_settings({"selected_favorite_filter_set": clean_name})
-            st.session_state["_favorite_select_widget"] = clean_name
+            st.session_state.pop("_favorite_select_widget", None)
             st.success(f"⭐ Saved favorite filters: {clean_name}")
             st.rerun()
 
@@ -890,7 +903,7 @@ with tab2:
                 save_favourite_filter_sets(favorite_filter_sets)
                 if settings.get("selected_favorite_filter_set") == del_favorite_name:
                     update_settings({"selected_favorite_filter_set": "Current Filters"})
-                st.session_state["_favorite_select_widget"] = "Current Filters"
+                st.session_state.pop("_favorite_select_widget", None)
                 st.success(f"🗑️ Removed favorite: {del_favorite_name}")
                 st.rerun()
 

@@ -244,5 +244,37 @@
       "reversal_pct": 7.5,
       "expressions": []
     }
+  },
+  "All Time High": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 50
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 50,
+          "long_ma": 200
+        }
+      },
+      {
+        "id": 8,
+        "type": "hitting_all_time_high",
+        "params": {
+          "ts_lookback": 800,
+          "recent_n": 10
+        }
+      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
+    }
   }
 }
