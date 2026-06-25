@@ -413,12 +413,19 @@ with tab2:
     )
 
     # ---- Screening Timeframe ----
-    col_tf, col_charts = st.columns([1, 1])
+    col_tf, col_green, col_charts = st.columns([1, 1, 1])
     with col_tf:
         tf = st.selectbox(
             "📅 Screening Timeframe",
             ["DAY", "WEEK", "MONTH"],
             index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
+        )
+    with col_green:
+        green_candle_toggle = st.toggle(
+            "🟢 Green Candle Today",
+            value=bool(settings.get("green_candle_toggle", False)),
+            key="green_candle_toggle",
+            help="Only show stocks that closed higher than they opened, with a minimum gain from previous close.",
         )
     with col_charts:
         create_charts = st.toggle(
@@ -426,9 +433,22 @@ with tab2:
             value=bool(settings.get("create_charts", False)),
             key="create_charts_toggle",
         )
+    green_candle_min_gain_pct = float(settings.get("green_candle_min_gain_pct", 1.0))
+    if green_candle_toggle:
+        green_candle_min_gain_pct = float(st.number_input(
+            "Minimum Gain %",
+            min_value=0.0,
+            max_value=100.0,
+            value=green_candle_min_gain_pct,
+            step=0.1,
+            key="green_candle_min_gain_pct",
+            help="Minimum percentage gain from previous close required for the green candle filter.",
+        ))
     update_settings({
         "tf": tf,
         "create_charts": create_charts,
+        "green_candle_toggle": green_candle_toggle,
+        "green_candle_min_gain_pct": green_candle_min_gain_pct,
     })
 
     # ---- Favorite Filter Set + Run Button side by side ----
@@ -487,7 +507,7 @@ with tab2:
     with col1:
         filter_type_to_add = st.selectbox(
             "Filter Category",
-            list(FILTER_TYPE_LABELS.keys()),
+            [key for key in FILTER_TYPE_LABELS if key != "green_candle_today"],
             format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
     with col2:
@@ -909,11 +929,20 @@ with tab2:
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:
-        run_filter_set = filter_set
+        run_filter_set = list(filter_set)  # shallow copy so we can inject green_candle_today
         run_lookback_days = pattern_lookback_days
         run_reversal_pct = pattern_reversal_pct
         run_pattern_expressions = valid_pattern_expressions
         run_invalid_pattern_errors = invalid_pattern_errors
+
+        # Inject green_candle_today filter from toggle
+        if green_candle_toggle:
+            next_id = max((int(item.get("id", 0)) for item in run_filter_set), default=0) + 1
+            run_filter_set.append({
+                "id": next_id,
+                "type": "green_candle_today",
+                "params": {"min_gain_pct": green_candle_min_gain_pct},
+            })
 
         if run_invalid_pattern_errors:
             st.error("Fix invalid swing expressions before running the screener.")
@@ -921,7 +950,7 @@ with tab2:
 
         for filter_item in run_filter_set:
             params = filter_item["params"]
-            label = FILTER_TYPE_LABELS[filter_item["type"]]
+            label = FILTER_TYPE_LABELS.get(filter_item["type"], filter_item["type"])
             if filter_item["type"] in {"short_above_long", "golden_cross"} and params["short_ma"] >= params["long_ma"]:
                 st.error(f"Short MA must be less than Long MA in: {label}.")
                 st.stop()
