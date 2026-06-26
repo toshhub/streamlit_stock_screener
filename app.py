@@ -712,6 +712,38 @@ with tab2:
                         help="Return True only if ATH was hit in any of the last N data frames.",
                     ))
 
+            elif filter_type == "price_near_old_ath":
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    params["n_bars"] = int(st.number_input(
+                        "ATH Before N Time Frames",
+                        min_value=1,
+                        max_value=5000,
+                        value=int(params.get("n_bars", 200)),
+                        key=f"{filter_widget_prefix}_{filter_id}_old_ath_n_bars_v{widget_key_version}",
+                        help="Search for ATH value excluding the most recent N time frames.",
+                    ))
+                with col2:
+                    params["range_low"] = float(st.number_input(
+                        "Range Low % (r₁)",
+                        min_value=-100.0,
+                        max_value=100.0,
+                        value=float(params.get("range_low", -5.0)),
+                        step=0.1,
+                        key=f"{filter_widget_prefix}_{filter_id}_old_ath_range_low_v{widget_key_version}",
+                        help="Lower bound %. e.g. -4 means price can be 4% below old ATH.",
+                    ))
+                with col3:
+                    params["range_high"] = float(st.number_input(
+                        "Range High % (r₂)",
+                        min_value=-100.0,
+                        max_value=500.0,
+                        value=float(params.get("range_high", 10.0)),
+                        step=0.1,
+                        key=f"{filter_widget_prefix}_{filter_id}_old_ath_range_high_v{widget_key_version}",
+                        help="Upper bound %. e.g. +10 means price can be 10% above old ATH.",
+                    ))
+
             elif filter_type == "pe_less_than":
                 params["max_pe"] = float(st.number_input(
                     "PE Less Than",

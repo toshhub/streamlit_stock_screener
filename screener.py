@@ -20,6 +20,7 @@ FILTER_TYPE_LABELS = {
     "green_candle_today": "Green Candle Today",
     "pe_less_than": "PE < N",
     "hitting_all_time_high": "Hitting All Time High",
+    "price_near_old_ath": "Price Near Very Old ATH",
 }
 
 FILTER_TYPE_DEFAULTS = {
@@ -32,6 +33,7 @@ FILTER_TYPE_DEFAULTS = {
     "green_candle_today": {"min_gain_pct": 1.0},
     "pe_less_than": {"max_pe": 30.0},
     "hitting_all_time_high": {"ts_lookback": 200, "recent_n": 10},
+    "price_near_old_ath": {"n_bars": 200, "range_low": -5.0, "range_high": 10.0},
 }
 
 DEFAULT_FILTER_SET = [
@@ -208,6 +210,34 @@ def hitting_all_time_high(df, ts_lookback, recent_n):
 
     distance_pct = (current_close - max_close) / max_close * 100
     return ath_hit, distance_pct
+
+def price_near_old_ath(df, n_bars, range_low, range_high):
+    """Return True if current Close is within [range_low, range_high] % of
+    the All-Time High found BEFORE the most recent n_bars (i.e. the ATH is
+    searched in data excluding the last n_bars).
+
+    n_bars: Number of recent bars to exclude when searching for the old ATH.
+    range_low: Lower bound % (e.g. -4 means price can be 4% below old ATH).
+    range_high: Upper bound % (e.g. +10 means price can be 10% above old ATH).
+    """
+    closes = df["Close"].dropna()
+    if len(closes) <= n_bars:
+        return False, None
+
+    # Exclude the last n_bars and find the ATH in the older data
+    old_closes = closes.iloc[:-n_bars]
+    if len(old_closes) == 0:
+        return False, None
+
+    old_ath = old_closes.max()
+    current_close = closes.iloc[-1]
+    if old_ath == 0:
+        return False, None
+
+    distance_pct = (current_close - old_ath) / old_ath * 100
+    passed = float(range_low) <= distance_pct <= float(range_high)
+    return passed, round(distance_pct, 2)
+
 
 def green_candle_today(df, min_gain_pct):
     if len(df) < 2 or "Open" not in df.columns:
@@ -429,6 +459,18 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
 
         elif filter_type == "hitting_all_time_high":
             passed, distance_pct = hitting_all_time_high(df, int(config["ts_lookback"]), int(config["recent_n"]))
+            result[f"{prefix}_DistancePct"] = round(distance_pct, 2) if distance_pct is not None else None
+            result[f"{prefix}_Passed"] = passed
+            if not passed:
+                return None
+
+        elif filter_type == "price_near_old_ath":
+            passed, distance_pct = price_near_old_ath(
+                df,
+                int(config["n_bars"]),
+                float(config["range_low"]),
+                float(config["range_high"]),
+            )
             result[f"{prefix}_DistancePct"] = round(distance_pct, 2) if distance_pct is not None else None
             result[f"{prefix}_Passed"] = passed
             if not passed:

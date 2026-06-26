@@ -157,57 +157,39 @@ def results_hover_table_html(df):
       .stock-hover { color: #2563eb; font-weight: 600; cursor: pointer; }
       .stock-hover .chart-tooltip {
         display: none;
-        position: fixed;
-        z-index: 9999;
-        width: min(720px, calc(100vw - 24px));
-        max-width: calc(100vw - 24px);
-        max-height: calc(100vh - 32px);
-        overflow-y: auto;
-        padding: 10px;
-        background: white;
-        border: 1px solid #cbd5e1;
-        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
-        border-radius: 8px;
-        pointer-events: none;
-        -webkit-overflow-scrolling: touch;
       }
-      /* Show tooltip on hover (desktop) and on tap via .tooltip-visible class (mobile) */
-      .stock-hover:hover .chart-tooltip,
-      .stock-hover.tooltip-visible .chart-tooltip { display: block; }
-      .chart-tooltip img { width: 100%; height: auto; max-height: calc(100vh - 60px); display: block; object-fit: contain; }
+      .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
 
-      /* ---- Mobile portrait: fixed chart panel below table ---- */
-      .chart-panel-mobile { display: none; }
-      .stock-hover-mobile-active { background-color: #e0e7ff !important; border-radius: 4px; }
-
+      .stock-hover-active { background-color: #e0e7ff !important; border-radius: 4px; }
+      /* ---- Fixed chart panel below table (all screen sizes) ---- */
+      .chart-panel {
+        display: block;
+        position: sticky;
+        bottom: 0;
+        z-index: 1000;
+        background: #fff;
+        border-top: 2px solid #cbd5e1;
+        padding: 8px;
+        max-height: 55vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.15);
+      }
+      .chart-panel img { width: 100%; height: auto; display: block; max-height: 50vh; object-fit: contain; }
+      .chart-panel .panel-placeholder {
+        color: #9ca3af;
+        font-size: 13px;
+        text-align: center;
+        padding: 16px 0;
+      }
+      /* ---- Mobile portrait: smaller fonts ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
         .hover-results-table { font-size: 11px; }
         .hover-results-table th, .hover-results-table td { padding: 4px 5px; }
-        /* Hide floating tooltips on mobile portrait — use panel instead */
-        .chart-tooltip { display: none !important; }
-        /* Show the fixed chart panel */
-        .chart-panel-mobile {
-          display: block;
-          position: sticky;
-          bottom: 0;
-          z-index: 1000;
-          background: #fff;
-          border-top: 2px solid #cbd5e1;
-          padding: 8px;
-          max-height: 42vh;
-          overflow-y: auto;
-          -webkit-overflow-scrolling: touch;
-          box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.15);
-        }
-        .chart-panel-mobile img { width: 100%; height: auto; display: block; }
-        .chart-panel-mobile .panel-placeholder {
-          color: #9ca3af;
-          font-size: 13px;
-          text-align: center;
-          padding: 16px 0;
-        }
+        .chart-panel { max-height: 42vh; }
+        .chart-panel img { max-height: 38vh; }
       }
-      /* Mobile landscape / any orientation above 600px: keep floating tooltips */
+      /* Mobile landscape */
       @media screen and (max-width: 600px) and (orientation: landscape) {
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
@@ -215,185 +197,54 @@ def results_hover_table_html(df):
     </style>
     <script>
       (function() {
-        var activeTooltip = null;
-        var activeMobileRow = null;
+        var activeRow = null;
 
-        function isMobilePortrait() {
-          return window.innerWidth <= 600 && window.matchMedia('(orientation: portrait)').matches;
-        }
-
-         function getViewportHeight() {
-           return (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-         }
-
-         function getViewportWidth() {
-           return (window.visualViewport && window.visualViewport.width) || window.innerWidth;
-         }
-
-         function positionTooltip(el, tip) {
-          var rect = el.getBoundingClientRect();
-          var vw = getViewportWidth();
-          var vh = getViewportHeight();
-          var cushion = 8;
-
-          tip.style.maxHeight = '';
-          tip.style.height = '';
-
-          var measuredW = tip.offsetWidth;
-          var measuredH = tip.offsetHeight;
-          var tipW = measuredW > 10 ? measuredW : Math.min(720, vw - 24);
-          var tipH = measuredH > 10 ? measuredH : Math.round(tipW * 0.62);
-
-          var maxAvailableH = vh - cushion * 2;
-          if (tipH > maxAvailableH) {
-            tip.style.maxHeight = maxAvailableH + 'px';
-            tipH = tip.offsetHeight > 10 ? tip.offsetHeight : maxAvailableH;
+        // ---- Panel-based chart display (all screen sizes) ----
+        function showChart(el) {
+          if (activeRow && activeRow !== el) {
+            activeRow.classList.remove('stock-hover-active');
           }
-
-          var left = rect.right + cushion;
-          if (left + tipW > vw - cushion) {
-            left = rect.left - tipW - cushion;
-          }
-          if (left < cushion) {
-            left = Math.max(cushion, (vw - tipW) / 2);
-          }
-
-          var top = rect.bottom + cushion;
-          var bottomEdge = top + tipH;
-          if (bottomEdge > vh - cushion) {
-            top = rect.top - tipH - cushion;
-          }
-          if (top < cushion) {
-            top = cushion;
-          }
-          if (top + tipH > vh - cushion) {
-            top = vh - tipH - cushion;
-          }
-
-          tip.style.left = left + 'px';
-          tip.style.top = top + 'px';
-
-          if (measuredH <= 10) {
-            var img = tip.querySelector('img');
-            if (img && !img.complete) {
-              img.addEventListener('load', function() {
-                positionTooltip(el, tip);
-              }, {once: true});
-            }
-          }
-        }
-
-        function showTooltip(el) {
-          if (activeTooltip && activeTooltip !== el) {
-            hideTooltip(activeTooltip);
-          }
-          el.classList.add('tooltip-visible');
-          var tip = el.querySelector('.chart-tooltip');
-          if (tip) {
-            tip.style.display = 'block';
-            positionTooltip(el, tip);
-          }
-          activeTooltip = el;
-        }
-
-        function hideTooltip(el) {
-          el.classList.remove('tooltip-visible');
-          var tip = el.querySelector('.chart-tooltip');
-          if (tip) tip.style.display = '';
-        }
-
-        // ---- Mobile portrait: panel-based chart display ----
-        function showMobileChart(el) {
-          // Deselect previous
-          if (activeMobileRow && activeMobileRow !== el) {
-            activeMobileRow.classList.remove('stock-hover-mobile-active');
-          }
-          if (activeMobileRow === el) {
+          if (activeRow === el) {
             // Toggle off
-            el.classList.remove('stock-hover-mobile-active');
-            clearMobilePanel();
-            activeMobileRow = null;
+            el.classList.remove('stock-hover-active');
+            clearPanel();
+            activeRow = null;
             return;
           }
-          el.classList.add('stock-hover-mobile-active');
+          el.classList.add('stock-hover-active');
           var src = el.getAttribute('data-chart-src');
-          var panel = document.getElementById('mobile-chart-panel');
+          var panel = document.getElementById('chart-panel');
           if (panel && src) {
             panel.innerHTML = '<img src="' + src + '" alt="Chart">';
-            // Scroll panel into view
             panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
           }
-          activeMobileRow = el;
+          activeRow = el;
         }
 
-        function clearMobilePanel() {
-          var panel = document.getElementById('mobile-chart-panel');
+        function clearPanel() {
+          var panel = document.getElementById('chart-panel');
           if (panel) {
             panel.innerHTML = '<div class="panel-placeholder">📈 Tap a stock symbol to view its chart</div>';
           }
         }
 
         function bindEvents() {
-          var portrait = isMobilePortrait();
-
           document.querySelectorAll('.stock-hover').forEach(function(el) {
-            if (portrait) {
-              // Mobile portrait: tap loads chart into fixed panel
-              el.addEventListener('click', function(e) {
-                e.stopPropagation();
-                showMobileChart(el);
-              });
-            } else {
-              // Desktop / landscape: floating tooltip
-              el.addEventListener('mouseenter', function(e) {
-                var tip = el.querySelector('.chart-tooltip');
-                if (!tip) return;
-                tip.style.display = 'block';
-                positionTooltip(el, tip);
-              });
-              el.addEventListener('mouseleave', function(e) {
-                if (!el.classList.contains('tooltip-visible')) {
-                  var tip = el.querySelector('.chart-tooltip');
-                  if (tip) tip.style.display = '';
-                }
-              });
-              el.addEventListener('click', function(e) {
-                e.stopPropagation();
-                if (el.classList.contains('tooltip-visible')) {
-                  hideTooltip(el);
-                } else {
-                  showTooltip(el);
-                }
-              });
-            }
+            // Click loads chart into fixed panel
+            el.addEventListener('click', function(e) {
+              e.stopPropagation();
+              showChart(el);
+            });
           });
 
-          if (!portrait) {
-            // Tap anywhere else to close floating tooltip
-            document.addEventListener('click', function() {
-              if (activeTooltip) {
-                hideTooltip(activeTooltip);
-                activeTooltip = null;
-              }
-            });
-            // Reposition tooltip on scroll/resize
-            window.addEventListener('scroll', function() {
-              if (activeTooltip) {
-                var tip = activeTooltip.querySelector('.chart-tooltip');
-                if (tip && tip.style.display === 'block') {
-                  positionTooltip(activeTooltip, tip);
-                }
-              }
-            }, {passive: true});
-            window.addEventListener('resize', function() {
-              if (activeTooltip) {
-                var tip = activeTooltip.querySelector('.chart-tooltip');
-                if (tip && tip.style.display === 'block') {
-                  positionTooltip(activeTooltip, tip);
-                }
-              }
-            });
-          }
+          // Click anywhere else deselects
+          document.addEventListener('click', function() {
+            if (activeRow) {
+              activeRow.classList.remove('stock-hover-active');
+              clearPanel();
+              activeRow = null;
+            }
+          });
         }
 
         if (document.readyState === 'loading') {
@@ -473,7 +324,7 @@ def results_hover_table_html(df):
     </script>
     """
 
-    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div><div class='chart-panel-mobile' id='mobile-chart-panel'><div class='panel-placeholder'>📈 Tap a stock symbol to view its chart</div></div>"
+    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div><div class='chart-panel' id='chart-panel'><div class='panel-placeholder'>📈 Tap a stock symbol to view its chart</div></div>"
 
 
 def sortable_results_table(df, height=700):
