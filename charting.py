@@ -155,12 +155,10 @@ def results_hover_table_html(df):
       .hover-results-table th { background: #f8fafc; font-weight: 600; user-select: none; }
       .hover-results-table th.sortable { cursor: pointer; color: #2563eb; }
       .stock-hover { color: #2563eb; font-weight: 600; cursor: pointer; }
-      .stock-hover .chart-tooltip {
-        display: none;
-      }
+      .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
-
       .stock-hover-active { background-color: #e0e7ff !important; border-radius: 4px; }
+
       /* ---- Fixed chart panel below table (all screen sizes) ---- */
       .chart-panel {
         display: block;
@@ -182,12 +180,74 @@ def results_hover_table_html(df):
         text-align: center;
         padding: 16px 0;
       }
-      /* ---- Mobile portrait: smaller fonts ---- */
+      .chart-frame { position: relative; width: 100%; min-height: 160px; }
+      .chart-title-row {
+        align-items: center;
+        color: #334155;
+        display: flex;
+        font-size: 13px;
+        font-weight: 700;
+        gap: 8px;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        padding: 0 46px;
+        text-align: center;
+      }
+      .chart-symbol-title {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .chart-counter {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .chart-nav-btn {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.78);
+        border: none;
+        border-radius: 999px;
+        color: #ffffff;
+        cursor: pointer;
+        display: flex;
+        font-size: 28px;
+        font-weight: 700;
+        height: 44px;
+        justify-content: center;
+        line-height: 1;
+        opacity: 0.92;
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 44px;
+        z-index: 3;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      .chart-nav-btn:hover,
+      .chart-nav-btn:focus { background: rgba(15, 23, 42, 0.95); outline: none; }
+      .chart-nav-btn:disabled { cursor: not-allowed; opacity: 0.28; }
+      .chart-nav-prev { left: 6px; }
+      .chart-nav-next { right: 6px; }
+      .chart-image-wrap { padding: 0 46px; }
+      .chart-help-text { color: #64748b; font-size: 12px; margin-top: 5px; text-align: center; }
+
+      /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
         .hover-results-table { font-size: 11px; }
         .hover-results-table th, .hover-results-table td { padding: 4px 5px; }
-        .chart-panel { max-height: 42vh; }
-        .chart-panel img { max-height: 38vh; }
+        .chart-panel { max-height: 42vh; padding: 6px; }
+        .chart-panel img { max-height: 34vh; }
+        .chart-title-row { font-size: 12px; padding: 0 38px; }
+        .chart-counter { font-size: 11px; }
+        .chart-nav-btn { height: 38px; width: 38px; font-size: 24px; }
+        .chart-nav-prev { left: 2px; }
+        .chart-nav-next { right: 2px; }
+        .chart-image-wrap { padding: 0 34px; }
+        .chart-help-text { font-size: 11px; }
       }
       /* Mobile landscape */
       @media screen and (max-width: 600px) and (orientation: landscape) {
@@ -198,27 +258,86 @@ def results_hover_table_html(df):
     <script>
       (function() {
         var activeRow = null;
+        var activeIndex = -1;
 
-        // ---- Panel-based chart display (all screen sizes) ----
-        function showChart(el) {
+        function getChartItems() {
+          return Array.from(document.querySelectorAll('.stock-hover'));
+        }
+
+        function escapeHtml(value) {
+          return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+
+        function setActiveRow(el) {
           if (activeRow && activeRow !== el) {
             activeRow.classList.remove('stock-hover-active');
           }
-          if (activeRow === el) {
-            // Toggle off
-            el.classList.remove('stock-hover-active');
-            clearPanel();
-            activeRow = null;
-            return;
-          }
-          el.classList.add('stock-hover-active');
-          var src = el.getAttribute('data-chart-src');
-          var panel = document.getElementById('chart-panel');
-          if (panel && src) {
-            panel.innerHTML = '<img src="' + src + '" alt="Chart">';
-            panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+          if (el) {
+            el.classList.add('stock-hover-active');
           }
           activeRow = el;
+          activeIndex = el ? getChartItems().indexOf(el) : -1;
+        }
+
+        function renderPanel(el) {
+          var src = el.getAttribute('data-chart-src');
+          var symbol = el.getAttribute('data-symbol') || el.textContent.trim() || 'Chart';
+          var panel = document.getElementById('chart-panel');
+          var items = getChartItems();
+          var index = items.indexOf(el);
+          if (!panel || !src || index < 0) return;
+
+          var prevDisabled = index <= 0 ? 'disabled' : '';
+          var nextDisabled = index >= items.length - 1 ? 'disabled' : '';
+          var escapedSymbol = escapeHtml(symbol);
+
+          panel.innerHTML = '' +
+            '<div class="chart-frame">' +
+              '<div class="chart-title-row">' +
+                '<span class="chart-symbol-title">' + escapedSymbol + '</span>' +
+                '<span class="chart-counter">' + (index + 1) + ' / ' + items.length + '</span>' +
+              '</div>' +
+              '<button type="button" class="chart-nav-btn chart-nav-prev" data-chart-nav="prev" aria-label="Previous chart" ' + prevDisabled + '>&lsaquo;</button>' +
+              '<button type="button" class="chart-nav-btn chart-nav-next" data-chart-nav="next" aria-label="Next chart" ' + nextDisabled + '>&rsaquo;</button>' +
+              '<div class="chart-image-wrap"><img src="' + src + '" alt="' + escapedSymbol + ' chart"></div>' +
+              '<div class="chart-help-text">Use arrows to move through charts. Tap another symbol anytime to jump.</div>' +
+            '</div>';
+
+          panel.querySelectorAll('[data-chart-nav]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              showChartByOffset(btn.getAttribute('data-chart-nav') === 'next' ? 1 : -1);
+            });
+          });
+
+          panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        }
+
+        // ---- Panel-based chart display (all screen sizes) ----
+        function showChart(el, forceOpen) {
+          if (activeRow === el && !forceOpen) {
+            el.classList.remove('stock-hover-active');
+            clearPanel();
+            setActiveRow(null);
+            return;
+          }
+          setActiveRow(el);
+          renderPanel(el);
+        }
+
+        function showChartByOffset(offset) {
+          var items = getChartItems();
+          if (!items.length) return;
+          var currentIndex = activeIndex >= 0 ? activeIndex : 0;
+          var nextIndex = Math.max(0, Math.min(items.length - 1, currentIndex + offset));
+          if (nextIndex === currentIndex && activeRow) return;
+          showChart(items[nextIndex], true);
         }
 
         function clearPanel() {
@@ -233,8 +352,30 @@ def results_hover_table_html(df):
             // Click loads chart into fixed panel
             el.addEventListener('click', function(e) {
               e.stopPropagation();
-              showChart(el);
+              showChart(el, false);
             });
+          });
+
+          var panel = document.getElementById('chart-panel');
+          if (panel) {
+            panel.addEventListener('click', function(e) {
+              e.stopPropagation();
+            });
+          }
+
+          document.addEventListener('keydown', function(e) {
+            if (!activeRow) return;
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              showChartByOffset(-1);
+            } else if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              showChartByOffset(1);
+            } else if (e.key === 'Escape') {
+              activeRow.classList.remove('stock-hover-active');
+              clearPanel();
+              setActiveRow(null);
+            }
           });
 
           // Click anywhere else deselects
@@ -242,7 +383,7 @@ def results_hover_table_html(df):
             if (activeRow) {
               activeRow.classList.remove('stock-hover-active');
               clearPanel();
-              activeRow = null;
+              setActiveRow(null);
             }
           });
         }
@@ -284,7 +425,13 @@ def results_hover_table_html(df):
             escaped_value = html.escape(value)
             if column == "Symbol" and chart_html:
                 data_uri = image_to_data_uri(chart_path)
-                escaped_value = f'<span class="stock-hover" data-chart-src="{html.escape(data_uri, quote=True)}">{escaped_value}{chart_html}</span>'
+                escaped_value = (
+                    f'<span class="stock-hover" '
+                    f'data-symbol="{html.escape(value, quote=True)}" '
+                    f'data-chart-src="{html.escape(data_uri, quote=True)}">'
+                    f'{escaped_value}{chart_html}'
+                    f'</span>'
+                )
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
@@ -295,7 +442,7 @@ def results_hover_table_html(df):
 
       function parseNumeric(value) {
         // Remove commas, percentage signs, and whitespace; treat empty as +Infinity (sorts to bottom)
-        const cleaned = value.replace(/[,%\\s]/g, "").trim();
+        const cleaned = value.replace(/[,%\s]/g, "").trim();
         if (cleaned === "" || cleaned === "-" || cleaned === "N/A") {
           return Number.POSITIVE_INFINITY;
         }
