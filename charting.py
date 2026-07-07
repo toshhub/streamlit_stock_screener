@@ -180,7 +180,13 @@ def results_hover_table_html(df):
         text-align: center;
         padding: 16px 0;
       }
-      .chart-frame { position: relative; width: 100%; min-height: 160px; }
+      .chart-frame {
+        position: relative;
+        width: 100%;
+        min-height: 160px;
+        touch-action: pan-y;
+        user-select: none;
+      }
       .chart-title-row {
         align-items: center;
         color: #334155;
@@ -259,6 +265,8 @@ def results_hover_table_html(df):
       (function() {
         var activeRow = null;
         var activeIndex = -1;
+        var touchStartX = 0;
+        var touchStartY = 0;
 
         function getChartItems() {
           return Array.from(document.querySelectorAll('.stock-hover'));
@@ -284,6 +292,33 @@ def results_hover_table_html(df):
           activeIndex = el ? getChartItems().indexOf(el) : -1;
         }
 
+        function bindSwipeNavigation(frame) {
+          if (!frame) return;
+
+          frame.addEventListener('touchstart', function(e) {
+            if (!e.changedTouches || !e.changedTouches.length) return;
+            touchStartX = e.changedTouches[0].clientX;
+            touchStartY = e.changedTouches[0].clientY;
+          }, { passive: true });
+
+          frame.addEventListener('touchend', function(e) {
+            if (!e.changedTouches || !e.changedTouches.length) return;
+            var touchEndX = e.changedTouches[0].clientX;
+            var touchEndY = e.changedTouches[0].clientY;
+            var deltaX = touchEndX - touchStartX;
+            var deltaY = touchEndY - touchStartY;
+            var minSwipeDistance = 45;
+
+            if (Math.abs(deltaX) < minSwipeDistance || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) {
+              return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            showChartByOffset(deltaX < 0 ? 1 : -1);
+          }, { passive: false });
+        }
+
         function renderPanel(el) {
           var src = el.getAttribute('data-chart-src');
           var symbol = el.getAttribute('data-symbol') || el.textContent.trim() || 'Chart';
@@ -305,7 +340,7 @@ def results_hover_table_html(df):
               '<button type="button" class="chart-nav-btn chart-nav-prev" data-chart-nav="prev" aria-label="Previous chart" ' + prevDisabled + '>&lsaquo;</button>' +
               '<button type="button" class="chart-nav-btn chart-nav-next" data-chart-nav="next" aria-label="Next chart" ' + nextDisabled + '>&rsaquo;</button>' +
               '<div class="chart-image-wrap"><img src="' + src + '" alt="' + escapedSymbol + ' chart"></div>' +
-              '<div class="chart-help-text">Use arrows to move through charts. Tap another symbol anytime to jump.</div>' +
+              '<div class="chart-help-text">Swipe chart or use arrows to move through results. Tap another symbol anytime to jump.</div>' +
             '</div>';
 
           panel.querySelectorAll('[data-chart-nav]').forEach(function(btn) {
@@ -316,6 +351,7 @@ def results_hover_table_html(df):
             });
           });
 
+          bindSwipeNavigation(panel.querySelector('.chart-frame'));
           panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
         }
 
