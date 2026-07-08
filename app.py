@@ -390,10 +390,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         function y(v) {{ return pad.top + ((maxY - v) / spanY) * plotH; }}
         function signed(value) {{ return (value > 0 ? "+" : "") + value.toFixed(2) + "%"; }}
         function pointDateLabel(row) {{
-          const start = row["Start Date"] || "";
-          const end = row["End Date"] || "";
-          if (start && end && start !== end) return start + " to " + end;
-          return start || end || "N/A";
+          return row["Date"] || "N/A";
         }}
 
         const points = gains.map((gain, index) => `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`).join(" ");

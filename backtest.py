@@ -45,38 +45,71 @@ def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings):
     return passed
 
 
-def _backtest_stock_file(path, favorite_configs, backtest_candles, gain_candles):
+def _build_backtest_calendar(stock_files, backtest_candles, gain_candles):
+    best_dates = []
+    best_last_date = None
+
+    for path in stock_files:
+        try:
+            df = load_price_dataframe(path)
+        except Exception:
+            continue
+        if df.empty or "Date" not in df.columns:
+            continue
+
+        dates = list(pd.to_datetime(df["Date"], errors="coerce").dropna())
+        if len(dates) <= backtest_candles:
+            continue
+
+        last_date = dates[-1]
+        if best_last_date is None or last_date > best_last_date or (
+            last_date == best_last_date and len(dates) > len(best_dates)
+        ):
+            best_dates = dates
+            best_last_date = last_date
+
+    reference_index = len(best_dates) - 1 - int(backtest_candles)
+    exit_index = reference_index + int(gain_candles)
+    if reference_index < 0 or exit_index >= len(best_dates):
+        return []
+
+    return best_dates[reference_index: exit_index + 1]
+
+
+def _backtest_stock_file(path, favorite_configs, calendar_dates):
     df = load_price_dataframe(path)
-    if df.empty or len(df) <= backtest_candles:
+    if df.empty or "Date" not in df.columns or not calendar_dates:
         return {name: [] for name in favorite_configs}
 
-    reference_position = len(df) - 1 - backtest_candles
-    exit_position = reference_position + gain_candles
-    if reference_position < 0 or exit_position >= len(df):
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    date_to_position = {
+        date.normalize(): position
+        for position, date in enumerate(df["Date"])
+        if pd.notna(date)
+    }
+    normalized_calendar = [pd.Timestamp(date).normalize() for date in calendar_dates]
+    if any(date not in date_to_position for date in normalized_calendar):
         return {name: [] for name in favorite_configs}
 
     events_by_filter = {name: [] for name in favorite_configs}
 
+    reference_position = date_to_position[normalized_calendar[0]]
     signal_close = float(df.iloc[reference_position]["Close"])
     if signal_close == 0:
         return events_by_filter
 
     gain_path = []
-    for offset in range(gain_candles + 1):
-        close_at_offset = float(df.iloc[reference_position + offset]["Close"])
+    for offset, calendar_date in enumerate(normalized_calendar):
+        position = date_to_position[calendar_date]
+        close_at_offset = float(df.iloc[position]["Close"])
         gain_pct = (close_at_offset - signal_close) / signal_close * 100
-        date_at_offset = (
-            df.iloc[reference_position + offset]["Date"]
-            if "Date" in df.columns
-            else reference_position + offset
-        )
         gain_path.append({
             "Candle": offset,
             "Average Gain %": round(gain_pct, 2),
-            "Date": date_at_offset,
+            "Date": calendar_date,
         })
 
-    signal_date = df.iloc[reference_position]["Date"] if "Date" in df.columns else reference_position
+    signal_date = normalized_calendar[0]
 
     for filter_name, config in favorite_configs.items():
         if _screen_backtest_signal(
@@ -110,6 +143,10 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
     if not stock_files or not favorite_configs:
         return [], {}
 
+    calendar_dates = _build_backtest_calendar(stock_files, backtest_candles, gain_candles)
+    if not calendar_dates:
+        return [], {}
+
     max_workers = min(8, max(1, len(stock_files)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
@@ -117,8 +154,7 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
                 _backtest_stock_file,
                 path,
                 favorite_configs,
-                int(backtest_candles),
-                int(gain_candles),
+                calendar_dates,
             )
             for path in stock_files
         ]
@@ -152,15 +188,13 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
                 .agg(**{
                     "Average Gain %": ("Gain %", "mean"),
                     "Stocks Found": ("Gain %", "count"),
-                    "Start Date": ("Date", "min"),
-                    "End Date": ("Date", "max"),
+                    "Date": ("Date", "first"),
                 })
                 .reset_index()
                 .sort_values("Candle")
             )
             gain_series["Average Gain %"] = gain_series["Average Gain %"].round(2)
-            gain_series["Start Date"] = gain_series["Start Date"].dt.strftime("%d-%m-%Y")
-            gain_series["End Date"] = gain_series["End Date"].dt.strftime("%d-%m-%Y")
+            gain_series["Date"] = gain_series["Date"].dt.strftime("%d-%m-%Y")
             final_gain_rows = gain_series[gain_series["Candle"] == int(gain_candles)]
             average_gain = (
                 round(float(final_gain_rows.iloc[0]["Average Gain %"]), 2)
