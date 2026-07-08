@@ -1,10 +1,13 @@
 import json
+import html
 from copy import deepcopy
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
+from backtest import run_backtest
 from config import *
 from charting import create_stock_chart, sortable_results_table
 from downloader import clear_downloaded_json_files, download_top_stocks, timeframe_config
@@ -285,7 +288,144 @@ def render_data_availability_status():
         st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
 
 
-tab1, tab2, tab3 = st.tabs(["📥 Data", "🔍 Screener", "📊 Results"])
+def render_backtest_results_table(summary_rows, series_by_filter, height=560):
+    payload = json.dumps(series_by_filter, default=str)
+    rows_html = []
+    for row in summary_rows:
+        filter_name = row["Filter Name"]
+        gain = row["Gain for next M days"]
+        gain_label = "No matches" if gain is None else f"{gain:.2f}%"
+        peak_gain = row.get("Peak Average Gain %")
+        peak_gain_label = "No matches" if peak_gain is None else f"{peak_gain:.2f}%"
+        rows_html.append(
+            "<tr>"
+            f"<td>{html.escape(filter_name)}</td>"
+            f"<td><button class='gain-link' data-filter='{html.escape(filter_name, quote=True)}'>{html.escape(gain_label)}</button></td>"
+            f"<td>{html.escape(peak_gain_label)}</td>"
+            f"<td>{int(row.get('Stocks Found', 0))}</td>"
+            f"<td>{int(row['Matches'])}</td>"
+            "</tr>"
+        )
+
+    component_html = f"""
+    <style>
+      .backtest-wrap {{ overflow-x: auto; font-family: sans-serif; }}
+      .backtest-table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+      .backtest-table th, .backtest-table td {{
+        border-bottom: 1px solid #e5e7eb;
+        padding: 9px 10px;
+        text-align: left;
+      }}
+      .backtest-table th {{ background: #f8fafc; font-weight: 700; }}
+      .gain-link {{
+        background: transparent;
+        border: 0;
+        color: #2563eb;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        padding: 0;
+        text-decoration: underline;
+      }}
+      .gain-link.active {{ color: #15803d; }}
+      #backtest-chart-panel {{
+        border-top: 1px solid #cbd5e1;
+        margin-top: 14px;
+        padding-top: 12px;
+      }}
+      .chart-title {{ color: #334155; font-weight: 700; margin-bottom: 8px; }}
+      .chart-empty {{ color: #64748b; padding: 18px 0; text-align: center; }}
+      .axis-label {{ fill: #64748b; font-size: 12px; }}
+      .point-label {{ fill: #0f172a; font-size: 11px; }}
+    </style>
+    <div class="backtest-wrap">
+      <table class="backtest-table">
+        <thead>
+          <tr>
+            <th>Filter Name</th>
+            <th>Gain for next M days</th>
+            <th>Peak Average Gain</th>
+            <th>Stocks Found</th>
+            <th>Matches</th>
+          </tr>
+        </thead>
+        <tbody>{''.join(rows_html)}</tbody>
+      </table>
+      <div id="backtest-chart-panel" class="chart-empty">Click a gain value to view its gain chart.</div>
+    </div>
+    <script>
+      const backtestSeries = {payload};
+
+      function formatDate(value) {{
+        if (!value || value === "NaT") return "";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return String(value);
+        return parsed.toLocaleDateString(undefined, {{ year: "numeric", month: "short", day: "numeric" }});
+      }}
+
+      function renderChart(filterName) {{
+        const panel = document.getElementById("backtest-chart-panel");
+        const rows = backtestSeries[filterName] || [];
+        if (!rows.length) {{
+          panel.className = "chart-empty";
+          panel.textContent = "No matching historical signals for " + filterName + ".";
+          return;
+        }}
+
+        const width = 900;
+        const height = 320;
+        const pad = {{ left: 58, right: 22, top: 30, bottom: 54 }};
+        const gains = rows.map(row => Number(row["Average Gain %"]));
+        const minY = Math.min(...gains, 0);
+        const maxY = Math.max(...gains, 0);
+        const spanY = Math.max(1, maxY - minY);
+        const xSpan = Math.max(1, rows.length - 1);
+        const plotW = width - pad.left - pad.right;
+        const plotH = height - pad.top - pad.bottom;
+
+        function x(i) {{ return pad.left + (i / xSpan) * plotW; }}
+        function y(v) {{ return pad.top + ((maxY - v) / spanY) * plotH; }}
+
+        const points = gains.map((gain, index) => `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`).join(" ");
+        const zeroY = y(0);
+        const firstDate = formatDate(rows[0]["Date"]);
+        const lastDate = formatDate(rows[rows.length - 1]["Date"]);
+        const lastGain = gains[gains.length - 1].toFixed(2) + "%";
+        const circles = gains.map((gain, index) => {{
+          const label = `${{formatDate(rows[index]["Date"])}}: ${{gain.toFixed(2)}}% (${{rows[index]["Matches"]}} matches)`;
+          return `<circle cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="3.5" fill="#2563eb"><title>${{label}}</title></circle>`;
+        }}).join("");
+
+        panel.className = "";
+        panel.innerHTML = `
+          <div class="chart-title">${{filterName}} - average gain by signal date</div>
+          <svg viewBox="0 0 ${{width}} ${{height}}" width="100%" height="320" role="img">
+            <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
+            <line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
+            <line x1="${{pad.left}}" y1="${{zeroY}}" x2="${{width - pad.right}}" y2="${{zeroY}}" stroke="#94a3b8" stroke-dasharray="4 4" />
+            <polyline points="${{points}}" fill="none" stroke="#2563eb" stroke-width="3" />
+            ${{circles}}
+            <text x="${{pad.left}}" y="20" class="axis-label">Max ${{maxY.toFixed(2)}}%</text>
+            <text x="${{pad.left}}" y="${{height - 18}}" class="axis-label">${{firstDate}}</text>
+            <text x="${{width - pad.right}}" y="${{height - 18}}" text-anchor="end" class="axis-label">${{lastDate}}</text>
+            <text x="${{width - pad.right}}" y="${{Math.max(16, y(gains[gains.length - 1]) - 8)}}" text-anchor="end" class="point-label">${{lastGain}}</text>
+          </svg>
+        `;
+      }}
+
+      document.querySelectorAll(".gain-link").forEach(button => {{
+        button.addEventListener("click", () => {{
+          document.querySelectorAll(".gain-link").forEach(item => item.classList.remove("active"));
+          button.classList.add("active");
+          renderChart(button.dataset.filter);
+        }});
+      }});
+    </script>
+    """
+    components.html(component_html, height=height, scrolling=True)
+
+
+tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "Backtest", "📊 Results"])
 
 
 # =====================================================================
@@ -1042,9 +1182,99 @@ with tab2:
 
 
 # =====================================================================
-# TAB 3: RESULTS
+# TAB 3: BACKTEST
 # =====================================================================
 with tab3:
+    st.header("Backtest")
+
+    favorite_names = sorted(favorite_filter_sets.keys())
+    if not favorite_names:
+        st.info("No saved favorite filters yet. Save filters from the Screener tab before running a backtest.")
+    else:
+        col_tf, col_n, col_m = st.columns(3)
+        with col_tf:
+            backtest_tf = st.selectbox(
+                "Backtest Timeframe",
+                ["DAY", "WEEK", "MONTH"],
+                index=["DAY", "WEEK", "MONTH"].index(settings.get("backtest_tf", settings.get("tf", "DAY"))),
+                key="backtest_tf_select",
+            )
+
+        with col_n:
+            backtest_candles = st.slider(
+                "Backtest for",
+                min_value=1,
+                max_value=500,
+                value=min(int(settings.get("backtest_candles", 30)), 500),
+                step=1,
+                help="N candles before today. The backtest starts at the -N candle.",
+            )
+
+        with col_m:
+            gain_candles = st.slider(
+                "Check Gain Till",
+                min_value=1,
+                max_value=int(backtest_candles),
+                value=min(int(settings.get("gain_candles", min(10, int(backtest_candles)))), int(backtest_candles)),
+                step=1,
+                help="M candles after each historical signal. M cannot be greater than N.",
+            )
+
+        saved_backtest_filters = [
+            name for name in settings.get("backtest_selected_filters", favorite_names[:1])
+            if name in favorite_names
+        ]
+        selected_backtest_filters = st.multiselect(
+            "Favorite filters",
+            favorite_names,
+            default=saved_backtest_filters or favorite_names[:1],
+            help="Select one or more saved favorite filter sets to compare.",
+        )
+
+        update_settings({
+            "backtest_tf": backtest_tf,
+            "backtest_candles": int(backtest_candles),
+            "gain_candles": int(gain_candles),
+            "backtest_selected_filters": selected_backtest_filters,
+        })
+
+        target_dir = timeframe_config(backtest_tf)["target_dir"]
+        stock_files = sorted(target_dir.glob("*.json"))
+        if not stock_files:
+            st.warning(f"No downloaded {backtest_tf.lower()} data found. Download stock data first from the Data tab.")
+
+        run_backtest_clicked = st.button("Backtest", type="primary", use_container_width=True)
+
+        if run_backtest_clicked:
+            if not selected_backtest_filters:
+                st.error("Select at least one favorite filter.")
+            elif not stock_files:
+                st.error("No stock data available for the selected timeframe.")
+            else:
+                with st.spinner("Running backtest across saved filters and historical candles..."):
+                    summary_rows, series_by_filter = run_backtest(
+                        stock_files,
+                        favorite_filter_sets,
+                        selected_backtest_filters,
+                        int(backtest_candles),
+                        int(gain_candles),
+                    )
+                st.session_state["backtest_summary_rows"] = summary_rows
+                st.session_state["backtest_series_by_filter"] = series_by_filter
+
+        summary_rows = st.session_state.get("backtest_summary_rows", [])
+        series_by_filter = st.session_state.get("backtest_series_by_filter", {})
+        if summary_rows:
+            st.info(
+                f"Showing average gain from each historical signal candle to its next {int(gain_candles)} candle(s)."
+            )
+            render_backtest_results_table(summary_rows, series_by_filter)
+
+
+# =====================================================================
+# TAB 4: RESULTS
+# =====================================================================
+with tab4:
     st.header("📊 Results")
 
     # Load persisted results if session state is empty

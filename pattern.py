@@ -189,6 +189,11 @@ def evaluate_expression(expression, context):
 def evaluate_pattern_filters(path, lookback_days, reversal_pct, expressions):
     expressions = [expression.strip() for expression in expressions if expression.strip()]
     df = load_price_data(path)
+    return evaluate_pattern_filters_from_df(df, lookback_days, reversal_pct, expressions)
+
+
+def evaluate_pattern_filters_from_df(df, lookback_days, reversal_pct, expressions):
+    expressions = [expression.strip() for expression in expressions if expression.strip()]
     swings = detect_swings_from_df(df, lookback_days, reversal_pct)
     context = build_swing_context(df, swings)
 

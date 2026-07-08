@@ -312,33 +312,43 @@ def normalize_filter_set(filter_set=None, use_default=True):
 
     return deepcopy(DEFAULT_FILTER_SET) if use_default else []
 
-def screen_json_file(path, filter_set=None, **legacy_kwargs):
-    if not path.exists():
-        return None
+def legacy_kwargs_to_filter_set(legacy_kwargs):
+    short_ma = int(legacy_kwargs.get("short_ma", 50))
+    long_ma = int(legacy_kwargs.get("long_ma", 200))
+    return {
+        "ma_rising": {"enabled": False, "ma": long_ma},
+        "short_above_long": {"enabled": False, "short_ma": short_ma, "long_ma": long_ma},
+        "price_near_long": {
+            "enabled": True,
+            "long_ma": long_ma,
+            "threshold_pct": float(legacy_kwargs.get("support_threshold_pct", 5)),
+        },
+        "golden_cross": {
+            "enabled": True,
+            "short_ma": short_ma,
+            "long_ma": long_ma,
+            "lookback_units": int(legacy_kwargs.get("cross_lookback_days", 20)),
+        },
+        "long_ma_down_from_max": {"enabled": False, "long_ma": long_ma, "down_pct": 5.0, "lookback_units": 50},
+    }
 
-    if filter_set is None and legacy_kwargs:
-        short_ma = int(legacy_kwargs.get("short_ma", 50))
-        long_ma = int(legacy_kwargs.get("long_ma", 200))
-        filter_set = {
-            "ma_rising": {"enabled": False, "ma": long_ma},
-            "short_above_long": {"enabled": False, "short_ma": short_ma, "long_ma": long_ma},
-            "price_near_long": {
-                "enabled": True,
-                "long_ma": long_ma,
-                "threshold_pct": float(legacy_kwargs.get("support_threshold_pct", 5)),
-            },
-            "golden_cross": {
-                "enabled": True,
-                "short_ma": short_ma,
-                "long_ma": long_ma,
-                "lookback_units": int(legacy_kwargs.get("cross_lookback_days", 20)),
-            },
-            "long_ma_down_from_max": {"enabled": False, "long_ma": long_ma, "down_pct": 5.0, "lookback_units": 50},
-        }
 
+def load_price_dataframe(path):
+    df = pd.DataFrame(json.loads(path.read_text()))
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.sort_values("Date")
+
+    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+    if "Open" in df.columns:
+        df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
+    return df.dropna(subset=["Close"]).reset_index(drop=True)
+
+
+def screen_dataframe(df, symbol, filter_set=None, include_pe=True):
     filter_set = normalize_filter_set(filter_set, use_default=False)
 
-    df = pd.DataFrame(json.loads(path.read_text()))
+    df = df.copy()
     ma_periods = required_ma_periods(filter_set)
     max_ma = max(ma_periods) if ma_periods else 0
     if len(df) < max_ma:
@@ -351,7 +361,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     if "Open" in df.columns:
         df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
-    df = df.dropna(subset=["Close"])
+    df = df.dropna(subset=["Close"]).reset_index(drop=True)
     if len(df) < max_ma:
         return None
 
@@ -362,7 +372,7 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
     price = last["Close"]
 
     result = {
-        "Symbol": path.stem,
+        "Symbol": symbol,
         "PE Ratio": "",
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
@@ -485,13 +495,26 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
 
         elif filter_type == "pe_less_than":
             if result["PE Ratio"] == "":
-                result["PE Ratio"] = get_pe_ratio(path.stem)
+                if not include_pe:
+                    return None
+                result["PE Ratio"] = get_pe_ratio(symbol)
             pe = result["PE Ratio"]
             passed = pe != "" and float(pe) < float(config["max_pe"])
             result[f"{prefix}_Passed"] = passed
             if not passed:
                 return None
 
-    if result["PE Ratio"] == "":
-        result["PE Ratio"] = get_pe_ratio(path.stem)
+    if include_pe and result["PE Ratio"] == "":
+        result["PE Ratio"] = get_pe_ratio(symbol)
     return result
+
+
+def screen_json_file(path, filter_set=None, **legacy_kwargs):
+    if not path.exists():
+        return None
+
+    if filter_set is None and legacy_kwargs:
+        filter_set = legacy_kwargs_to_filter_set(legacy_kwargs)
+
+    df = load_price_dataframe(path)
+    return screen_dataframe(df, path.stem, filter_set=filter_set)
