@@ -288,6 +288,7 @@ def run_backtest(
                         chart_paths[chart_key] = create_stock_chart(
                             pd.io.common.stringify_path(event["JsonPath"]),
                             favorite_configs[filter_name]["filter_set"],
+                            max_points=100000,
                             swing_annotations=_build_backtest_chart_annotations(gain_path),
                         )
                     except Exception:
