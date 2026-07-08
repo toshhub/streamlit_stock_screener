@@ -59,11 +59,18 @@ def _backtest_stock_file(path, favorite_configs, backtest_candles, gain_candles)
 
     for position in range(start_position, end_position + 1):
         signal_close = float(df.iloc[position]["Close"])
-        exit_close = float(df.iloc[position + gain_candles]["Close"])
         if signal_close == 0:
             continue
 
-        gain_pct = (exit_close - signal_close) / signal_close * 100
+        gain_path = []
+        for offset in range(gain_candles + 1):
+            close_at_offset = float(df.iloc[position + offset]["Close"])
+            gain_pct = (close_at_offset - signal_close) / signal_close * 100
+            gain_path.append({
+                "Candle": offset,
+                "Average Gain %": round(gain_pct, 2),
+            })
+
         signal_date = df.iloc[position]["Date"] if "Date" in df.columns else position
 
         for filter_name, config in favorite_configs.items():
@@ -78,7 +85,8 @@ def _backtest_stock_file(path, favorite_configs, backtest_candles, gain_candles)
                     "Filter Name": filter_name,
                     "Symbol": path.stem,
                     "Date": signal_date,
-                    "Gain %": round(gain_pct, 2),
+                    "Final Gain %": gain_path[-1]["Average Gain %"],
+                    "Gain Path": gain_path,
                 })
 
     return events_by_filter
@@ -122,19 +130,33 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
             events_df = pd.DataFrame(events)
             events_df["Date"] = pd.to_datetime(events_df["Date"], errors="coerce")
             stocks_found = int(events_df["Symbol"].nunique())
-            daily_series = (
-                events_df
-                .groupby("Date", dropna=False)
+            path_rows = []
+            for event in events:
+                for path_point in event["Gain Path"]:
+                    path_rows.append({
+                        "Candle": int(path_point["Candle"]),
+                        "Gain %": float(path_point["Average Gain %"]),
+                    })
+
+            path_df = pd.DataFrame(path_rows)
+            gain_series = (
+                path_df
+                .groupby("Candle", dropna=False)
                 .agg(**{"Average Gain %": ("Gain %", "mean"), "Matches": ("Gain %", "count")})
                 .reset_index()
-                .sort_values("Date")
+                .sort_values("Candle")
             )
-            daily_series["Average Gain %"] = daily_series["Average Gain %"].round(2)
-            average_gain = round(float(events_df["Gain %"].mean()), 2)
-            peak_average_gain = round(float(daily_series["Average Gain %"].max()), 2)
+            gain_series["Average Gain %"] = gain_series["Average Gain %"].round(2)
+            final_gain_rows = gain_series[gain_series["Candle"] == int(gain_candles)]
+            average_gain = (
+                round(float(final_gain_rows.iloc[0]["Average Gain %"]), 2)
+                if not final_gain_rows.empty
+                else None
+            )
+            peak_average_gain = round(float(gain_series["Average Gain %"].max()), 2)
             match_count = int(len(events_df))
         else:
-            daily_series = pd.DataFrame(columns=["Date", "Average Gain %", "Matches"])
+            gain_series = pd.DataFrame(columns=["Candle", "Average Gain %", "Matches"])
             average_gain = None
             peak_average_gain = None
             match_count = 0
@@ -147,6 +169,6 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
             "Stocks Found": stocks_found,
             "Matches": match_count,
         })
-        series_by_filter[filter_name] = daily_series.to_dict("records")
+        series_by_filter[filter_name] = gain_series.to_dict("records")
 
     return summary_rows, series_by_filter

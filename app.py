@@ -337,6 +337,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
       .chart-empty {{ color: #64748b; padding: 18px 0; text-align: center; }}
       .axis-label {{ fill: #64748b; font-size: 12px; }}
       .point-label {{ fill: #0f172a; font-size: 11px; }}
+      .zero-label {{ fill: #475569; font-size: 11px; }}
     </style>
     <div class="backtest-wrap">
       <table class="backtest-table">
@@ -355,13 +356,6 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
     </div>
     <script>
       const backtestSeries = {payload};
-
-      function formatDate(value) {{
-        if (!value || value === "NaT") return "";
-        const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return String(value);
-        return parsed.toLocaleDateString(undefined, {{ year: "numeric", month: "short", day: "numeric" }});
-      }}
 
       function renderChart(filterName) {{
         const panel = document.getElementById("backtest-chart-panel");
@@ -388,17 +382,18 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
 
         const points = gains.map((gain, index) => `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`).join(" ");
         const zeroY = y(0);
-        const firstDate = formatDate(rows[0]["Date"]);
-        const lastDate = formatDate(rows[rows.length - 1]["Date"]);
+        const firstCandle = Number(rows[0]["Candle"]);
+        const lastCandle = Number(rows[rows.length - 1]["Candle"]);
         const lastGain = gains[gains.length - 1].toFixed(2) + "%";
         const circles = gains.map((gain, index) => {{
-          const label = `${{formatDate(rows[index]["Date"])}}: ${{gain.toFixed(2)}}% (${{rows[index]["Matches"]}} matches)`;
+          const candle = Number(rows[index]["Candle"]);
+          const label = `Candle +${{candle}}: ${{gain.toFixed(2)}}% average gain (${{rows[index]["Matches"]}} matches)`;
           return `<circle cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="3.5" fill="#2563eb"><title>${{label}}</title></circle>`;
         }}).join("");
 
         panel.className = "";
         panel.innerHTML = `
-          <div class="chart-title">${{filterName}} - average gain by signal date</div>
+          <div class="chart-title">${{filterName}} - average gain path from reference candle</div>
           <svg viewBox="0 0 ${{width}} ${{height}}" width="100%" height="320" role="img">
             <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
             <line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
@@ -406,8 +401,9 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             <polyline points="${{points}}" fill="none" stroke="#2563eb" stroke-width="3" />
             ${{circles}}
             <text x="${{pad.left}}" y="20" class="axis-label">Max ${{maxY.toFixed(2)}}%</text>
-            <text x="${{pad.left}}" y="${{height - 18}}" class="axis-label">${{firstDate}}</text>
-            <text x="${{width - pad.right}}" y="${{height - 18}}" text-anchor="end" class="axis-label">${{lastDate}}</text>
+            <text x="${{pad.left}}" y="${{Math.max(14, zeroY - 6)}}" class="zero-label">0%</text>
+            <text x="${{pad.left}}" y="${{height - 18}}" class="axis-label">Candle +${{firstCandle}} reference</text>
+            <text x="${{width - pad.right}}" y="${{height - 18}}" text-anchor="end" class="axis-label">Candle +${{lastCandle}}</text>
             <text x="${{width - pad.right}}" y="${{Math.max(16, y(gains[gains.length - 1]) - 8)}}" text-anchor="end" class="point-label">${{lastGain}}</text>
           </svg>
         `;
