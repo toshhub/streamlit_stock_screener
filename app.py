@@ -8,9 +8,9 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from backtest import get_backtest_calendar_dates, run_backtest
+from backtest import get_backtest_calendar_dates, run_backtest, split_favorite_filter
 from config import *
-from charting import create_stock_chart, sortable_results_table
+from charting import create_stock_chart, image_to_data_uri, sortable_results_table
 from downloader import (
     NIFTY_DATA_SYMBOL,
     clear_downloaded_json_files,
@@ -267,6 +267,26 @@ def stock_data_files(directory):
     return sorted(path for path in directory.glob("*.json") if is_stock_data_file(path))
 
 
+def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_filter_sets):
+    files_by_symbol = {path.stem: path for path in stock_files}
+    enriched_details = {}
+
+    for filter_name, rows in stock_details_by_filter.items():
+        filter_set, _ = split_favorite_filter(favorite_filter_sets.get(filter_name, []))
+        enriched_rows = []
+        for row in rows:
+            enriched_row = dict(row)
+            stock_file = files_by_symbol.get(str(row.get("Symbol", "")))
+            if stock_file:
+                chart_path = create_stock_chart(stock_file, filter_set)
+                if chart_path:
+                    enriched_row["ChartPath"] = chart_path
+            enriched_rows.append(enriched_row)
+        enriched_details[filter_name] = enriched_rows
+
+    return enriched_details
+
+
 def render_data_availability_status():
     """Render data availability cards for all timeframes."""
     st.markdown(
@@ -305,9 +325,22 @@ def render_data_availability_status():
         st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
 
 
-def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=700):
+def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=900):
     payload = json.dumps(series_by_filter, default=str)
-    stock_payload = json.dumps(stock_details_by_filter, default=str)
+    chart_details_by_filter = {}
+    for filter_name, rows in stock_details_by_filter.items():
+        chart_rows = []
+        for row in rows:
+            chart_row = dict(row)
+            chart_path = chart_row.get("ChartPath")
+            if chart_path:
+                try:
+                    chart_row["ChartSrc"] = image_to_data_uri(chart_path)
+                except OSError:
+                    chart_row["ChartSrc"] = ""
+            chart_rows.append(chart_row)
+        chart_details_by_filter[filter_name] = chart_rows
+    stock_payload = json.dumps(chart_details_by_filter, default=str)
     rows_html = []
     for row in summary_rows:
         filter_name = row["Filter Name"]
@@ -393,8 +426,31 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         padding-top: 12px;
       }}
       .stock-symbol {{ font-weight: 700; }}
+      .stock-chart-link {{
+        background: transparent;
+        border: 0;
+        color: #2563eb;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        padding: 0;
+        text-decoration: underline;
+      }}
+      .stock-chart-link.active {{ background: #e0e7ff; border-radius: 4px; color: #1d4ed8; }}
       .stock-gain-positive {{ color: #15803d; }}
       .stock-gain-negative {{ color: #dc2626; }}
+      .stock-chart-panel {{
+        background: #ffffff;
+        border-top: 2px solid #cbd5e1;
+        box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.12);
+        margin-top: 10px;
+        max-height: 52vh;
+        overflow-y: auto;
+        padding: 8px;
+      }}
+      .stock-chart-panel img {{ display: block; height: auto; max-height: 46vh; object-fit: contain; width: 100%; }}
+      .stock-chart-title {{ color: #334155; font-size: 13px; font-weight: 700; margin-bottom: 6px; text-align: center; }}
+      .stock-chart-empty {{ color: #64748b; font-size: 13px; padding: 14px 0; text-align: center; }}
     </style>
     <div class="backtest-wrap">
       <table class="backtest-table">
@@ -536,9 +592,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         const body = rows.map(row => {{
           const endGain = Number(row["Gain at End Date"]);
           const peakGain = Number(row["Peak Gain %"]);
+          const symbol = escapeHtml(row["Symbol"]);
+          const symbolCell = row["ChartSrc"]
+            ? `<button class="stock-chart-link" data-symbol="${{symbol}}" data-chart-src="${{row["ChartSrc"]}}">${{symbol}}</button>`
+            : `<span class="stock-symbol">${{symbol}}</span>`;
           return `
             <tr>
-              <td class="stock-symbol">${{escapeHtml(row["Symbol"])}}</td>
+              <td>${{symbolCell}}</td>
               <td class="${{gainClass(endGain)}}">${{signed(endGain)}}</td>
               <td class="${{gainClass(peakGain)}}">${{signed(peakGain)}}</td>
             </tr>
@@ -558,7 +618,25 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             </thead>
             <tbody>${{body}}</tbody>
           </table>
+          <div id="backtest-stock-chart-panel" class="stock-chart-panel">
+            <div class="stock-chart-empty">Tap a stock symbol to view its chart</div>
+          </div>
         `;
+
+        const chartPanel = panel.querySelector("#backtest-stock-chart-panel");
+        panel.querySelectorAll(".stock-chart-link").forEach(button => {{
+          button.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            panel.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
+            button.classList.add("active");
+            chartPanel.innerHTML = `
+              <div class="stock-chart-title">${{escapeHtml(button.dataset.symbol)}} chart</div>
+              <img src="${{button.dataset.chartSrc}}" alt="${{escapeHtml(button.dataset.symbol)}} chart">
+            `;
+            chartPanel.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+          }});
+        }});
       }}
 
       document.querySelectorAll(".filter-detail-link").forEach(button => {{
@@ -1594,7 +1672,7 @@ with tab3:
                     progress = done / total if total else 0
                     progress_bar.progress(progress)
                     progress_text.info(
-                        f"Backtested {done} of {total} stocks across "
+                        f"Processed {done} of {total} stocks across "
                         f"{len(selected_backtest_filters)} favorite filter(s)."
                     )
 
@@ -1608,8 +1686,20 @@ with tab3:
                         progress_callback=show_backtest_progress,
                         benchmark_file=nifty_file,
                     )
+                    stock_details_by_filter = attach_backtest_chart_paths(
+                        stock_details_by_filter,
+                        stock_files,
+                        favorite_filter_sets,
+                    )
                 progress_bar.progress(1.0)
-                progress_text.success(f"Backtest complete for {len(stock_files)} stocks.")
+                match_summary = ", ".join(
+                    f"{row['Filter Name']}: {int(row.get('Stocks Found', 0))}"
+                    for row in summary_rows
+                )
+                progress_text.success(
+                    f"Backtest complete. Processed {len(stock_files)} stocks. "
+                    f"Stocks found on start date: {match_summary or 'none'}."
+                )
                 st.session_state["backtest_summary_rows"] = summary_rows
                 st.session_state["backtest_series_by_filter"] = series_by_filter
                 st.session_state["backtest_stock_details_by_filter"] = stock_details_by_filter
