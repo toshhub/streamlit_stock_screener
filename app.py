@@ -338,6 +338,17 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
       .axis-label {{ fill: #64748b; font-size: 12px; }}
       .point-label {{ fill: #0f172a; font-size: 11px; }}
       .zero-label {{ fill: #475569; font-size: 11px; }}
+      .gain-point {{ cursor: pointer; }}
+      .gain-point:hover, .gain-point.active {{ fill: #15803d; stroke: #14532d; stroke-width: 2; }}
+      .chart-detail {{
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        color: #334155;
+        font-size: 13px;
+        margin-top: 8px;
+        padding: 8px 10px;
+      }}
     </style>
     <div class="backtest-wrap">
       <table class="backtest-table">
@@ -379,34 +390,67 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
 
         function x(i) {{ return pad.left + (i / xSpan) * plotW; }}
         function y(v) {{ return pad.top + ((maxY - v) / spanY) * plotH; }}
+        function signed(value) {{ return (value > 0 ? "+" : "") + value.toFixed(2) + "%"; }}
+        function pointDateLabel(row) {{
+          const start = row["Start Date"] || "";
+          const end = row["End Date"] || "";
+          if (start && end && start !== end) return start + " to " + end;
+          return start || end || "N/A";
+        }}
 
         const points = gains.map((gain, index) => `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`).join(" ");
         const zeroY = y(0);
         const firstCandle = Number(rows[0]["Candle"]);
         const lastCandle = Number(rows[rows.length - 1]["Candle"]);
-        const lastGain = gains[gains.length - 1].toFixed(2) + "%";
+        const lastGain = signed(gains[gains.length - 1]);
+        const yTickValues = Array.from(new Set([minY, minY + spanY * 0.25, minY + spanY * 0.5, minY + spanY * 0.75, maxY, 0].map(value => Number(value.toFixed(2))))).sort((a, b) => b - a);
+        const xTickIndexes = Array.from(new Set(rows.map((_, index) => index).filter((_, index) => index % Math.max(1, Math.ceil(rows.length / 7)) === 0).concat([0, rows.length - 1]))).sort((a, b) => a - b);
+        const yTicks = yTickValues.map(value => `
+          <line x1="${{pad.left - 5}}" y1="${{y(value).toFixed(2)}}" x2="${{width - pad.right}}" y2="${{y(value).toFixed(2)}}" stroke="#e2e8f0" />
+          <text x="${{pad.left - 9}}" y="${{(y(value) + 4).toFixed(2)}}" text-anchor="end" class="axis-label">${{signed(value)}}</text>
+        `).join("");
+        const xTicks = xTickIndexes.map(index => `
+          <line x1="${{x(index).toFixed(2)}}" y1="${{height - pad.bottom}}" x2="${{x(index).toFixed(2)}}" y2="${{height - pad.bottom + 5}}" stroke="#94a3b8" />
+          <text x="${{x(index).toFixed(2)}}" y="${{height - 18}}" text-anchor="middle" class="axis-label">+${{Number(rows[index]["Candle"])}}</text>
+        `).join("");
         const circles = gains.map((gain, index) => {{
           const candle = Number(rows[index]["Candle"]);
-          const label = `Candle +${{candle}}: ${{gain.toFixed(2)}}% average gain (${{rows[index]["Matches"]}} matches)`;
-          return `<circle cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="3.5" fill="#2563eb"><title>${{label}}</title></circle>`;
+          const label = `Candle +${{candle}} | Date: ${{pointDateLabel(rows[index])}} | Gain: ${{signed(gain)}} | Matches: ${{rows[index]["Matches"]}}`;
+          return `<circle class="gain-point" data-index="${{index}}" cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="#2563eb"><title>${{label}}</title></circle>`;
         }}).join("");
 
         panel.className = "";
         panel.innerHTML = `
           <div class="chart-title">${{filterName}} - average gain path from reference candle</div>
           <svg viewBox="0 0 ${{width}} ${{height}}" width="100%" height="320" role="img">
+            ${{yTicks}}
             <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
             <line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
             <line x1="${{pad.left}}" y1="${{zeroY}}" x2="${{width - pad.right}}" y2="${{zeroY}}" stroke="#94a3b8" stroke-dasharray="4 4" />
             <polyline points="${{points}}" fill="none" stroke="#2563eb" stroke-width="3" />
             ${{circles}}
-            <text x="${{pad.left}}" y="20" class="axis-label">Max ${{maxY.toFixed(2)}}%</text>
+            ${{xTicks}}
+            <text x="${{pad.left}}" y="20" class="axis-label">Avg gain %</text>
             <text x="${{pad.left}}" y="${{Math.max(14, zeroY - 6)}}" class="zero-label">0%</text>
-            <text x="${{pad.left}}" y="${{height - 18}}" class="axis-label">Candle +${{firstCandle}} reference</text>
-            <text x="${{width - pad.right}}" y="${{height - 18}}" text-anchor="end" class="axis-label">Candle +${{lastCandle}}</text>
+            <text x="${{pad.left}}" y="${{height - 4}}" class="axis-label">Candle +${{firstCandle}} reference</text>
+            <text x="${{width - pad.right}}" y="${{height - 4}}" text-anchor="end" class="axis-label">Candle +${{lastCandle}}</text>
             <text x="${{width - pad.right}}" y="${{Math.max(16, y(gains[gains.length - 1]) - 8)}}" text-anchor="end" class="point-label">${{lastGain}}</text>
           </svg>
+          <div id="backtest-point-detail" class="chart-detail">Click or tap a point to see its date range and average gain.</div>
         `;
+
+        const detail = panel.querySelector("#backtest-point-detail");
+        panel.querySelectorAll(".gain-point").forEach(point => {{
+          point.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            panel.querySelectorAll(".gain-point").forEach(item => item.classList.remove("active"));
+            point.classList.add("active");
+            const row = rows[Number(point.dataset.index)];
+            const gain = Number(row["Average Gain %"]);
+            detail.textContent = `Candle +${{row["Candle"]}} | Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Matches: ${{row["Matches"]}}`;
+          }});
+        }});
       }}
 
       document.querySelectorAll(".gain-link").forEach(button => {{

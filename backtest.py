@@ -66,9 +66,11 @@ def _backtest_stock_file(path, favorite_configs, backtest_candles, gain_candles)
         for offset in range(gain_candles + 1):
             close_at_offset = float(df.iloc[position + offset]["Close"])
             gain_pct = (close_at_offset - signal_close) / signal_close * 100
+            date_at_offset = df.iloc[position + offset]["Date"] if "Date" in df.columns else position + offset
             gain_path.append({
                 "Candle": offset,
                 "Average Gain %": round(gain_pct, 2),
+                "Date": date_at_offset,
             })
 
         signal_date = df.iloc[position]["Date"] if "Date" in df.columns else position
@@ -136,17 +138,26 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
                     path_rows.append({
                         "Candle": int(path_point["Candle"]),
                         "Gain %": float(path_point["Average Gain %"]),
+                        "Date": path_point["Date"],
                     })
 
             path_df = pd.DataFrame(path_rows)
+            path_df["Date"] = pd.to_datetime(path_df["Date"], errors="coerce")
             gain_series = (
                 path_df
                 .groupby("Candle", dropna=False)
-                .agg(**{"Average Gain %": ("Gain %", "mean"), "Matches": ("Gain %", "count")})
+                .agg(**{
+                    "Average Gain %": ("Gain %", "mean"),
+                    "Matches": ("Gain %", "count"),
+                    "Start Date": ("Date", "min"),
+                    "End Date": ("Date", "max"),
+                })
                 .reset_index()
                 .sort_values("Candle")
             )
             gain_series["Average Gain %"] = gain_series["Average Gain %"].round(2)
+            gain_series["Start Date"] = gain_series["Start Date"].dt.strftime("%d-%m-%Y")
+            gain_series["End Date"] = gain_series["End Date"].dt.strftime("%d-%m-%Y")
             final_gain_rows = gain_series[gain_series["Candle"] == int(gain_candles)]
             average_gain = (
                 round(float(final_gain_rows.iloc[0]["Average Gain %"]), 2)
