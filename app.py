@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from backtest import run_backtest
+from backtest import get_backtest_calendar_dates, run_backtest
 from config import *
 from charting import create_stock_chart, sortable_results_table
 from downloader import clear_downloaded_json_files, download_top_stocks, timeframe_config
@@ -293,7 +293,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
     rows_html = []
     for row in summary_rows:
         filter_name = row["Filter Name"]
-        gain = row["Gain for next M days"]
+        gain = row.get("Gain at End Date", row.get("Gain for next M days"))
         gain_label = "No matches" if gain is None else f"{gain:.2f}%"
         peak_gain = row.get("Peak Average Gain %")
         peak_gain_label = "No matches" if peak_gain is None else f"{peak_gain:.2f}%"
@@ -354,7 +354,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         <thead>
           <tr>
             <th>Filter Name</th>
-            <th>Gain for next M days</th>
+            <th>Gain at End Date</th>
             <th>Peak Average Gain</th>
             <th>Stocks Found</th>
           </tr>
@@ -390,13 +390,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         function y(v) {{ return pad.top + ((maxY - v) / spanY) * plotH; }}
         function signed(value) {{ return (value > 0 ? "+" : "") + value.toFixed(2) + "%"; }}
         function pointDateLabel(row) {{
-          return row["Date"] || "N/A";
+          return row["Date"] || row["Start Date"] || "N/A";
         }}
 
         const points = gains.map((gain, index) => `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`).join(" ");
         const zeroY = y(0);
-        const firstCandle = Number(rows[0]["Candle"]);
-        const lastCandle = Number(rows[rows.length - 1]["Candle"]);
+        const firstDate = pointDateLabel(rows[0]);
+        const lastDate = pointDateLabel(rows[rows.length - 1]);
         const lastGain = signed(gains[gains.length - 1]);
         const yTickValues = Array.from(new Set([minY, minY + spanY * 0.25, minY + spanY * 0.5, minY + spanY * 0.75, maxY, 0].map(value => Number(value.toFixed(2))))).sort((a, b) => b - a);
         const xTickIndexes = Array.from(new Set(rows.map((_, index) => index).filter((_, index) => index % Math.max(1, Math.ceil(rows.length / 7)) === 0).concat([0, rows.length - 1]))).sort((a, b) => a - b);
@@ -406,17 +406,16 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         `).join("");
         const xTicks = xTickIndexes.map(index => `
           <line x1="${{x(index).toFixed(2)}}" y1="${{height - pad.bottom}}" x2="${{x(index).toFixed(2)}}" y2="${{height - pad.bottom + 5}}" stroke="#94a3b8" />
-          <text x="${{x(index).toFixed(2)}}" y="${{height - 18}}" text-anchor="middle" class="axis-label">+${{Number(rows[index]["Candle"])}}</text>
+          <text x="${{x(index).toFixed(2)}}" y="${{height - 18}}" text-anchor="middle" class="axis-label">${{pointDateLabel(rows[index])}}</text>
         `).join("");
         const circles = gains.map((gain, index) => {{
-          const candle = Number(rows[index]["Candle"]);
-          const label = `Candle +${{candle}} | Date: ${{pointDateLabel(rows[index])}} | Gain: ${{signed(gain)}} | Stocks: ${{rows[index]["Stocks Found"]}}`;
+          const label = `Date: ${{pointDateLabel(rows[index])}} | Gain: ${{signed(gain)}} | Stocks: ${{rows[index]["Stocks Found"]}}`;
           return `<circle class="gain-point" data-index="${{index}}" cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="#2563eb"><title>${{label}}</title></circle>`;
         }}).join("");
 
         panel.className = "";
         panel.innerHTML = `
-          <div class="chart-title">${{filterName}} - average gain path from reference candle</div>
+          <div class="chart-title">${{filterName}} - average gain path from start date</div>
           <svg viewBox="0 0 ${{width}} ${{height}}" width="100%" height="320" role="img">
             ${{yTicks}}
             <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
@@ -427,11 +426,11 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             ${{xTicks}}
             <text x="${{pad.left}}" y="20" class="axis-label">Avg gain %</text>
             <text x="${{pad.left}}" y="${{Math.max(14, zeroY - 6)}}" class="zero-label">0%</text>
-            <text x="${{pad.left}}" y="${{height - 4}}" class="axis-label">Candle +${{firstCandle}} reference</text>
-            <text x="${{width - pad.right}}" y="${{height - 4}}" text-anchor="end" class="axis-label">Candle +${{lastCandle}}</text>
+            <text x="${{pad.left}}" y="${{height - 4}}" class="axis-label">Start ${{firstDate}}</text>
+            <text x="${{width - pad.right}}" y="${{height - 4}}" text-anchor="end" class="axis-label">End ${{lastDate}}</text>
             <text x="${{width - pad.right}}" y="${{Math.max(16, y(gains[gains.length - 1]) - 8)}}" text-anchor="end" class="point-label">${{lastGain}}</text>
           </svg>
-          <div id="backtest-point-detail" class="chart-detail">Click or tap a point to see its date range and average gain.</div>
+          <div id="backtest-point-detail" class="chart-detail">Click or tap a point to see its date and average gain.</div>
         `;
 
         const detail = panel.querySelector("#backtest-point-detail");
@@ -443,7 +442,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             point.classList.add("active");
             const row = rows[Number(point.dataset.index)];
             const gain = Number(row["Average Gain %"]);
-            detail.textContent = `Candle +${{row["Candle"]}} | Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Stocks: ${{row["Stocks Found"]}}`;
+            detail.textContent = `Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Stocks: ${{row["Stocks Found"]}}`;
           }});
         }});
       }}
@@ -1226,7 +1225,7 @@ with tab3:
     if not favorite_names:
         st.info("No saved favorite filters yet. Save filters from the Screener tab before running a backtest.")
     else:
-        col_tf, col_n, col_m = st.columns(3)
+        col_tf, col_dates = st.columns([1, 3])
         with col_tf:
             backtest_tf = st.selectbox(
                 "Backtest Timeframe",
@@ -1235,25 +1234,55 @@ with tab3:
                 key="backtest_tf_select",
             )
 
-        with col_n:
-            backtest_candles = st.slider(
-                "Backtest for",
-                min_value=1,
-                max_value=500,
-                value=min(int(settings.get("backtest_candles", 30)), 500),
-                step=1,
-                help="N candles before today. The backtest starts at the -N candle.",
+        target_dir = timeframe_config(backtest_tf)["target_dir"]
+        stock_files = sorted(target_dir.glob("*.json"))
+        available_dates = [date.date() for date in get_backtest_calendar_dates(stock_files)]
+
+        selected_start_date = None
+        selected_end_date = None
+        effective_start_date = None
+        effective_end_date = None
+        if not stock_files:
+            st.warning(f"No downloaded {backtest_tf.lower()} data found. Download stock data first from the Data tab.")
+        elif len(available_dates) < 2:
+            st.warning(f"Not enough {backtest_tf.lower()} candles found for backtesting.")
+        else:
+            min_date = available_dates[0]
+            max_date = available_dates[-1]
+
+            saved_start = pd.to_datetime(settings.get("backtest_start_date"), errors="coerce")
+            saved_end = pd.to_datetime(settings.get("backtest_end_date"), errors="coerce")
+            default_start = (
+                saved_start.date()
+                if pd.notna(saved_start) and min_date <= saved_start.date() < max_date
+                else available_dates[max(0, len(available_dates) - 31)]
+            )
+            default_end = (
+                saved_end.date()
+                if pd.notna(saved_end) and default_start < saved_end.date() <= max_date
+                else max_date
             )
 
-        with col_m:
-            gain_candles = st.slider(
-                "Check Gain Till",
-                min_value=1,
-                max_value=int(backtest_candles),
-                value=min(int(settings.get("gain_candles", min(10, int(backtest_candles)))), int(backtest_candles)),
-                step=1,
-                help="M candles after each historical signal. M cannot be greater than N.",
-            )
+            with col_dates:
+                selected_start_date, selected_end_date = st.slider(
+                    "Backtest date range",
+                    min_value=min_date,
+                    max_value=max_date,
+                    value=(default_start, default_end),
+                    format="DD-MM-YYYY",
+                    help="Find stocks on the start date, then calculate their average gain through the end date.",
+                )
+
+            start_candidates = [date for date in available_dates if date >= selected_start_date]
+            end_candidates = [date for date in available_dates if date <= selected_end_date]
+            effective_start_date = start_candidates[0] if start_candidates else None
+            effective_end_date = end_candidates[-1] if end_candidates else None
+
+            if effective_start_date != selected_start_date or effective_end_date != selected_end_date:
+                st.caption(
+                    "Using nearest available market dates: "
+                    f"{effective_start_date.strftime('%d-%m-%Y')} to {effective_end_date.strftime('%d-%m-%Y')}"
+                )
 
         saved_backtest_filters = [
             name for name in settings.get("backtest_selected_filters", favorite_names[:1])
@@ -1268,15 +1297,10 @@ with tab3:
 
         update_settings({
             "backtest_tf": backtest_tf,
-            "backtest_candles": int(backtest_candles),
-            "gain_candles": int(gain_candles),
+            "backtest_start_date": selected_start_date.isoformat() if selected_start_date else None,
+            "backtest_end_date": selected_end_date.isoformat() if selected_end_date else None,
             "backtest_selected_filters": selected_backtest_filters,
         })
-
-        target_dir = timeframe_config(backtest_tf)["target_dir"]
-        stock_files = sorted(target_dir.glob("*.json"))
-        if not stock_files:
-            st.warning(f"No downloaded {backtest_tf.lower()} data found. Download stock data first from the Data tab.")
 
         run_backtest_clicked = st.button("Backtest", type="primary", use_container_width=True)
 
@@ -1285,23 +1309,30 @@ with tab3:
                 st.error("Select at least one favorite filter.")
             elif not stock_files:
                 st.error("No stock data available for the selected timeframe.")
+            elif not effective_start_date or not effective_end_date or effective_start_date >= effective_end_date:
+                st.error("Select a valid start date before the end date.")
             else:
-                with st.spinner("Running backtest across saved filters and historical candles..."):
+                with st.spinner("Running backtest across saved filters and selected dates..."):
                     summary_rows, series_by_filter = run_backtest(
                         stock_files,
                         favorite_filter_sets,
                         selected_backtest_filters,
-                        int(backtest_candles),
-                        int(gain_candles),
+                        effective_start_date,
+                        effective_end_date,
                     )
                 st.session_state["backtest_summary_rows"] = summary_rows
                 st.session_state["backtest_series_by_filter"] = series_by_filter
+                st.session_state["backtest_result_range"] = (
+                    effective_start_date.strftime("%d-%m-%Y"),
+                    effective_end_date.strftime("%d-%m-%Y"),
+                )
 
         summary_rows = st.session_state.get("backtest_summary_rows", [])
         series_by_filter = st.session_state.get("backtest_series_by_filter", {})
         if summary_rows:
+            result_start, result_end = st.session_state.get("backtest_result_range", ("start date", "end date"))
             st.info(
-                f"Showing stocks found on the -{int(backtest_candles)} candle and their average gain path over the next {int(gain_candles)} candle(s)."
+                f"Showing stocks found on {result_start} and their average gain path through {result_end}."
             )
             render_backtest_results_table(summary_rows, series_by_filter)
 

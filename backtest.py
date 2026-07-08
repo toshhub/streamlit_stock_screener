@@ -45,7 +45,7 @@ def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings):
     return passed
 
 
-def _build_backtest_calendar(stock_files, backtest_candles, gain_candles):
+def get_backtest_calendar_dates(stock_files):
     best_dates = []
     best_last_date = None
 
@@ -58,7 +58,7 @@ def _build_backtest_calendar(stock_files, backtest_candles, gain_candles):
             continue
 
         dates = list(pd.to_datetime(df["Date"], errors="coerce").dropna())
-        if len(dates) <= backtest_candles:
+        if len(dates) < 2:
             continue
 
         last_date = dates[-1]
@@ -68,12 +68,20 @@ def _build_backtest_calendar(stock_files, backtest_candles, gain_candles):
             best_dates = dates
             best_last_date = last_date
 
-    reference_index = len(best_dates) - 1 - int(backtest_candles)
-    exit_index = reference_index + int(gain_candles)
-    if reference_index < 0 or exit_index >= len(best_dates):
+    return [date.normalize() for date in best_dates]
+
+
+def _build_backtest_calendar(stock_files, start_date, end_date):
+    best_dates = get_backtest_calendar_dates(stock_files)
+    if not best_dates:
         return []
 
-    return best_dates[reference_index: exit_index + 1]
+    start_ts = pd.Timestamp(start_date).normalize()
+    end_ts = pd.Timestamp(end_date).normalize()
+    if end_ts < start_ts:
+        return []
+
+    return [date for date in best_dates if start_ts <= date <= end_ts]
 
 
 def _backtest_stock_file(path, favorite_configs, calendar_dates):
@@ -130,7 +138,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
     return events_by_filter
 
 
-def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backtest_candles, gain_candles):
+def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start_date, end_date):
     favorite_configs = {}
     for name in selected_filter_names:
         filter_set, pattern_settings = split_favorite_filter(favorite_filter_sets[name])
@@ -143,8 +151,8 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
     if not stock_files or not favorite_configs:
         return [], {}
 
-    calendar_dates = _build_backtest_calendar(stock_files, backtest_candles, gain_candles)
-    if not calendar_dates:
+    calendar_dates = _build_backtest_calendar(stock_files, start_date, end_date)
+    if len(calendar_dates) < 2:
         return [], {}
 
     max_workers = min(8, max(1, len(stock_files)))
@@ -195,7 +203,8 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
             )
             gain_series["Average Gain %"] = gain_series["Average Gain %"].round(2)
             gain_series["Date"] = gain_series["Date"].dt.strftime("%d-%m-%Y")
-            final_gain_rows = gain_series[gain_series["Candle"] == int(gain_candles)]
+            final_candle = int(gain_series["Candle"].max())
+            final_gain_rows = gain_series[gain_series["Candle"] == final_candle]
             average_gain = (
                 round(float(final_gain_rows.iloc[0]["Average Gain %"]), 2)
                 if not final_gain_rows.empty
@@ -210,7 +219,7 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
 
         summary_rows.append({
             "Filter Name": filter_name,
-            "Gain for next M days": average_gain,
+            "Gain at End Date": average_gain,
             "Peak Average Gain %": peak_average_gain,
             "Stocks Found": stocks_found,
         })
