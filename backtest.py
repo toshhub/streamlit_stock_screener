@@ -90,6 +90,31 @@ def _build_backtest_calendar(stock_files, start_date, end_date):
     return [date for date in best_dates if start_ts <= date <= end_ts]
 
 
+def _build_backtest_chart_annotations(gain_path):
+    if not gain_path:
+        return []
+
+    start_point = gain_path[0]
+    end_point = gain_path[-1]
+    annotations = []
+
+    if "Close" in start_point:
+        annotations.append({
+            "type": "L",
+            "date": pd.Timestamp(start_point["Date"]).normalize(),
+            "price": float(start_point["Close"]),
+        })
+
+    if end_point is not start_point and "Close" in end_point:
+        annotations.append({
+            "type": "H",
+            "date": pd.Timestamp(end_point["Date"]).normalize(),
+            "price": float(end_point["Close"]),
+        })
+
+    return annotations
+
+
 def _backtest_stock_file(path, favorite_configs, calendar_dates):
     df = load_price_dataframe(path)
     if df.empty or "Date" not in df.columns or not calendar_dates:
@@ -121,6 +146,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
             "Candle": offset,
             "Portfolio Gain %": round(gain_pct, 2),
             "Date": calendar_date,
+            "Close": close_at_offset,
         })
 
     signal_date = normalized_calendar[0]
@@ -262,6 +288,7 @@ def run_backtest(
                         chart_paths[chart_key] = create_stock_chart(
                             pd.io.common.stringify_path(event["JsonPath"]),
                             favorite_configs[filter_name]["filter_set"],
+                            swing_annotations=_build_backtest_chart_annotations(gain_path),
                         )
                     except Exception:
                         chart_paths[chart_key] = None
