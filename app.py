@@ -289,8 +289,9 @@ def render_data_availability_status():
         st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
 
 
-def render_backtest_results_table(summary_rows, series_by_filter, height=560):
+def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=700):
     payload = json.dumps(series_by_filter, default=str)
+    stock_payload = json.dumps(stock_details_by_filter, default=str)
     rows_html = []
     for row in summary_rows:
         filter_name = row["Filter Name"]
@@ -300,7 +301,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         peak_gain_label = "No matches" if peak_gain is None else f"{peak_gain:.2f}%"
         rows_html.append(
             "<tr>"
-            f"<td>{html.escape(filter_name)}</td>"
+            f"<td><button class='filter-detail-link' data-filter='{html.escape(filter_name, quote=True)}'>{html.escape(filter_name)}</button></td>"
             f"<td>{html.escape(gain_label)}</td>"
             f"<td>{html.escape(peak_gain_label)}</td>"
             f"<td>{int(row.get('Stocks Found', 0))}</td>"
@@ -317,7 +318,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         text-align: left;
       }}
       .backtest-table th {{ background: #f8fafc; font-weight: 700; }}
-      .gain-link {{
+      .gain-link, .filter-detail-link {{
         background: transparent;
         border: 0;
         color: #2563eb;
@@ -327,7 +328,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         padding: 0;
         text-decoration: underline;
       }}
-      .gain-link.active {{ color: #15803d; }}
+      .gain-link.active, .filter-detail-link.active {{ color: #15803d; }}
       #backtest-chart-panel {{
         border-top: 1px solid #cbd5e1;
         margin-top: 14px;
@@ -370,6 +371,14 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
       }}
       .crosshair-line {{ pointer-events: none; }}
       .touch-layer {{ cursor: crosshair; touch-action: none; }}
+      #stock-detail-panel {{
+        border-top: 1px solid #cbd5e1;
+        margin-top: 14px;
+        padding-top: 12px;
+      }}
+      .stock-symbol {{ font-weight: 700; }}
+      .stock-gain-positive {{ color: #15803d; }}
+      .stock-gain-negative {{ color: #dc2626; }}
     </style>
     <div class="backtest-wrap">
       <table class="backtest-table">
@@ -384,10 +393,31 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         <tbody>{''.join(rows_html)}</tbody>
       </table>
       <div id="backtest-chart-panel" class="chart-empty">Preparing comparison chart...</div>
+      <div id="stock-detail-panel" class="chart-empty">Click a filter name to view the stocks found for that favorite filter.</div>
     </div>
     <script>
       const backtestSeries = {payload};
+      const backtestStockDetails = {stock_payload};
       const comparisonColors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
+
+      function signed(value) {{
+        return (value > 0 ? "+" : "") + value.toFixed(2) + "%";
+      }}
+
+      function escapeHtml(value) {{
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }}
+
+      function gainClass(value) {{
+        if (value > 0) return "stock-gain-positive";
+        if (value < 0) return "stock-gain-negative";
+        return "";
+      }}
 
       function renderChart(filterName) {{
         const panel = document.getElementById("backtest-chart-panel");
@@ -475,6 +505,51 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
           document.querySelectorAll(".gain-link").forEach(item => item.classList.remove("active"));
           button.classList.add("active");
           renderChart(button.dataset.filter);
+        }});
+      }});
+
+      function renderStockDetails(filterName) {{
+        const panel = document.getElementById("stock-detail-panel");
+        const rows = backtestStockDetails[filterName] || [];
+        if (!rows.length) {{
+          panel.className = "chart-empty";
+          panel.textContent = "No stocks were found for " + filterName + " on the selected start date.";
+          return;
+        }}
+
+        const body = rows.map(row => {{
+          const endGain = Number(row["Gain at End Date"]);
+          const peakGain = Number(row["Peak Gain %"]);
+          return `
+            <tr>
+              <td class="stock-symbol">${{escapeHtml(row["Symbol"])}}</td>
+              <td class="${{gainClass(endGain)}}">${{signed(endGain)}}</td>
+              <td class="${{gainClass(peakGain)}}">${{signed(peakGain)}}</td>
+            </tr>
+          `;
+        }}).join("");
+
+        panel.className = "";
+        panel.innerHTML = `
+          <div class="chart-title">${{escapeHtml(filterName)}} - stocks found on start date</div>
+          <table class="backtest-table">
+            <thead>
+              <tr>
+                <th>Stock</th>
+                <th>Gain at End Date</th>
+                <th>Peak Gain</th>
+              </tr>
+            </thead>
+            <tbody>${{body}}</tbody>
+          </table>
+        `;
+      }}
+
+      document.querySelectorAll(".filter-detail-link").forEach(button => {{
+        button.addEventListener("click", () => {{
+          document.querySelectorAll(".filter-detail-link").forEach(item => item.classList.remove("active"));
+          button.classList.add("active");
+          renderStockDetails(button.dataset.filter);
         }});
       }});
 
@@ -1500,7 +1575,7 @@ with tab3:
                     )
 
                 with st.spinner("Running backtest across saved filters and selected dates..."):
-                    summary_rows, series_by_filter = run_backtest(
+                    summary_rows, series_by_filter, stock_details_by_filter = run_backtest(
                         stock_files,
                         favorite_filter_sets,
                         selected_backtest_filters,
@@ -1512,6 +1587,7 @@ with tab3:
                 progress_text.success(f"Backtest complete for {len(stock_files)} stocks.")
                 st.session_state["backtest_summary_rows"] = summary_rows
                 st.session_state["backtest_series_by_filter"] = series_by_filter
+                st.session_state["backtest_stock_details_by_filter"] = stock_details_by_filter
                 st.session_state["backtest_result_range"] = (
                     effective_start_date.strftime("%d-%m-%Y"),
                     effective_end_date.strftime("%d-%m-%Y"),
@@ -1519,12 +1595,13 @@ with tab3:
 
         summary_rows = st.session_state.get("backtest_summary_rows", [])
         series_by_filter = st.session_state.get("backtest_series_by_filter", {})
+        stock_details_by_filter = st.session_state.get("backtest_stock_details_by_filter", {})
         if summary_rows:
             result_start, result_end = st.session_state.get("backtest_result_range", ("start date", "end date"))
             st.info(
                 f"Showing equal-weight portfolio variation for stocks found on {result_start} through {result_end}."
             )
-            render_backtest_results_table(summary_rows, series_by_filter)
+            render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter)
 
 
 # =====================================================================

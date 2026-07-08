@@ -154,11 +154,11 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
 
     all_events = {name: [] for name in selected_filter_names}
     if not stock_files or not favorite_configs:
-        return [], {}
+        return [], {}, {}
 
     calendar_dates = _build_backtest_calendar(stock_files, start_date, end_date)
     if len(calendar_dates) < 2:
-        return [], {}
+        return [], {}, {}
 
     max_workers = min(8, max(1, len(stock_files)))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -181,6 +181,7 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
 
     summary_rows = []
     series_by_filter = {}
+    stock_details_by_filter = {}
     for filter_name in selected_filter_names:
         events = all_events[filter_name]
         if events:
@@ -188,13 +189,24 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
             events_df["Date"] = pd.to_datetime(events_df["Date"], errors="coerce")
             stocks_found = int(events_df["Symbol"].nunique())
             path_rows = []
+            stock_rows = []
             for event in events:
+                gain_path = event["Gain Path"]
                 for path_point in event["Gain Path"]:
                     path_rows.append({
                         "Candle": int(path_point["Candle"]),
                         "Gain %": float(path_point.get("Portfolio Gain %", path_point.get("Average Gain %"))),
                         "Date": path_point["Date"],
                     })
+                stock_gain_values = [
+                    float(path_point.get("Portfolio Gain %", path_point.get("Average Gain %")))
+                    for path_point in gain_path
+                ]
+                stock_rows.append({
+                    "Symbol": event["Symbol"],
+                    "Gain at End Date": round(float(event["Final Gain %"]), 2),
+                    "Peak Gain %": round(max(stock_gain_values), 2),
+                })
 
             path_df = pd.DataFrame(path_rows)
             path_df["Date"] = pd.to_datetime(path_df["Date"], errors="coerce")
@@ -219,11 +231,17 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
                 else None
             )
             peak_portfolio_gain = round(float(gain_series["Portfolio Gain %"].max()), 2)
+            stock_rows = sorted(
+                stock_rows,
+                key=lambda row: (row["Gain at End Date"], row["Peak Gain %"], row["Symbol"]),
+                reverse=True,
+            )
         else:
             gain_series = pd.DataFrame(columns=["Candle", "Portfolio Gain %", "Stocks Found"])
             average_gain = None
             peak_portfolio_gain = None
             stocks_found = 0
+            stock_rows = []
 
         summary_rows.append({
             "Filter Name": filter_name,
@@ -232,5 +250,6 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
             "Stocks Found": stocks_found,
         })
         series_by_filter[filter_name] = gain_series.to_dict("records")
+        stock_details_by_filter[filter_name] = stock_rows
 
-    return summary_rows, series_by_filter
+    return summary_rows, series_by_filter, stock_details_by_filter
