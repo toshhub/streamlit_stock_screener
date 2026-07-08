@@ -1667,6 +1667,7 @@ with tab3:
             else:
                 progress_bar = st.progress(0)
                 progress_text = st.empty()
+                nifty_download_row = None
 
                 def show_backtest_progress(done, total):
                     progress = done / total if total else 0
@@ -1677,6 +1678,9 @@ with tab3:
                     )
 
                 with st.spinner("Running backtest across saved filters and selected dates..."):
+                    if not nifty_file.exists():
+                        progress_text.info("Downloading Nifty 50 benchmark data for this timeframe...")
+                        nifty_download_row = download_nifty_index(backtest_tf)
                     summary_rows, series_by_filter, stock_details_by_filter = run_backtest(
                         stock_files,
                         favorite_filter_sets,
@@ -1700,6 +1704,17 @@ with tab3:
                     f"Backtest complete. Processed {len(stock_files)} stocks. "
                     f"Stocks found on start date: {match_summary or 'none'}."
                 )
+                if "Nifty 50" not in series_by_filter:
+                    if nifty_download_row and not nifty_download_row["Downloaded"]:
+                        st.warning(
+                            "Nifty 50 benchmark could not be downloaded, so it was not added to the chart. "
+                            f"Reason: {nifty_download_row['Error'] or 'No data returned'}"
+                        )
+                    else:
+                        st.warning(
+                            "Nifty 50 benchmark data is not available for the selected date range, "
+                            "so it was not added to the chart."
+                        )
                 st.session_state["backtest_summary_rows"] = summary_rows
                 st.session_state["backtest_series_by_filter"] = series_by_filter
                 st.session_state["backtest_stock_details_by_filter"] = stock_details_by_filter

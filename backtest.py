@@ -153,23 +153,30 @@ def _build_benchmark_gain_series(benchmark_file, calendar_dates):
     if df.empty or "Date" not in df.columns or "Close" not in df.columns:
         return []
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    date_to_close = {
-        date.normalize(): float(close)
-        for date, close in zip(df["Date"], df["Close"])
-        if pd.notna(date) and pd.notna(close)
-    }
     normalized_calendar = [pd.Timestamp(date).normalize() for date in calendar_dates]
-    if any(date not in date_to_close for date in normalized_calendar):
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    close_series = (
+        df.dropna(subset=["Date", "Close"])
+        .assign(Date=lambda data: data["Date"].dt.normalize())
+        .drop_duplicates(subset=["Date"], keep="last")
+        .set_index("Date")["Close"]
+        .sort_index()
+        .astype(float)
+    )
+    if close_series.empty:
         return []
 
-    start_close = date_to_close[normalized_calendar[0]]
+    aligned_closes = close_series.reindex(normalized_calendar, method="ffill")
+    if aligned_closes.isna().any():
+        return []
+
+    start_close = float(aligned_closes.iloc[0])
     if start_close == 0:
         return []
 
     benchmark_rows = []
     for offset, calendar_date in enumerate(normalized_calendar):
-        close_at_offset = date_to_close[calendar_date]
+        close_at_offset = float(aligned_closes.iloc[offset])
         gain_pct = (close_at_offset - start_close) / start_close * 100
         benchmark_rows.append({
             "Candle": offset,
