@@ -63,5 +63,12 @@
   "pattern_create_charts": false,
   "pattern_expressions": [],
   "green_candle_toggle": false,
-  "green_candle_min_gain_pct": 1.0
+  "green_candle_min_gain_pct": 1.0,
+  "backtest_tf": "DAY",
+  "backtest_candles": 93,
+  "gain_candles": 92,
+  "backtest_selected_filters": [
+    "200 Support",
+    "50-200 Golden Cross"
+  ]
 }
