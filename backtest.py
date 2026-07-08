@@ -74,7 +74,11 @@ def get_backtest_calendar_dates(stock_files, sample_size=25):
             best_dates = dates
             best_last_date = last_date
 
-    return [date.normalize() for date in best_dates]
+    if not best_dates or best_last_date is None:
+        return []
+
+    three_year_cutoff = (best_last_date - pd.DateOffset(years=3)).normalize()
+    return [date.normalize() for date in best_dates if date.normalize() >= three_year_cutoff]
 
 
 def _build_backtest_calendar(stock_files, start_date, end_date):
@@ -100,16 +104,18 @@ def _build_backtest_chart_annotations(gain_path):
 
     if "Close" in start_point:
         annotations.append({
-            "type": "L",
+            "type": "BUY",
             "date": pd.Timestamp(start_point["Date"]).normalize(),
             "price": float(start_point["Close"]),
+            "label": "BUY",
         })
 
     if end_point is not start_point and "Close" in end_point:
         annotations.append({
-            "type": "H",
+            "type": "END",
             "date": pd.Timestamp(end_point["Date"]).normalize(),
             "price": float(end_point["Close"]),
+            "label": "END",
         })
 
     return annotations
@@ -288,7 +294,6 @@ def run_backtest(
                         chart_paths[chart_key] = create_stock_chart(
                             pd.io.common.stringify_path(event["JsonPath"]),
                             favorite_configs[filter_name]["filter_set"],
-                            max_points=100000,
                             swing_annotations=_build_backtest_chart_annotations(gain_path),
                         )
                     except Exception:
