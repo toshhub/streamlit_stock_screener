@@ -1,7 +1,7 @@
-
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import yfinance as yf
@@ -14,10 +14,16 @@ TIMEFRAME_CONFIG = {
     "MONTH": {"interval": "1mo", "period": "max", "target_dir": MONTHLY_DIR},
 }
 
+# Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
+# Increase carefully if your network and yfinance remain stable.
+DEFAULT_MAX_DOWNLOAD_WORKERS = 8
+
+
 def flatten_columns(df):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] if c[0] else c[1] for c in df.columns]
     return df
+
 
 def download_symbol(symbol, interval, period, out_file, max_retries=2):
     last_error = None
@@ -29,6 +35,7 @@ def download_symbol(symbol, interval, period, out_file, max_retries=2):
                 period=period,
                 auto_adjust=True,
                 progress=False,
+                threads=False,
             )
             if data.empty:
                 last_error = "No data returned (empty DataFrame)"
@@ -52,8 +59,10 @@ def download_symbol(symbol, interval, period, out_file, max_retries=2):
 
     return False
 
+
 def timeframe_config(timeframe):
     return TIMEFRAME_CONFIG.get(timeframe, TIMEFRAME_CONFIG["DAY"])
+
 
 def clear_downloaded_json_files(timeframe):
     target_dir = timeframe_config(timeframe)["target_dir"]
@@ -66,6 +75,7 @@ def clear_downloaded_json_files(timeframe):
 
     return deleted_count
 
+
 def clean_symbol(value):
     if pd.isna(value):
         return None
@@ -75,6 +85,7 @@ def clean_symbol(value):
     symbol = re.sub(r"^NSE[:\s-]*", "", symbol)
     symbol = symbol.replace(" ", "")
     return symbol or None
+
 
 def find_column(columns, required_terms, optional_terms=None):
     optional_terms = optional_terms or []
@@ -89,6 +100,7 @@ def find_column(columns, required_terms, optional_terms=None):
             return column
 
     return None
+
 
 def load_top_symbols(excel_file, limit=1000):
     df = pd.read_excel(excel_file)
@@ -129,31 +141,65 @@ def load_top_symbols(excel_file, limit=1000):
 
     return symbols
 
-def download_top_stocks(excel_file, timeframe, limit=1000, progress_callback=None):
+
+def _download_symbol_row(symbol, config):
+    out_file = config["target_dir"] / f"{symbol}.json"
+    try:
+        ok = download_symbol(
+            symbol,
+            config["interval"],
+            config["period"],
+            out_file,
+        )
+        return {"Symbol": symbol, "Downloaded": ok, "Error": ""}
+    except Exception as exc:
+        return {"Symbol": symbol, "Downloaded": False, "Error": str(exc)}
+
+
+def download_top_stocks(
+    excel_file,
+    timeframe,
+    limit=1000,
+    progress_callback=None,
+    max_workers=DEFAULT_MAX_DOWNLOAD_WORKERS,
+):
     config = timeframe_config(timeframe)
     target_dir = config["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
 
     symbols = load_top_symbols(excel_file, limit=limit)
-    results = []
-
     total = len(symbols)
+    if total == 0:
+        return []
 
-    for index, symbol in enumerate(symbols, start=1):
-        out_file = target_dir / f"{symbol}.json"
-        try:
-            ok = download_symbol(
-                symbol,
-                config["interval"],
-                config["period"],
-                out_file,
-            )
-            results.append({"Symbol": symbol, "Downloaded": ok, "Error": ""})
-        except Exception as exc:
-            results.append({"Symbol": symbol, "Downloaded": False, "Error": str(exc)})
+    worker_count = max(1, min(int(max_workers or 1), total))
+    results_by_index = [None] * total
+    downloaded_count = 0
+    completed_count = 0
 
-        if progress_callback:
-            downloaded_count = sum(1 for row in results if row["Downloaded"])
-            progress_callback(index, total, downloaded_count, symbol)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_index = {
+            executor.submit(_download_symbol_row, symbol, config): index
+            for index, symbol in enumerate(symbols)
+        }
 
-    return results
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            symbol = symbols[index]
+            try:
+                row = future.result()
+            except Exception as exc:
+                # Defensive fallback: _download_symbol_row already catches exceptions,
+                # but keep this guard so one unexpected failure never stops the full batch.
+                row = {"Symbol": symbol, "Downloaded": False, "Error": str(exc)}
+
+            results_by_index[index] = row
+            completed_count += 1
+            if row["Downloaded"]:
+                downloaded_count += 1
+
+            if progress_callback:
+                progress_callback(completed_count, total, downloaded_count, symbol)
+
+    # Preserve the original symbol order for any downstream display/reporting.
+    return [row for row in results_by_index if row is not None]
