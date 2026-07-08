@@ -45,11 +45,16 @@ def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings):
     return passed
 
 
-def get_backtest_calendar_dates(stock_files):
+def get_backtest_calendar_dates(stock_files, sample_size=25):
     best_dates = []
     best_last_date = None
+    sampled_files = sorted(
+        stock_files,
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )[:sample_size]
 
-    for path in stock_files:
+    for path in sampled_files:
         try:
             df = load_price_dataframe(path)
         except Exception:

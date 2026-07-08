@@ -2,6 +2,7 @@ import json
 import html
 from copy import deepcopy
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -457,6 +458,23 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
     </script>
     """
     components.html(component_html, height=height, scrolling=True)
+
+
+@st.cache_data(show_spinner=False)
+def cached_backtest_calendar_dates(file_signatures):
+    stock_files = [Path(path) for path, _, _ in file_signatures]
+    return [date.date() for date in get_backtest_calendar_dates(stock_files)]
+
+
+def stock_file_signatures(stock_files):
+    signatures = []
+    for path in stock_files:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        signatures.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(signatures)
 
 
 tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "Backtest", "📊 Results"])
@@ -1236,7 +1254,7 @@ with tab3:
 
         target_dir = timeframe_config(backtest_tf)["target_dir"]
         stock_files = sorted(target_dir.glob("*.json"))
-        available_dates = [date.date() for date in get_backtest_calendar_dates(stock_files)]
+        available_dates = cached_backtest_calendar_dates(stock_file_signatures(stock_files))
 
         selected_start_date = None
         selected_end_date = None
