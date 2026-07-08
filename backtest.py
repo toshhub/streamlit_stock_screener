@@ -113,7 +113,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
         gain_pct = (close_at_offset - signal_close) / signal_close * 100
         gain_path.append({
             "Candle": offset,
-            "Average Gain %": round(gain_pct, 2),
+            "Portfolio Gain %": round(gain_pct, 2),
             "Date": calendar_date,
         })
 
@@ -131,7 +131,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
                 "Filter Name": filter_name,
                 "Symbol": path.stem,
                 "Date": signal_date,
-                "Final Gain %": gain_path[-1]["Average Gain %"],
+                "Final Gain %": gain_path[-1]["Portfolio Gain %"],
                 "Gain Path": gain_path,
             })
 
@@ -184,7 +184,7 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
                 for path_point in event["Gain Path"]:
                     path_rows.append({
                         "Candle": int(path_point["Candle"]),
-                        "Gain %": float(path_point["Average Gain %"]),
+                        "Gain %": float(path_point.get("Portfolio Gain %", path_point.get("Average Gain %"))),
                         "Date": path_point["Date"],
                     })
 
@@ -194,33 +194,33 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
                 path_df
                 .groupby("Candle", dropna=False)
                 .agg(**{
-                    "Average Gain %": ("Gain %", "mean"),
+                    "Portfolio Gain %": ("Gain %", "mean"),
                     "Stocks Found": ("Gain %", "count"),
                     "Date": ("Date", "first"),
                 })
                 .reset_index()
                 .sort_values("Candle")
             )
-            gain_series["Average Gain %"] = gain_series["Average Gain %"].round(2)
+            gain_series["Portfolio Gain %"] = gain_series["Portfolio Gain %"].round(2)
             gain_series["Date"] = gain_series["Date"].dt.strftime("%d-%m-%Y")
             final_candle = int(gain_series["Candle"].max())
             final_gain_rows = gain_series[gain_series["Candle"] == final_candle]
             average_gain = (
-                round(float(final_gain_rows.iloc[0]["Average Gain %"]), 2)
+                round(float(final_gain_rows.iloc[0]["Portfolio Gain %"]), 2)
                 if not final_gain_rows.empty
                 else None
             )
-            peak_average_gain = round(float(gain_series["Average Gain %"].max()), 2)
+            peak_portfolio_gain = round(float(gain_series["Portfolio Gain %"].max()), 2)
         else:
-            gain_series = pd.DataFrame(columns=["Candle", "Average Gain %", "Stocks Found"])
+            gain_series = pd.DataFrame(columns=["Candle", "Portfolio Gain %", "Stocks Found"])
             average_gain = None
-            peak_average_gain = None
+            peak_portfolio_gain = None
             stocks_found = 0
 
         summary_rows.append({
             "Filter Name": filter_name,
-            "Gain at End Date": average_gain,
-            "Peak Average Gain %": peak_average_gain,
+            "Portfolio Gain at End Date": average_gain,
+            "Peak Portfolio Gain %": peak_portfolio_gain,
             "Stocks Found": stocks_found,
         })
         series_by_filter[filter_name] = gain_series.to_dict("records")

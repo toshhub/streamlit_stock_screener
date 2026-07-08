@@ -293,9 +293,9 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
     rows_html = []
     for row in summary_rows:
         filter_name = row["Filter Name"]
-        gain = row.get("Gain at End Date", row.get("Gain for next M days"))
+        gain = row.get("Portfolio Gain at End Date", row.get("Gain at End Date", row.get("Gain for next M days")))
         gain_label = "No matches" if gain is None else f"{gain:.2f}%"
-        peak_gain = row.get("Peak Average Gain %")
+        peak_gain = row.get("Peak Portfolio Gain %", row.get("Peak Average Gain %"))
         peak_gain_label = "No matches" if peak_gain is None else f"{peak_gain:.2f}%"
         rows_html.append(
             "<tr>"
@@ -354,8 +354,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         <thead>
           <tr>
             <th>Filter Name</th>
-            <th>Gain at End Date</th>
-            <th>Peak Average Gain</th>
+            <th>Portfolio Gain at End Date</th>
+            <th>Peak Portfolio Gain</th>
             <th>Stocks Found</th>
           </tr>
         </thead>
@@ -378,7 +378,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         const width = 900;
         const height = 320;
         const pad = {{ left: 58, right: 22, top: 30, bottom: 54 }};
-        const gains = rows.map(row => Number(row["Average Gain %"]));
+        const gains = rows.map(row => Number(row["Portfolio Gain %"] ?? row["Average Gain %"]));
         const minY = Math.min(...gains, 0);
         const maxY = Math.max(...gains, 0);
         const spanY = Math.max(1, maxY - minY);
@@ -415,7 +415,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
 
         panel.className = "";
         panel.innerHTML = `
-          <div class="chart-title">${{filterName}} - average gain path from start date</div>
+          <div class="chart-title">${{filterName}} - equal-weight portfolio gain path</div>
           <svg viewBox="0 0 ${{width}} ${{height}}" width="100%" height="320" role="img">
             ${{yTicks}}
             <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
@@ -424,13 +424,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             <polyline points="${{points}}" fill="none" stroke="#2563eb" stroke-width="3" />
             ${{circles}}
             ${{xTicks}}
-            <text x="${{pad.left}}" y="20" class="axis-label">Avg gain %</text>
+            <text x="${{pad.left}}" y="20" class="axis-label">Portfolio gain %</text>
             <text x="${{pad.left}}" y="${{Math.max(14, zeroY - 6)}}" class="zero-label">0%</text>
             <text x="${{pad.left}}" y="${{height - 4}}" class="axis-label">Start ${{firstDate}}</text>
             <text x="${{width - pad.right}}" y="${{height - 4}}" text-anchor="end" class="axis-label">End ${{lastDate}}</text>
             <text x="${{width - pad.right}}" y="${{Math.max(16, y(gains[gains.length - 1]) - 8)}}" text-anchor="end" class="point-label">${{lastGain}}</text>
           </svg>
-          <div id="backtest-point-detail" class="chart-detail">Click or tap a point to see its date and average gain.</div>
+          <div id="backtest-point-detail" class="chart-detail">Click or tap a point to see its date and portfolio gain.</div>
         `;
 
         const detail = panel.querySelector("#backtest-point-detail");
@@ -441,8 +441,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             panel.querySelectorAll(".gain-point").forEach(item => item.classList.remove("active"));
             point.classList.add("active");
             const row = rows[Number(point.dataset.index)];
-            const gain = Number(row["Average Gain %"]);
-            detail.textContent = `Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Stocks: ${{row["Stocks Found"]}}`;
+            const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
+            detail.textContent = `Date: ${{pointDateLabel(row)}} | Portfolio gain: ${{signed(gain)}} | Stocks: ${{row["Stocks Found"]}}`;
           }});
         }});
       }}
@@ -1270,7 +1270,7 @@ with tab3:
                     max_value=max_date,
                     value=(default_start, default_end),
                     format="DD-MM-YYYY",
-                    help="Find stocks on the start date, then calculate their average gain through the end date.",
+                    help="Find stocks on the start date, then calculate the equal-weight portfolio gain through the end date.",
                 )
 
             start_candidates = [date for date in available_dates if date >= selected_start_date]
@@ -1332,7 +1332,7 @@ with tab3:
         if summary_rows:
             result_start, result_end = st.session_state.get("backtest_result_range", ("start date", "end date"))
             st.info(
-                f"Showing stocks found on {result_start} and their average gain path through {result_end}."
+                f"Showing equal-weight portfolio variation for stocks found on {result_start} through {result_end}."
             )
             render_backtest_results_table(summary_rows, series_by_filter)
 
