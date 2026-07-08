@@ -143,7 +143,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
     return events_by_filter
 
 
-def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start_date, end_date):
+def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start_date, end_date, progress_callback=None):
     favorite_configs = {}
     for name in selected_filter_names:
         filter_set, pattern_settings = split_favorite_filter(favorite_filter_sets[name])
@@ -171,10 +171,13 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
             )
             for path in stock_files
         ]
-        for future in as_completed(futures):
+        total = len(futures)
+        for done, future in enumerate(as_completed(futures), start=1):
             file_events = future.result()
             for filter_name, events in file_events.items():
                 all_events[filter_name].extend(events)
+            if progress_callback:
+                progress_callback(done, total)
 
     summary_rows = []
     series_by_filter = {}

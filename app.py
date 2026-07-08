@@ -301,7 +301,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         rows_html.append(
             "<tr>"
             f"<td>{html.escape(filter_name)}</td>"
-            f"<td><button class='gain-link' data-filter='{html.escape(filter_name, quote=True)}'>{html.escape(gain_label)}</button></td>"
+            f"<td>{html.escape(gain_label)}</td>"
             f"<td>{html.escape(peak_gain_label)}</td>"
             f"<td>{int(row.get('Stocks Found', 0))}</td>"
             "</tr>"
@@ -340,6 +340,25 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
       .zero-label {{ fill: #475569; font-size: 11px; }}
       .gain-point {{ cursor: pointer; }}
       .gain-point:hover, .gain-point.active {{ fill: #15803d; stroke: #14532d; stroke-width: 2; }}
+      .chart-legend {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        margin: 8px 0 4px 0;
+      }}
+      .legend-item {{
+        align-items: center;
+        color: #334155;
+        display: inline-flex;
+        font-size: 13px;
+        gap: 6px;
+      }}
+      .legend-swatch {{
+        border-radius: 999px;
+        display: inline-block;
+        height: 10px;
+        width: 10px;
+      }}
       .chart-detail {{
         background: #f8fafc;
         border: 1px solid #cbd5e1;
@@ -349,6 +368,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         margin-top: 8px;
         padding: 8px 10px;
       }}
+      .crosshair-line {{ pointer-events: none; }}
+      .touch-layer {{ cursor: crosshair; touch-action: none; }}
     </style>
     <div class="backtest-wrap">
       <table class="backtest-table">
@@ -362,10 +383,11 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         </thead>
         <tbody>{''.join(rows_html)}</tbody>
       </table>
-      <div id="backtest-chart-panel" class="chart-empty">Click a gain value to view its gain chart.</div>
+      <div id="backtest-chart-panel" class="chart-empty">Preparing comparison chart...</div>
     </div>
     <script>
       const backtestSeries = {payload};
+      const comparisonColors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
 
       function renderChart(filterName) {{
         const panel = document.getElementById("backtest-chart-panel");
@@ -455,6 +477,142 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
           renderChart(button.dataset.filter);
         }});
       }});
+
+      function renderComparisonChart() {{
+        const panel = document.getElementById("backtest-chart-panel");
+        const entries = Object.entries(backtestSeries).filter(([_, rows]) => rows && rows.length);
+        if (!entries.length) {{
+          panel.className = "chart-empty";
+          panel.textContent = "No matching stocks found for the selected filters and dates.";
+          return;
+        }}
+
+        const width = 960;
+        const height = 380;
+        const pad = {{ left: 62, right: 26, top: 34, bottom: 64 }};
+        const plotW = width - pad.left - pad.right;
+        const plotH = height - pad.top - pad.bottom;
+        const maxLen = Math.max(...entries.map(([_, rows]) => rows.length));
+        const allGains = entries.flatMap(([_, rows]) => rows.map(row => Number(row["Portfolio Gain %"] ?? row["Average Gain %"])));
+        const minY = Math.min(...allGains, 0);
+        const maxY = Math.max(...allGains, 0);
+        const spanY = Math.max(1, maxY - minY);
+        const xSpan = Math.max(1, maxLen - 1);
+
+        function x(index) {{ return pad.left + (index / xSpan) * plotW; }}
+        function y(value) {{ return pad.top + ((maxY - value) / spanY) * plotH; }}
+        function signed(value) {{ return (value > 0 ? "+" : "") + value.toFixed(2) + "%"; }}
+        function pointDateLabel(row) {{ return row ? (row["Date"] || row["Start Date"] || "N/A") : "N/A"; }}
+        function escapeHtml(value) {{
+          return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }}
+
+        const referenceRows = entries.reduce((best, [_, rows]) => rows.length > best.length ? rows : best, []);
+        const firstDate = pointDateLabel(referenceRows[0]);
+        const lastDate = pointDateLabel(referenceRows[referenceRows.length - 1]);
+        const yTickValues = Array.from(new Set([minY, minY + spanY * 0.25, minY + spanY * 0.5, minY + spanY * 0.75, maxY, 0].map(value => Number(value.toFixed(2))))).sort((a, b) => b - a);
+        const xTickIndexes = Array.from(new Set(referenceRows.map((_, index) => index).filter((_, index) => index % Math.max(1, Math.ceil(referenceRows.length / 7)) === 0).concat([0, referenceRows.length - 1]))).sort((a, b) => a - b);
+        const zeroY = y(0);
+
+        const yTicks = yTickValues.map(value => `
+          <line x1="${{pad.left - 5}}" y1="${{y(value).toFixed(2)}}" x2="${{width - pad.right}}" y2="${{y(value).toFixed(2)}}" stroke="#e2e8f0" />
+          <text x="${{pad.left - 9}}" y="${{(y(value) + 4).toFixed(2)}}" text-anchor="end" class="axis-label">${{signed(value)}}</text>
+        `).join("");
+        const xTicks = xTickIndexes.map(index => `
+          <line x1="${{x(index).toFixed(2)}}" y1="${{height - pad.bottom}}" x2="${{x(index).toFixed(2)}}" y2="${{height - pad.bottom + 5}}" stroke="#94a3b8" />
+          <text x="${{x(index).toFixed(2)}}" y="${{height - 22}}" text-anchor="middle" class="axis-label">${{pointDateLabel(referenceRows[index])}}</text>
+        `).join("");
+
+        const seriesLines = entries.map(([filterName, rows], seriesIndex) => {{
+          const color = comparisonColors[seriesIndex % comparisonColors.length];
+          const points = rows.map((row, index) => {{
+            const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
+            return `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`;
+          }}).join(" ");
+          return `<polyline points="${{points}}" fill="none" stroke="${{color}}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" />`;
+        }}).join("");
+
+        const legend = entries.map(([filterName, _], seriesIndex) => {{
+          const color = comparisonColors[seriesIndex % comparisonColors.length];
+          return `<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}</span>`;
+        }}).join("");
+
+        panel.className = "";
+        panel.innerHTML = `
+          <div class="chart-title">Equal-weight portfolio gain comparison</div>
+          <div class="chart-legend">${{legend}}</div>
+          <svg id="comparison-chart" viewBox="0 0 ${{width}} ${{height}}" width="100%" height="380" role="img">
+            ${{yTicks}}
+            <line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
+            <line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#cbd5e1" />
+            <line x1="${{pad.left}}" y1="${{zeroY}}" x2="${{width - pad.right}}" y2="${{zeroY}}" stroke="#94a3b8" stroke-dasharray="4 4" />
+            ${{seriesLines}}
+            ${{xTicks}}
+            <line id="comparison-guide" class="crosshair-line" x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#334155" stroke-width="1.2" stroke-dasharray="3 3" opacity="0" />
+            <g id="comparison-points"></g>
+            <rect class="touch-layer" x="${{pad.left}}" y="${{pad.top}}" width="${{plotW}}" height="${{plotH}}" fill="transparent" />
+            <text x="${{pad.left}}" y="20" class="axis-label">Portfolio gain %</text>
+            <text x="${{pad.left}}" y="${{Math.max(14, zeroY - 6)}}" class="zero-label">0%</text>
+            <text x="${{pad.left}}" y="${{height - 6}}" class="axis-label">Start ${{firstDate}}</text>
+            <text x="${{width - pad.right}}" y="${{height - 6}}" text-anchor="end" class="axis-label">End ${{lastDate}}</text>
+          </svg>
+          <div id="comparison-detail" class="chart-detail">Touch, drag, or move across the chart to compare portfolio gains by date.</div>
+        `;
+
+        const svg = panel.querySelector("#comparison-chart");
+        const guide = panel.querySelector("#comparison-guide");
+        const pointLayer = panel.querySelector("#comparison-points");
+        const detail = panel.querySelector("#comparison-detail");
+
+        function showIndex(index) {{
+          const boundedIndex = Math.max(0, Math.min(maxLen - 1, index));
+          const guideX = x(boundedIndex);
+          guide.setAttribute("x1", guideX.toFixed(2));
+          guide.setAttribute("x2", guideX.toFixed(2));
+          guide.setAttribute("opacity", "1");
+
+          const dateLabel = pointDateLabel(referenceRows[boundedIndex]);
+          const detailRows = [];
+          const markers = [];
+          entries.forEach(([filterName, rows], seriesIndex) => {{
+            const row = rows[Math.min(boundedIndex, rows.length - 1)];
+            if (!row) return;
+            const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
+            const color = comparisonColors[seriesIndex % comparisonColors.length];
+            markers.push(`<circle cx="${{guideX.toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="${{color}}" stroke="#ffffff" stroke-width="1.5" />`);
+            detailRows.push(`<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}: <b>${{signed(gain)}}</b> (${{row["Stocks Found"]}} stocks)</span>`);
+          }});
+
+          pointLayer.innerHTML = markers.join("");
+          detail.innerHTML = `<b>${{dateLabel}}</b><br>${{detailRows.join("<br>")}}`;
+        }}
+
+        function indexFromClientX(clientX) {{
+          const rect = svg.getBoundingClientRect();
+          const localX = ((clientX - rect.left) / rect.width) * width;
+          return Math.round(((localX - pad.left) / plotW) * xSpan);
+        }}
+
+        svg.addEventListener("mousemove", event => showIndex(indexFromClientX(event.clientX)));
+        svg.addEventListener("pointerdown", event => {{
+          event.preventDefault();
+          showIndex(indexFromClientX(event.clientX));
+        }});
+        svg.addEventListener("touchmove", event => {{
+          if (!event.touches || !event.touches.length) return;
+          event.preventDefault();
+          showIndex(indexFromClientX(event.touches[0].clientX));
+        }}, {{ passive: false }});
+
+        showIndex(maxLen - 1);
+      }}
+
+      renderComparisonChart();
     </script>
     """
     components.html(component_html, height=height, scrolling=True)
@@ -1330,6 +1488,17 @@ with tab3:
             elif not effective_start_date or not effective_end_date or effective_start_date >= effective_end_date:
                 st.error("Select a valid start date before the end date.")
             else:
+                progress_bar = st.progress(0)
+                progress_text = st.empty()
+
+                def show_backtest_progress(done, total):
+                    progress = done / total if total else 0
+                    progress_bar.progress(progress)
+                    progress_text.info(
+                        f"Backtested {done} of {total} stocks across "
+                        f"{len(selected_backtest_filters)} favorite filter(s)."
+                    )
+
                 with st.spinner("Running backtest across saved filters and selected dates..."):
                     summary_rows, series_by_filter = run_backtest(
                         stock_files,
@@ -1337,7 +1506,10 @@ with tab3:
                         selected_backtest_filters,
                         effective_start_date,
                         effective_end_date,
+                        progress_callback=show_backtest_progress,
                     )
+                progress_bar.progress(1.0)
+                progress_text.success(f"Backtest complete for {len(stock_files)} stocks.")
                 st.session_state["backtest_summary_rows"] = summary_rows
                 st.session_state["backtest_series_by_filter"] = series_by_filter
                 st.session_state["backtest_result_range"] = (
