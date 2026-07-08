@@ -50,46 +50,49 @@ def _backtest_stock_file(path, favorite_configs, backtest_candles, gain_candles)
     if df.empty or len(df) <= backtest_candles:
         return {name: [] for name in favorite_configs}
 
-    start_position = len(df) - 1 - backtest_candles
-    end_position = len(df) - 1 - gain_candles
-    if start_position < 0 or end_position < start_position:
+    reference_position = len(df) - 1 - backtest_candles
+    exit_position = reference_position + gain_candles
+    if reference_position < 0 or exit_position >= len(df):
         return {name: [] for name in favorite_configs}
 
     events_by_filter = {name: [] for name in favorite_configs}
 
-    for position in range(start_position, end_position + 1):
-        signal_close = float(df.iloc[position]["Close"])
-        if signal_close == 0:
-            continue
+    signal_close = float(df.iloc[reference_position]["Close"])
+    if signal_close == 0:
+        return events_by_filter
 
-        gain_path = []
-        for offset in range(gain_candles + 1):
-            close_at_offset = float(df.iloc[position + offset]["Close"])
-            gain_pct = (close_at_offset - signal_close) / signal_close * 100
-            date_at_offset = df.iloc[position + offset]["Date"] if "Date" in df.columns else position + offset
-            gain_path.append({
-                "Candle": offset,
-                "Average Gain %": round(gain_pct, 2),
-                "Date": date_at_offset,
+    gain_path = []
+    for offset in range(gain_candles + 1):
+        close_at_offset = float(df.iloc[reference_position + offset]["Close"])
+        gain_pct = (close_at_offset - signal_close) / signal_close * 100
+        date_at_offset = (
+            df.iloc[reference_position + offset]["Date"]
+            if "Date" in df.columns
+            else reference_position + offset
+        )
+        gain_path.append({
+            "Candle": offset,
+            "Average Gain %": round(gain_pct, 2),
+            "Date": date_at_offset,
+        })
+
+    signal_date = df.iloc[reference_position]["Date"] if "Date" in df.columns else reference_position
+
+    for filter_name, config in favorite_configs.items():
+        if _screen_backtest_signal(
+            df,
+            path.stem,
+            reference_position,
+            config["filter_set"],
+            config["pattern"],
+        ):
+            events_by_filter[filter_name].append({
+                "Filter Name": filter_name,
+                "Symbol": path.stem,
+                "Date": signal_date,
+                "Final Gain %": gain_path[-1]["Average Gain %"],
+                "Gain Path": gain_path,
             })
-
-        signal_date = df.iloc[position]["Date"] if "Date" in df.columns else position
-
-        for filter_name, config in favorite_configs.items():
-            if _screen_backtest_signal(
-                df,
-                path.stem,
-                position,
-                config["filter_set"],
-                config["pattern"],
-            ):
-                events_by_filter[filter_name].append({
-                    "Filter Name": filter_name,
-                    "Symbol": path.stem,
-                    "Date": signal_date,
-                    "Final Gain %": gain_path[-1]["Average Gain %"],
-                    "Gain Path": gain_path,
-                })
 
     return events_by_filter
 
@@ -148,7 +151,7 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
                 .groupby("Candle", dropna=False)
                 .agg(**{
                     "Average Gain %": ("Gain %", "mean"),
-                    "Matches": ("Gain %", "count"),
+                    "Stocks Found": ("Gain %", "count"),
                     "Start Date": ("Date", "min"),
                     "End Date": ("Date", "max"),
                 })
@@ -165,12 +168,10 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
                 else None
             )
             peak_average_gain = round(float(gain_series["Average Gain %"].max()), 2)
-            match_count = int(len(events_df))
         else:
-            gain_series = pd.DataFrame(columns=["Candle", "Average Gain %", "Matches"])
+            gain_series = pd.DataFrame(columns=["Candle", "Average Gain %", "Stocks Found"])
             average_gain = None
             peak_average_gain = None
-            match_count = 0
             stocks_found = 0
 
         summary_rows.append({
@@ -178,7 +179,6 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, backt
             "Gain for next M days": average_gain,
             "Peak Average Gain %": peak_average_gain,
             "Stocks Found": stocks_found,
-            "Matches": match_count,
         })
         series_by_filter[filter_name] = gain_series.to_dict("records")
 

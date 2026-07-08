@@ -303,7 +303,6 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             f"<td><button class='gain-link' data-filter='{html.escape(filter_name, quote=True)}'>{html.escape(gain_label)}</button></td>"
             f"<td>{html.escape(peak_gain_label)}</td>"
             f"<td>{int(row.get('Stocks Found', 0))}</td>"
-            f"<td>{int(row['Matches'])}</td>"
             "</tr>"
         )
 
@@ -358,7 +357,6 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             <th>Gain for next M days</th>
             <th>Peak Average Gain</th>
             <th>Stocks Found</th>
-            <th>Matches</th>
           </tr>
         </thead>
         <tbody>{''.join(rows_html)}</tbody>
@@ -415,7 +413,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
         `).join("");
         const circles = gains.map((gain, index) => {{
           const candle = Number(rows[index]["Candle"]);
-          const label = `Candle +${{candle}} | Date: ${{pointDateLabel(rows[index])}} | Gain: ${{signed(gain)}} | Matches: ${{rows[index]["Matches"]}}`;
+          const label = `Candle +${{candle}} | Date: ${{pointDateLabel(rows[index])}} | Gain: ${{signed(gain)}} | Stocks: ${{rows[index]["Stocks Found"]}}`;
           return `<circle class="gain-point" data-index="${{index}}" cx="${{x(index).toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="#2563eb"><title>${{label}}</title></circle>`;
         }}).join("");
 
@@ -448,7 +446,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, height=560):
             point.classList.add("active");
             const row = rows[Number(point.dataset.index)];
             const gain = Number(row["Average Gain %"]);
-            detail.textContent = `Candle +${{row["Candle"]}} | Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Matches: ${{row["Matches"]}}`;
+            detail.textContent = `Candle +${{row["Candle"]}} | Date: ${{pointDateLabel(row)}} | Average gain: ${{signed(gain)}} | Stocks: ${{row["Stocks Found"]}}`;
           }});
         }});
       }}
@@ -1306,7 +1304,7 @@ with tab3:
         series_by_filter = st.session_state.get("backtest_series_by_filter", {})
         if summary_rows:
             st.info(
-                f"Showing average gain from each historical signal candle to its next {int(gain_candles)} candle(s)."
+                f"Showing stocks found on the -{int(backtest_candles)} candle and their average gain path over the next {int(gain_candles)} candle(s)."
             )
             render_backtest_results_table(summary_rows, series_by_filter)
 
