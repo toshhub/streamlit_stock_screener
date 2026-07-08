@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+from charting import create_stock_chart
 from pattern import evaluate_pattern_filters_from_df
 from screener import load_price_dataframe, normalize_filter_set, screen_dataframe
 
@@ -135,6 +136,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
             events_by_filter[filter_name].append({
                 "Filter Name": filter_name,
                 "Symbol": path.stem,
+                "JsonPath": str(path),
                 "Date": signal_date,
                 "Final Gain %": gain_path[-1]["Portfolio Gain %"],
                 "Gain Path": gain_path,
@@ -226,6 +228,7 @@ def run_backtest(
     summary_rows = []
     series_by_filter = {}
     stock_details_by_filter = {}
+    chart_paths = {}
     for filter_name in selected_filter_names:
         events = all_events[filter_name]
         if events:
@@ -246,11 +249,23 @@ def run_backtest(
                     float(path_point.get("Portfolio Gain %", path_point.get("Average Gain %")))
                     for path_point in gain_path
                 ]
-                stock_rows.append({
+                chart_key = (filter_name, event["JsonPath"])
+                if chart_key not in chart_paths:
+                    try:
+                        chart_paths[chart_key] = create_stock_chart(
+                            pd.io.common.stringify_path(event["JsonPath"]),
+                            favorite_configs[filter_name]["filter_set"],
+                        )
+                    except Exception:
+                        chart_paths[chart_key] = None
+                stock_row = {
                     "Symbol": event["Symbol"],
                     "Gain at End Date": round(float(event["Final Gain %"]), 2),
                     "Peak Gain %": round(max(stock_gain_values), 2),
-                })
+                }
+                if chart_paths[chart_key]:
+                    stock_row["ChartPath"] = chart_paths[chart_key]
+                stock_rows.append(stock_row)
 
             path_df = pd.DataFrame(path_rows)
             path_df["Date"] = pd.to_datetime(path_df["Date"], errors="coerce")
