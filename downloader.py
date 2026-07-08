@@ -17,6 +17,10 @@ TIMEFRAME_CONFIG = {
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
 # Increase carefully if your network and yfinance remain stable.
 DEFAULT_MAX_DOWNLOAD_WORKERS = 8
+NIFTY_DATA_SYMBOL = "NIFTY"
+INDEX_YFINANCE_SYMBOLS = {
+    NIFTY_DATA_SYMBOL: "^NSEI",
+}
 
 
 def flatten_columns(df):
@@ -25,12 +29,17 @@ def flatten_columns(df):
     return df
 
 
+def yfinance_symbol(symbol):
+    clean = str(symbol).strip().upper()
+    return INDEX_YFINANCE_SYMBOLS.get(clean, clean + ".NS")
+
+
 def download_symbol(symbol, interval, period, out_file, max_retries=2):
     last_error = None
     for attempt in range(1, max_retries + 1):
         try:
             data = yf.download(
-                symbol + ".NS",
+                yfinance_symbol(symbol),
                 interval=interval,
                 period=period,
                 auto_adjust=True,
@@ -154,6 +163,23 @@ def _download_symbol_row(symbol, config):
         return {"Symbol": symbol, "Downloaded": ok, "Error": ""}
     except Exception as exc:
         return {"Symbol": symbol, "Downloaded": False, "Error": str(exc)}
+
+
+def download_nifty_index(timeframe):
+    config = timeframe_config(timeframe)
+    target_dir = config["target_dir"]
+    target_dir.mkdir(parents=True, exist_ok=True)
+    out_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json"
+    try:
+        ok = download_symbol(
+            NIFTY_DATA_SYMBOL,
+            config["interval"],
+            config["period"],
+            out_file,
+        )
+        return {"Symbol": NIFTY_DATA_SYMBOL, "Downloaded": ok, "Error": ""}
+    except Exception as exc:
+        return {"Symbol": NIFTY_DATA_SYMBOL, "Downloaded": False, "Error": str(exc)}
 
 
 def download_top_stocks(

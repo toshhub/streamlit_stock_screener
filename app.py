@@ -11,7 +11,13 @@ import streamlit.components.v1 as components
 from backtest import get_backtest_calendar_dates, run_backtest
 from config import *
 from charting import create_stock_chart, sortable_results_table
-from downloader import clear_downloaded_json_files, download_top_stocks, timeframe_config
+from downloader import (
+    NIFTY_DATA_SYMBOL,
+    clear_downloaded_json_files,
+    download_nifty_index,
+    download_top_stocks,
+    timeframe_config,
+)
 from emailer import send_results_email
 from pattern import evaluate_pattern_filters, validate_expression
 from screener import (
@@ -234,7 +240,7 @@ def _get_last_date_from_json_dir(json_dir, top_n=10):
     """Scan up to `top_n` JSON files in `json_dir` and return the latest 'Date' found, or None."""
     if not json_dir or not json_dir.exists():
         return None
-    files = sorted(json_dir.glob("*.json"))[:top_n]
+    files = stock_data_files(json_dir)[:top_n]
     latest = None
     for f in files:
         try:
@@ -249,6 +255,16 @@ def _get_last_date_from_json_dir(json_dir, top_n=10):
         except Exception:
             continue
     return latest
+
+
+def is_stock_data_file(path):
+    return path.stem.upper() != NIFTY_DATA_SYMBOL
+
+
+def stock_data_files(directory):
+    if not directory or not directory.exists():
+        return []
+    return sorted(path for path in directory.glob("*.json") if is_stock_data_file(path))
 
 
 def render_data_availability_status():
@@ -266,7 +282,7 @@ def render_data_availability_status():
 
     any_available = False
     for label, directory in timeframes:
-        file_count = len(list(directory.glob("*.json"))) if directory.exists() else 0
+        file_count = len(stock_data_files(directory))
         last_date = _get_last_date_from_json_dir(directory)
         if file_count > 0 and last_date:
             any_available = True
@@ -660,7 +676,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
             const color = comparisonColors[seriesIndex % comparisonColors.length];
             markers.push(`<circle cx="${{guideX.toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="${{color}}" stroke="#ffffff" stroke-width="1.5" />`);
-            detailRows.push(`<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}: <b>${{signed(gain)}}</b> (${{row["Stocks Found"]}} stocks)</span>`);
+            const suffix = row["Benchmark"] ? "benchmark" : `${{row["Stocks Found"]}} stocks`;
+            detailRows.push(`<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}: <b>${{signed(gain)}}</b> (${{suffix}})</span>`);
           }});
 
           pointLayer.innerHTML = markers.join("");
@@ -781,6 +798,7 @@ with tab1:
                     limit=download_limit,
                     progress_callback=show_download_progress,
                 )
+                nifty_row = download_nifty_index(download_tf)
 
             downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
             progress_bar.progress(1.0)
@@ -794,6 +812,11 @@ with tab1:
                 f"Last download: {last_download_at}"
             )
             st.success(f"✅ Downloaded {downloaded_count} of {len(download_rows)} stocks")
+
+            if nifty_row["Downloaded"]:
+                st.success("Downloaded Nifty 50 benchmark data")
+            else:
+                st.warning(f"Could not download Nifty 50 benchmark data: {nifty_row['Error'] or 'No data returned'}")
 
             failed = [row for row in download_rows if not row["Downloaded"]]
             if failed:
@@ -1414,7 +1437,7 @@ with tab2:
 
         target_dir = timeframe_config(tf)["target_dir"]
         rows = []
-        stock_files = list(target_dir.glob("*.json"))
+        stock_files = stock_data_files(target_dir)
 
         # Render progress bar inside the placeholder below the Run button
         with screener_progress_placeholder.container():
@@ -1486,7 +1509,8 @@ with tab3:
             )
 
         target_dir = timeframe_config(backtest_tf)["target_dir"]
-        stock_files = sorted(target_dir.glob("*.json"))
+        stock_files = stock_data_files(target_dir)
+        nifty_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json"
         available_dates = cached_backtest_calendar_dates(stock_file_signatures(stock_files))
 
         selected_start_date = None
@@ -1582,6 +1606,7 @@ with tab3:
                         effective_start_date,
                         effective_end_date,
                         progress_callback=show_backtest_progress,
+                        benchmark_file=nifty_file,
                     )
                 progress_bar.progress(1.0)
                 progress_text.success(f"Backtest complete for {len(stock_files)} stocks.")

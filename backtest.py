@@ -143,7 +143,51 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
     return events_by_filter
 
 
-def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start_date, end_date, progress_callback=None):
+def _build_benchmark_gain_series(benchmark_file, calendar_dates):
+    if not benchmark_file or not benchmark_file.exists() or not calendar_dates:
+        return []
+
+    df = load_price_dataframe(benchmark_file)
+    if df.empty or "Date" not in df.columns or "Close" not in df.columns:
+        return []
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    date_to_close = {
+        date.normalize(): float(close)
+        for date, close in zip(df["Date"], df["Close"])
+        if pd.notna(date) and pd.notna(close)
+    }
+    normalized_calendar = [pd.Timestamp(date).normalize() for date in calendar_dates]
+    if any(date not in date_to_close for date in normalized_calendar):
+        return []
+
+    start_close = date_to_close[normalized_calendar[0]]
+    if start_close == 0:
+        return []
+
+    benchmark_rows = []
+    for offset, calendar_date in enumerate(normalized_calendar):
+        close_at_offset = date_to_close[calendar_date]
+        gain_pct = (close_at_offset - start_close) / start_close * 100
+        benchmark_rows.append({
+            "Candle": offset,
+            "Portfolio Gain %": round(gain_pct, 2),
+            "Date": calendar_date.strftime("%d-%m-%Y"),
+            "Benchmark": True,
+        })
+
+    return benchmark_rows
+
+
+def run_backtest(
+    stock_files,
+    favorite_filter_sets,
+    selected_filter_names,
+    start_date,
+    end_date,
+    progress_callback=None,
+    benchmark_file=None,
+):
     favorite_configs = {}
     for name in selected_filter_names:
         filter_set, pattern_settings = split_favorite_filter(favorite_filter_sets[name])
@@ -251,5 +295,9 @@ def run_backtest(stock_files, favorite_filter_sets, selected_filter_names, start
         })
         series_by_filter[filter_name] = gain_series.to_dict("records")
         stock_details_by_filter[filter_name] = stock_rows
+
+    benchmark_series = _build_benchmark_gain_series(benchmark_file, calendar_dates)
+    if benchmark_series:
+        series_by_filter["Nifty 50"] = benchmark_series
 
     return summary_rows, series_by_filter, stock_details_by_filter
