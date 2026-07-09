@@ -268,6 +268,10 @@ def run_backtest(
     series_by_filter = {}
     stock_details_by_filter = {}
     chart_paths = {}
+    date_markers = [
+        {"label": "Start", "date": calendar_dates[0]},
+        {"label": "End", "date": calendar_dates[-1]},
+    ]
     for filter_name in selected_filter_names:
         events = all_events[filter_name]
         if events:
@@ -295,6 +299,7 @@ def run_backtest(
                             pd.io.common.stringify_path(event["JsonPath"]),
                             favorite_configs[filter_name]["filter_set"],
                             swing_annotations=_build_backtest_chart_annotations(gain_path),
+                            date_markers=date_markers,
                         )
                     except Exception:
                         chart_paths[chart_key] = None

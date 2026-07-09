@@ -267,9 +267,14 @@ def stock_data_files(directory):
     return sorted(path for path in directory.glob("*.json") if is_stock_data_file(path))
 
 
-def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_filter_sets):
+def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_filter_sets, start_date=None, end_date=None):
     files_by_symbol = {path.stem: path for path in stock_files}
     enriched_details = {}
+    date_markers = []
+    if start_date:
+        date_markers.append({"label": "Start", "date": start_date})
+    if end_date:
+        date_markers.append({"label": "End", "date": end_date})
 
     for filter_name, rows in stock_details_by_filter.items():
         filter_set, _ = split_favorite_filter(favorite_filter_sets.get(filter_name, []))
@@ -278,7 +283,7 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
             enriched_row = dict(row)
             stock_file = files_by_symbol.get(str(row.get("Symbol", "")))
             if stock_file:
-                chart_path = create_stock_chart(stock_file, filter_set)
+                chart_path = create_stock_chart(stock_file, filter_set, date_markers=date_markers)
                 if chart_path:
                     enriched_row["ChartPath"] = chart_path
             enriched_rows.append(enriched_row)
@@ -1694,6 +1699,8 @@ with tab3:
                         stock_details_by_filter,
                         stock_files,
                         favorite_filter_sets,
+                        start_date=effective_start_date,
+                        end_date=effective_end_date,
                     )
                 progress_bar.progress(1.0)
                 match_summary = ", ".join(

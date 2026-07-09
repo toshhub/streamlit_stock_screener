@@ -33,7 +33,7 @@ def load_price_data(path):
     return df.dropna(subset=["Close"])
 
 
-def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=780, swing_annotations=None):
+def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=780, swing_annotations=None, date_markers=None):
     df = load_price_data(json_path)
     ma_periods = required_ma_periods(filter_set)
     if df.empty:
@@ -42,7 +42,20 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
     for period in ma_periods:
         df[f"SMA{period}"] = df["Close"].rolling(period).mean()
 
-    chart_df = df.tail(max_points)
+    marker_values = []
+    if date_markers:
+        for marker in date_markers:
+            marker_date = pd.to_datetime(marker.get("date"), errors="coerce")
+            if pd.notna(marker_date):
+                marker_values.append(marker_date)
+
+    if marker_values:
+        marker_min = min(marker_values)
+        marker_max = max(marker_values)
+        marked_range_df = df[(df["Date"] >= marker_min) & (df["Date"] <= marker_max)]
+        chart_df = marked_range_df if not marked_range_df.empty else df.tail(max_points)
+    else:
+        chart_df = df.tail(max_points)
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{json_path.stem}.png"
 
@@ -119,6 +132,47 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
                     fontsize=9,
                     fontweight="bold",
                 )
+
+    if date_markers:
+        marker_styles = {
+            "Start": {"color": "#16a34a", "offset": 18, "va": "bottom"},
+            "End": {"color": "#dc2626", "offset": -20, "va": "top"},
+        }
+        marker_dates = pd.to_datetime(chart_df["Date"], errors="coerce")
+        chart_min = marker_dates.min()
+        chart_max = marker_dates.max()
+        for marker in date_markers:
+            marker_date = pd.to_datetime(marker.get("date"), errors="coerce")
+            if pd.isna(marker_date) or marker_date < chart_min or marker_date > chart_max:
+                continue
+            label = marker.get("label", "")
+            row_index = (marker_dates - marker_date).abs().idxmin()
+            row = chart_df.loc[row_index]
+            marker_price = row["Close"]
+            style = marker_styles.get(label, {"color": "#7c3aed", "offset": 18, "va": "bottom"})
+            plt.scatter(
+                [row["Date"]],
+                [marker_price],
+                color=style["color"],
+                marker="^" if label == "Start" else "v",
+                s=86,
+                edgecolors="white",
+                linewidths=0.9,
+                zorder=6,
+            )
+            plt.annotate(
+                label,
+                (row["Date"], marker_price),
+                textcoords="offset points",
+                xytext=(0, style["offset"]),
+                ha="center",
+                va=style["va"],
+                color=style["color"],
+                fontsize=9,
+                fontweight="bold",
+                arrowprops=dict(arrowstyle="->", color=style["color"], lw=1.2),
+                bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor=style["color"], alpha=0.9),
+            )
 
     plt.title(json_path.stem)
     plt.xlabel("Date")
