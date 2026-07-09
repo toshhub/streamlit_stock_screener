@@ -484,7 +484,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         gap: 8px;
         justify-content: space-between;
         margin-bottom: 6px;
-        padding: 0 46px;
+        min-height: 38px;
+        padding: 0 48px 0 8px;
         text-align: center;
       }}
       .stock-chart-symbol {{
@@ -494,6 +495,26 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         white-space: nowrap;
       }}
       .stock-chart-counter {{ color: #64748b; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+      .stock-chart-close {{
+        align-items: center;
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        color: #0f172a;
+        cursor: pointer;
+        display: flex;
+        font-size: 20px;
+        font-weight: 700;
+        height: 34px;
+        justify-content: center;
+        line-height: 1;
+        position: absolute;
+        right: 8px;
+        top: 2px;
+        width: 34px;
+        z-index: 4;
+      }}
+      .stock-chart-close:hover, .stock-chart-close:focus {{ background: #e2e8f0; outline: none; }}
       .stock-chart-nav {{
         align-items: center;
         background: rgba(15, 23, 42, 0.78);
@@ -679,6 +700,22 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         }}).join("");
       }}
 
+      function resetStockChartPanel(panel) {{
+        if (!panel) return;
+        panel.classList.remove("active");
+        panel.innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+      }}
+
+      function closeStockChart(section) {{
+        const chartPanel = section ? section.querySelector(".stock-chart-panel") : document.querySelector(".stock-chart-panel.active");
+        if (!chartPanel) return;
+        const ownerSection = section || chartPanel.closest(".stock-detail-section");
+        if (ownerSection) {{
+          ownerSection.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
+        }}
+        resetStockChartPanel(chartPanel);
+      }}
+
       function renderStockChart(section, button) {{
         const chartPanel = section.querySelector(".stock-chart-panel");
         const buttons = Array.from(section.querySelectorAll(".stock-chart-link"));
@@ -687,8 +724,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
 
         document.querySelectorAll(".stock-chart-panel").forEach(panel => {{
           if (panel !== chartPanel) {{
-            panel.classList.remove("active");
-            panel.innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+            resetStockChartPanel(panel);
           }}
         }});
         document.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
@@ -703,6 +739,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             <div class="stock-chart-title-row">
               <span class="stock-chart-symbol">${{symbol}}</span>
               <span class="stock-chart-counter">${{index + 1}} / ${{buttons.length}}</span>
+              <button type="button" class="stock-chart-close" data-chart-close aria-label="Close chart">&times;</button>
             </div>
             <button type="button" class="stock-chart-nav stock-chart-prev" data-chart-nav="prev" aria-label="Previous chart" ${{prevDisabled}}>&lsaquo;</button>
             <button type="button" class="stock-chart-nav stock-chart-next" data-chart-nav="next" aria-label="Next chart" ${{nextDisabled}}>&rsaquo;</button>
@@ -710,6 +747,15 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             <div class="stock-chart-help">Swipe chart or use arrows to move through this filter's stocks.</div>
           </div>
         `;
+
+        const closeButton = chartPanel.querySelector("[data-chart-close]");
+        if (closeButton) {{
+          closeButton.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            closeStockChart(section);
+          }});
+        }}
 
         chartPanel.querySelectorAll("[data-chart-nav]").forEach(navButton => {{
           navButton.addEventListener("click", event => {{
@@ -782,12 +828,17 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             header.dataset.sortDir = nextDir;
             header.textContent = `${{header.dataset.label}} ${{nextDir === "asc" ? "^" : "v"}}`;
             const chartPanel = section.querySelector(".stock-chart-panel");
-            chartPanel.classList.remove("active");
-            chartPanel.innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+            resetStockChartPanel(chartPanel);
             bindStockChartLinks(section);
           }});
         }});
       }}
+
+      document.addEventListener("keydown", event => {{
+        if (event.key === "Escape") {{
+          closeStockChart();
+        }}
+      }});
 
       function renderAllStockDetails() {{
         const panel = document.getElementById("stock-detail-panel");
