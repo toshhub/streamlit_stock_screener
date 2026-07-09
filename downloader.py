@@ -3,6 +3,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
+from threading import Lock
 
 import pandas as pd
 import yfinance as yf
@@ -22,6 +23,7 @@ NIFTY_DATA_SYMBOL = "NIFTY"
 INDEX_YFINANCE_SYMBOLS = {
     NIFTY_DATA_SYMBOL: "^NSEI",
 }
+YFINANCE_DOWNLOAD_LOCK = Lock()
 
 
 def flatten_columns(df):
@@ -139,7 +141,10 @@ def download_symbol(symbol, interval, period, out_file, max_retries=2, increment
             else:
                 download_kwargs["period"] = period
 
-            data = yf.download(**download_kwargs)
+            # yfinance keeps shared module-level state during downloads. Calling it
+            # concurrently can return one ticker's candles to another worker.
+            with YFINANCE_DOWNLOAD_LOCK:
+                data = yf.download(**download_kwargs)
             if data.empty:
                 if not existing_df.empty:
                     return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
