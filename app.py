@@ -1132,6 +1132,12 @@ with tab1:
         step=50,
     )
 
+    full_refresh = st.checkbox(
+        "Full refresh: clear existing JSON files before downloading",
+        value=False,
+        help="Leave unchecked for a faster incremental refresh that appends only candles after each stock file's latest saved date.",
+    )
+
     if excel_file.exists():
         st.success(f"✅ Default Excel Found: {excel_file.name}")
     else:
@@ -1158,13 +1164,14 @@ with tab1:
                 progress = done / total if total else 0
                 progress_bar.progress(progress)
                 progress_text.info(
-                    f"Downloaded {downloaded_count} of {total} stocks. "
+                    f"Processed {downloaded_count} of {total} stocks. "
                     f"Processing {done}/{total}: {symbol}"
                 )
 
-            deleted_count = clear_downloaded_json_files(download_tf)
-            if deleted_count:
-                progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
+            if full_refresh:
+                deleted_count = clear_downloaded_json_files(download_tf)
+                if deleted_count:
+                    progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
 
             with st.spinner(f"⬇️ Downloading top {download_limit} stocks from yfinance..."):
                 download_rows = download_top_stocks(
@@ -1172,10 +1179,12 @@ with tab1:
                     download_tf,
                     limit=download_limit,
                     progress_callback=show_download_progress,
+                    incremental=not full_refresh,
                 )
-                nifty_row = download_nifty_index(download_tf)
+                nifty_row = download_nifty_index(download_tf, incremental=not full_refresh)
 
             downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
+            rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
             progress_bar.progress(1.0)
             last_download_at = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
             update_settings({
@@ -1183,10 +1192,12 @@ with tab1:
                 "last_download_tf": download_tf,
             })
             progress_text.success(
-                f"✅ Downloaded {downloaded_count} of {len(download_rows)} stocks. "
+                f"✅ Processed {downloaded_count} of {len(download_rows)} stocks. "
                 f"Last download: {last_download_at}"
             )
-            st.success(f"✅ Downloaded {downloaded_count} of {len(download_rows)} stocks")
+            st.success(f"✅ Processed {downloaded_count} of {len(download_rows)} stocks")
+
+            st.caption(f"Incremental rows added: {rows_added}")
 
             if nifty_row["Downloaded"]:
                 st.success("Downloaded Nifty 50 benchmark data")
