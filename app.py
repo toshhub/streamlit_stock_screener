@@ -460,9 +460,17 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         border-top: 2px solid #cbd5e1;
         box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.12);
         margin-top: 10px;
-        max-height: 52vh;
-        overflow-y: auto;
+        overflow: hidden;
         padding: 8px;
+      }}
+      .stock-chart-panel.active {{
+        bottom: 0;
+        left: 0;
+        margin-top: 0;
+        max-height: 58vh;
+        position: fixed;
+        right: 0;
+        z-index: 50;
       }}
       .stock-chart-panel img {{ display: block; height: auto; max-height: 46vh; object-fit: contain; width: 100%; }}
       .stock-chart-frame {{ position: relative; touch-action: pan-y; user-select: none; }}
@@ -677,8 +685,16 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         const index = buttons.indexOf(button);
         if (!chartPanel || !button || index < 0) return;
 
+        document.querySelectorAll(".stock-chart-panel").forEach(panel => {{
+          if (panel !== chartPanel) {{
+            panel.classList.remove("active");
+            panel.innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+          }}
+        }});
+        document.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
         section.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
         button.classList.add("active");
+        chartPanel.classList.add("active");
         const symbol = escapeHtml(button.dataset.symbol);
         const prevDisabled = index <= 0 ? "disabled" : "";
         const nextDisabled = index >= buttons.length - 1 ? "disabled" : "";
@@ -706,7 +722,6 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         }});
 
         bindStockChartSwipe(section, chartPanel.querySelector(".stock-chart-frame"));
-        chartPanel.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
       }}
 
       function bindStockChartSwipe(section, frame) {{
@@ -766,7 +781,9 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             }});
             header.dataset.sortDir = nextDir;
             header.textContent = `${{header.dataset.label}} ${{nextDir === "asc" ? "^" : "v"}}`;
-            section.querySelector(".stock-chart-panel").innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+            const chartPanel = section.querySelector(".stock-chart-panel");
+            chartPanel.classList.remove("active");
+            chartPanel.innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
             bindStockChartLinks(section);
           }});
         }});
