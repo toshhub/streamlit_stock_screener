@@ -299,6 +299,18 @@ def _process_downloaded_batch(batch, data, config=None):
             for retry_batch in _chunked(duplicate_tasks, retry_batch_size):
                 rows.extend(_download_batch_rows(retry_batch, config))
 
+        empty_tasks = [
+            task
+            for task in batch
+            if prepared_by_symbol[task["Symbol"]].empty
+            and task["ExistingData"].empty
+        ]
+        if len(batch) > 1 and empty_tasks:
+            retry_symbols.update(task["Symbol"] for task in empty_tasks)
+            retry_batch_size = max(1, len(empty_tasks) // 2)
+            for retry_batch in _chunked(empty_tasks, retry_batch_size):
+                rows.extend(_download_batch_rows(retry_batch, config))
+
     for task in batch:
         symbol = task["Symbol"]
         if symbol in retry_symbols:
@@ -356,6 +368,13 @@ def _download_batch_rows(batch, config):
         data = _download_batch_data(batch, config["interval"])
         return _process_downloaded_batch(batch, data, config=config)
     except Exception as exc:
+        if len(batch) > 1:
+            retry_batch_size = max(1, len(batch) // 2)
+            rows = []
+            for retry_batch in _chunked(batch, retry_batch_size):
+                rows.extend(_download_batch_rows(retry_batch, config))
+            return rows
+
         return [
             {
                 "Index": task["Index"],
