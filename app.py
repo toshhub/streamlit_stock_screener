@@ -330,7 +330,7 @@ def render_data_availability_status():
         st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
 
 
-def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=900):
+def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=1200):
     payload = json.dumps(series_by_filter, default=str)
     chart_details_by_filter = {}
     for filter_name, rows in stock_details_by_filter.items():
@@ -355,7 +355,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         peak_gain_label = "No matches" if peak_gain is None else f"{peak_gain:.2f}%"
         rows_html.append(
             "<tr>"
-            f"<td><button class='filter-detail-link' data-filter='{html.escape(filter_name, quote=True)}'>{html.escape(filter_name)}</button></td>"
+            f"<td>{html.escape(filter_name)}</td>"
             f"<td>{html.escape(gain_label)}</td>"
             f"<td>{html.escape(peak_gain_label)}</td>"
             f"<td>{int(row.get('Stocks Found', 0))}</td>"
@@ -372,7 +372,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         text-align: left;
       }}
       .backtest-table th {{ background: #f8fafc; font-weight: 700; }}
-      .gain-link, .filter-detail-link {{
+      .gain-link {{
         background: transparent;
         border: 0;
         color: #2563eb;
@@ -382,7 +382,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         padding: 0;
         text-decoration: underline;
       }}
-      .gain-link.active, .filter-detail-link.active {{ color: #15803d; }}
+      .gain-link.active {{ color: #15803d; }}
       #backtest-chart-panel {{
         border-top: 1px solid #cbd5e1;
         margin-top: 14px;
@@ -430,6 +430,12 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         margin-top: 14px;
         padding-top: 12px;
       }}
+      .stock-detail-section {{
+        border-top: 1px solid #e5e7eb;
+        margin-top: 18px;
+        padding-top: 14px;
+      }}
+      .stock-detail-section:first-child {{ border-top: 0; margin-top: 0; padding-top: 0; }}
       .stock-symbol {{ font-weight: 700; }}
       .stock-chart-link {{
         background: transparent;
@@ -442,6 +448,11 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         text-decoration: underline;
       }}
       .stock-chart-link.active {{ background: #e0e7ff; border-radius: 4px; color: #1d4ed8; }}
+      .backtest-table th.sortable {{
+        color: #2563eb;
+        cursor: pointer;
+        user-select: none;
+      }}
       .stock-gain-positive {{ color: #15803d; }}
       .stock-gain-negative {{ color: #dc2626; }}
       .stock-chart-panel {{
@@ -454,7 +465,53 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         padding: 8px;
       }}
       .stock-chart-panel img {{ display: block; height: auto; max-height: 46vh; object-fit: contain; width: 100%; }}
+      .stock-chart-frame {{ position: relative; touch-action: pan-y; user-select: none; }}
       .stock-chart-title {{ color: #334155; font-size: 13px; font-weight: 700; margin-bottom: 6px; text-align: center; }}
+      .stock-chart-title-row {{
+        align-items: center;
+        color: #334155;
+        display: flex;
+        font-size: 13px;
+        font-weight: 700;
+        gap: 8px;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        padding: 0 46px;
+        text-align: center;
+      }}
+      .stock-chart-symbol {{
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .stock-chart-counter {{ color: #64748b; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+      .stock-chart-nav {{
+        align-items: center;
+        background: rgba(15, 23, 42, 0.78);
+        border: none;
+        border-radius: 999px;
+        color: #ffffff;
+        cursor: pointer;
+        display: flex;
+        font-size: 28px;
+        font-weight: 700;
+        height: 44px;
+        justify-content: center;
+        line-height: 1;
+        opacity: 0.92;
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 44px;
+        z-index: 3;
+      }}
+      .stock-chart-nav:hover, .stock-chart-nav:focus {{ background: rgba(15, 23, 42, 0.95); outline: none; }}
+      .stock-chart-nav:disabled {{ cursor: not-allowed; opacity: 0.28; }}
+      .stock-chart-prev {{ left: 6px; }}
+      .stock-chart-next {{ right: 6px; }}
+      .stock-chart-image-wrap {{ padding: 0 46px; }}
+      .stock-chart-help {{ color: #64748b; font-size: 12px; margin-top: 5px; text-align: center; }}
       .stock-chart-empty {{ color: #64748b; font-size: 13px; padding: 14px 0; text-align: center; }}
     </style>
     <div class="backtest-wrap">
@@ -470,11 +527,17 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         <tbody>{''.join(rows_html)}</tbody>
       </table>
       <div id="backtest-chart-panel" class="chart-empty">Preparing comparison chart...</div>
-      <div id="stock-detail-panel" class="chart-empty">Click a filter name to view the stocks found for that favorite filter.</div>
+      <div id="stock-detail-panel" class="chart-empty">Preparing stock tables...</div>
     </div>
     <script>
       const backtestSeries = {payload};
       const backtestStockDetails = {stock_payload};
+      const backtestStockFilterNames = Object.keys(backtestStockDetails);
+      backtestStockFilterNames.forEach(filterName => {{
+        backtestStockDetails[filterName] = [...(backtestStockDetails[filterName] || [])].sort(
+          (a, b) => stockValue(b, "Gain at End Date") - stockValue(a, "Gain at End Date")
+        );
+      }});
       const comparisonColors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
 
       function signed(value) {{
@@ -585,18 +648,15 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         }});
       }});
 
-      function renderStockDetails(filterName) {{
-        const panel = document.getElementById("stock-detail-panel");
-        const rows = backtestStockDetails[filterName] || [];
-        if (!rows.length) {{
-          panel.className = "chart-empty";
-          panel.textContent = "No stocks were found for " + filterName + " on the selected start date.";
-          return;
-        }}
+      function stockValue(row, key) {{
+        const value = Number(row[key]);
+        return Number.isFinite(value) ? value : 0;
+      }}
 
-        const body = rows.map(row => {{
-          const endGain = Number(row["Gain at End Date"]);
-          const peakGain = Number(row["Peak Gain %"]);
+      function stockRowsHtml(rows) {{
+        return rows.map(row => {{
+          const endGain = stockValue(row, "Gain at End Date");
+          const peakGain = stockValue(row, "Peak Gain %");
           const symbol = escapeHtml(row["Symbol"]);
           const symbolCell = row["ChartSrc"]
             ? `<button class="stock-chart-link" data-symbol="${{symbol}}" data-chart-src="${{row["ChartSrc"]}}">${{symbol}}</button>`
@@ -609,48 +669,151 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             </tr>
           `;
         }}).join("");
+      }}
 
-        panel.className = "";
-        panel.innerHTML = `
-          <div class="chart-title">${{escapeHtml(filterName)}} - stocks found on start date</div>
-          <table class="backtest-table">
-            <thead>
-              <tr>
-                <th>Stock</th>
-                <th>Gain at End Date</th>
-                <th>Peak Gain</th>
-              </tr>
-            </thead>
-            <tbody>${{body}}</tbody>
-          </table>
-          <div id="backtest-stock-chart-panel" class="stock-chart-panel">
-            <div class="stock-chart-empty">Tap a stock symbol to view its chart</div>
+      function renderStockChart(section, button) {{
+        const chartPanel = section.querySelector(".stock-chart-panel");
+        const buttons = Array.from(section.querySelectorAll(".stock-chart-link"));
+        const index = buttons.indexOf(button);
+        if (!chartPanel || !button || index < 0) return;
+
+        section.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        const symbol = escapeHtml(button.dataset.symbol);
+        const prevDisabled = index <= 0 ? "disabled" : "";
+        const nextDisabled = index >= buttons.length - 1 ? "disabled" : "";
+        chartPanel.innerHTML = `
+          <div class="stock-chart-frame">
+            <div class="stock-chart-title-row">
+              <span class="stock-chart-symbol">${{symbol}}</span>
+              <span class="stock-chart-counter">${{index + 1}} / ${{buttons.length}}</span>
+            </div>
+            <button type="button" class="stock-chart-nav stock-chart-prev" data-chart-nav="prev" aria-label="Previous chart" ${{prevDisabled}}>&lsaquo;</button>
+            <button type="button" class="stock-chart-nav stock-chart-next" data-chart-nav="next" aria-label="Next chart" ${{nextDisabled}}>&rsaquo;</button>
+            <div class="stock-chart-image-wrap"><img src="${{button.dataset.chartSrc}}" alt="${{symbol}} chart"></div>
+            <div class="stock-chart-help">Swipe chart or use arrows to move through this filter's stocks.</div>
           </div>
         `;
 
-        const chartPanel = panel.querySelector("#backtest-stock-chart-panel");
-        panel.querySelectorAll(".stock-chart-link").forEach(button => {{
+        chartPanel.querySelectorAll("[data-chart-nav]").forEach(navButton => {{
+          navButton.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            const offset = navButton.dataset.chartNav === "next" ? 1 : -1;
+            const nextIndex = Math.max(0, Math.min(buttons.length - 1, index + offset));
+            if (nextIndex !== index) renderStockChart(section, buttons[nextIndex]);
+          }});
+        }});
+
+        bindStockChartSwipe(section, chartPanel.querySelector(".stock-chart-frame"));
+        chartPanel.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+      }}
+
+      function bindStockChartSwipe(section, frame) {{
+        if (!frame) return;
+        let touchStartX = 0;
+        let touchStartY = 0;
+        frame.addEventListener("touchstart", event => {{
+          if (!event.changedTouches || !event.changedTouches.length) return;
+          touchStartX = event.changedTouches[0].clientX;
+          touchStartY = event.changedTouches[0].clientY;
+        }}, {{ passive: true }});
+        frame.addEventListener("touchend", event => {{
+          if (!event.changedTouches || !event.changedTouches.length) return;
+          const deltaX = event.changedTouches[0].clientX - touchStartX;
+          const deltaY = event.changedTouches[0].clientY - touchStartY;
+          if (Math.abs(deltaX) < 45 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+          event.preventDefault();
+          const buttons = Array.from(section.querySelectorAll(".stock-chart-link"));
+          const activeIndex = buttons.findIndex(button => button.classList.contains("active"));
+          const nextIndex = Math.max(0, Math.min(buttons.length - 1, activeIndex + (deltaX < 0 ? 1 : -1)));
+          if (nextIndex >= 0 && nextIndex !== activeIndex) renderStockChart(section, buttons[nextIndex]);
+        }}, {{ passive: false }});
+      }}
+
+      function bindStockChartLinks(section) {{
+        section.querySelectorAll(".stock-chart-link").forEach(button => {{
           button.addEventListener("click", event => {{
             event.preventDefault();
             event.stopPropagation();
-            panel.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
-            button.classList.add("active");
-            chartPanel.innerHTML = `
-              <div class="stock-chart-title">${{escapeHtml(button.dataset.symbol)}} chart</div>
-              <img src="${{button.dataset.chartSrc}}" alt="${{escapeHtml(button.dataset.symbol)}} chart">
-            `;
-            chartPanel.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+            renderStockChart(section, button);
           }});
         }});
       }}
 
-      document.querySelectorAll(".filter-detail-link").forEach(button => {{
-        button.addEventListener("click", () => {{
-          document.querySelectorAll(".filter-detail-link").forEach(item => item.classList.remove("active"));
-          button.classList.add("active");
-          renderStockDetails(button.dataset.filter);
+      function bindStockSection(section) {{
+        bindStockChartLinks(section);
+
+        section.querySelectorAll("th.sortable").forEach(header => {{
+          header.addEventListener("click", () => {{
+            const sortKey = header.dataset.sortKey;
+            const currentDir = header.dataset.sortDir === "asc" ? "asc" : "desc";
+            const nextDir = currentDir === "asc" ? "desc" : "asc";
+            const filterName = backtestStockFilterNames[Number(section.dataset.filterIndex)];
+            const rows = [...(backtestStockDetails[filterName] || [])].sort((a, b) => {{
+              const aValue = sortKey === "Symbol" ? String(a[sortKey] || "") : stockValue(a, sortKey);
+              const bValue = sortKey === "Symbol" ? String(b[sortKey] || "") : stockValue(b, sortKey);
+              if (typeof aValue === "string") {{
+                return nextDir === "asc" ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+              }}
+              return nextDir === "asc" ? aValue - bValue : bValue - aValue;
+            }});
+            backtestStockDetails[filterName] = rows;
+            section.querySelector("tbody").innerHTML = stockRowsHtml(rows);
+            section.querySelectorAll("th.sortable").forEach(item => {{
+              item.dataset.sortDir = "";
+              item.textContent = item.dataset.label;
+            }});
+            header.dataset.sortDir = nextDir;
+            header.textContent = `${{header.dataset.label}} ${{nextDir === "asc" ? "^" : "v"}}`;
+            section.querySelector(".stock-chart-panel").innerHTML = `<div class="stock-chart-empty">Tap a stock symbol to view its chart</div>`;
+            bindStockChartLinks(section);
+          }});
         }});
-      }});
+      }}
+
+      function renderAllStockDetails() {{
+        const panel = document.getElementById("stock-detail-panel");
+        const entries = Object.entries(backtestStockDetails);
+        if (!entries.length) {{
+          panel.className = "chart-empty";
+          panel.textContent = "No stocks were found on the selected start date.";
+          return;
+        }}
+
+        panel.className = "";
+        panel.innerHTML = entries.map(([filterName, rows], index) => {{
+          const safeFilter = escapeHtml(filterName);
+          if (!rows.length) {{
+            return `
+              <section class="stock-detail-section" data-filter-index="${{index}}">
+                <div class="chart-title">${{safeFilter}} - stocks found on start date</div>
+                <div class="stock-chart-empty">No stocks were found for this favorite filter.</div>
+              </section>
+            `;
+          }}
+          return `
+            <section class="stock-detail-section" data-filter-index="${{index}}">
+              <div class="chart-title">${{safeFilter}} - stocks found on start date</div>
+              <table class="backtest-table">
+                <thead>
+                  <tr>
+                    <th class="sortable" data-sort-key="Symbol" data-label="Stock">Stock</th>
+                    <th class="sortable" data-sort-key="Gain at End Date" data-label="Gain at End Date" data-sort-dir="desc">Gain at End Date v</th>
+                    <th class="sortable" data-sort-key="Peak Gain %" data-label="Peak Gain">Peak Gain</th>
+                  </tr>
+                </thead>
+                <tbody>${{stockRowsHtml(rows)}}</tbody>
+              </table>
+              <div class="stock-chart-panel">
+                <div class="stock-chart-empty">Tap a stock symbol to view its chart</div>
+              </div>
+            </section>
+          `;
+        }}).join("");
+
+        panel.querySelectorAll(".stock-detail-section").forEach(section => bindStockSection(section));
+      }}
 
       function renderComparisonChart() {{
         const panel = document.getElementById("backtest-chart-panel");
@@ -788,6 +951,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
       }}
 
       renderComparisonChart();
+      renderAllStockDetails();
     </script>
     """
     components.html(component_html, height=height, scrolling=True)

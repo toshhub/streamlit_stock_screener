@@ -42,20 +42,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
     for period in ma_periods:
         df[f"SMA{period}"] = df["Close"].rolling(period).mean()
 
-    marker_values = []
-    if date_markers:
-        for marker in date_markers:
-            marker_date = pd.to_datetime(marker.get("date"), errors="coerce")
-            if pd.notna(marker_date):
-                marker_values.append(marker_date)
-
-    if marker_values:
-        marker_min = min(marker_values)
-        marker_max = max(marker_values)
-        marked_range_df = df[(df["Date"] >= marker_min) & (df["Date"] <= marker_max)]
-        chart_df = marked_range_df if not marked_range_df.empty else df.tail(max_points)
-    else:
-        chart_df = df.tail(max_points)
+    chart_df = df.tail(max_points)
     output_dir.mkdir(parents=True, exist_ok=True)
     out_file = output_dir / f"{json_path.stem}.png"
 
