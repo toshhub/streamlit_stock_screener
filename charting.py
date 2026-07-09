@@ -1,6 +1,8 @@
 import base64
+import hashlib
 import html
 import json
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -33,7 +35,27 @@ def load_price_data(path):
     return df.dropna(subset=["Close"])
 
 
+def _chart_context_fingerprint(json_path, filter_set, max_points, swing_annotations, date_markers):
+    try:
+        stat = json_path.stat()
+        file_signature = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
+    except OSError:
+        file_signature = {}
+
+    payload = {
+        "source": str(json_path),
+        "file": file_signature,
+        "filter_set": filter_set,
+        "max_points": max_points,
+        "swing_annotations": swing_annotations or [],
+        "date_markers": date_markers or [],
+    }
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=780, swing_annotations=None, date_markers=None):
+    json_path = Path(json_path)
     df = load_price_data(json_path)
     ma_periods = required_ma_periods(filter_set)
     if df.empty:
@@ -44,7 +66,14 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
 
     chart_df = df.tail(max_points)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_file = output_dir / f"{json_path.stem}.png"
+    fingerprint = _chart_context_fingerprint(
+        json_path,
+        filter_set,
+        max_points,
+        swing_annotations,
+        date_markers,
+    )
+    out_file = output_dir / f"{json_path.stem}_{fingerprint}.png"
 
     plt.figure(figsize=(10, 5.5))
 
@@ -174,6 +203,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
 
 
 def image_to_data_uri(path):
+    path = Path(path)
     with open(path, "rb") as image_file:
         encoded = base64.b64encode(image_file.read()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
@@ -490,18 +520,22 @@ def results_hover_table_html(df):
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
         chart_html = ""
+        data_uri = ""
         if chart_path:
-            chart_html = (
-                f'<span class="chart-tooltip">'
-                f'<img src="{image_to_data_uri(chart_path)}" alt="{html.escape(str(row.get("Symbol", "Chart")))} chart">'
-                f'</span>'
-            )
+            try:
+                data_uri = image_to_data_uri(chart_path)
+                chart_html = (
+                    f'<span class="chart-tooltip">'
+                    f'<img src="{data_uri}" alt="{html.escape(str(row.get("Symbol", "Chart")))} chart">'
+                    f'</span>'
+                )
+            except OSError:
+                data_uri = ""
 
         for column in visible_df.columns:
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
-            if column == "Symbol" and chart_html:
-                data_uri = image_to_data_uri(chart_path)
+            if column == "Symbol" and chart_html and data_uri:
                 escaped_value = (
                     f'<span class="stock-hover" '
                     f'data-symbol="{html.escape(value, quote=True)}" '
