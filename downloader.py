@@ -1,4 +1,5 @@
 import json
+import hashlib
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +19,8 @@ TIMEFRAME_CONFIG = {
 
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
 # Increase carefully if your network and yfinance remain stable.
-DEFAULT_MAX_DOWNLOAD_WORKERS = 8
+DEFAULT_MAX_DOWNLOAD_WORKERS = 3
+DEFAULT_DOWNLOAD_BATCH_SIZE = 50
 NIFTY_DATA_SYMBOL = "NIFTY"
 INDEX_YFINANCE_SYMBOLS = {
     NIFTY_DATA_SYMBOL: "^NSEI",
@@ -90,6 +92,22 @@ def _prepare_downloaded_dataframe(data):
     return _records_to_dataframe(data.to_dict(orient="records"))
 
 
+def _downloaded_data_hash(df):
+    if df.empty:
+        return ""
+
+    signature_columns = [
+        column
+        for column in ["Date", "Open", "High", "Low", "Close", "Volume"]
+        if column in df.columns
+    ]
+    signature_df = df[signature_columns].copy()
+    if "Date" in signature_df.columns:
+        signature_df["Date"] = pd.to_datetime(signature_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    raw = signature_df.to_json(orient="records", date_format="iso", default_handler=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _write_records_atomic(out_file, df):
     output_df = df.copy()
     output_df["Date"] = pd.to_datetime(output_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -116,6 +134,213 @@ def _merge_price_data(existing_df, downloaded_df):
     merged["Date"] = merged["Date"].dt.strftime("%Y-%m-%d")
     merged = merged.drop_duplicates(subset=["Date"], keep="last")
     return merged
+
+
+def _chunked(items, size):
+    size = max(1, int(size or 1))
+    for index in range(0, len(items), size):
+        yield items[index:index + size]
+
+
+def _download_request_window(existing_df, interval, period, incremental):
+    if not incremental:
+        return None, None, period
+
+    download_start = _next_download_start(existing_df, interval)
+    today = pd.Timestamp.today().normalize()
+    if download_start is not None and download_start.normalize() > today:
+        return download_start, None, None
+
+    if download_start is None:
+        return None, None, period
+
+    return download_start, today + timedelta(days=1), None
+
+
+def _build_download_plan(symbols, config, incremental):
+    today = pd.Timestamp.today().normalize()
+    ready_rows = []
+    download_tasks = []
+
+    for index, symbol in enumerate(symbols):
+        out_file = config["target_dir"] / f"{symbol}.json"
+        existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
+        start, end, period = _download_request_window(
+            existing_df,
+            config["interval"],
+            config["period"],
+            incremental,
+        )
+
+        if incremental and start is not None and start.normalize() > today:
+            ready_rows.append({
+                "Index": index,
+                "Row": {"Symbol": symbol, "Downloaded": True, "Rows Added": 0, "Status": "Already current", "Error": ""},
+            })
+            continue
+
+        download_tasks.append({
+            "Index": index,
+            "Symbol": symbol,
+            "Ticker": yfinance_symbol(symbol),
+            "OutFile": out_file,
+            "ExistingData": existing_df,
+            "RowsBefore": len(existing_df),
+            "Start": start,
+            "End": end,
+            "Period": period,
+        })
+
+    return ready_rows, download_tasks
+
+
+def _task_window_key(task):
+    start_key = task["Start"].strftime("%Y-%m-%d") if task["Start"] is not None else ""
+    end_key = task["End"].strftime("%Y-%m-%d") if task["End"] is not None else ""
+    period_key = task["Period"] or ""
+    return start_key, end_key, period_key
+
+
+def _split_tasks_into_batches(tasks, batch_size):
+    grouped = {}
+    for task in tasks:
+        grouped.setdefault(_task_window_key(task), []).append(task)
+
+    batches = []
+    for key in sorted(grouped):
+        for chunk in _chunked(grouped[key], batch_size):
+            batches.append(chunk)
+    return batches
+
+
+def _extract_ticker_frame(data, ticker):
+    if data.empty:
+        return pd.DataFrame()
+
+    if isinstance(data.columns, pd.MultiIndex):
+        if ticker in data.columns.get_level_values(0):
+            return data.xs(ticker, axis=1, level=0, drop_level=True)
+        if ticker in data.columns.get_level_values(-1):
+            return data.xs(ticker, axis=1, level=-1, drop_level=True)
+        return pd.DataFrame()
+
+    return data
+
+
+def _download_batch_data(batch, interval, max_retries=2):
+    first = batch[0]
+    tickers = [task["Ticker"] for task in batch]
+    download_kwargs = {
+        "tickers": tickers,
+        "interval": interval,
+        "auto_adjust": True,
+        "progress": False,
+        "threads": True,
+        "group_by": "ticker",
+    }
+    if first["Start"] is not None:
+        download_kwargs["start"] = first["Start"].strftime("%Y-%m-%d")
+        download_kwargs["end"] = first["End"].strftime("%Y-%m-%d")
+    else:
+        download_kwargs["period"] = first["Period"]
+
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            data = yf.download(**download_kwargs)
+            return data
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_retries:
+                time.sleep(2)
+                continue
+            raise
+
+    raise RuntimeError(last_error or "Batch download failed")
+
+
+def _process_downloaded_batch(batch, data):
+    prepared_by_symbol = {}
+    hash_groups = {}
+    rows = []
+
+    for task in batch:
+        symbol = task["Symbol"]
+        ticker_data = _extract_ticker_frame(data, task["Ticker"])
+        downloaded_df = _prepare_downloaded_dataframe(ticker_data) if not ticker_data.empty else pd.DataFrame()
+        prepared_by_symbol[symbol] = downloaded_df
+        data_hash = _downloaded_data_hash(downloaded_df)
+        if data_hash:
+            hash_groups.setdefault(data_hash, []).append(symbol)
+
+    duplicate_symbols = {
+        symbol
+        for symbols in hash_groups.values()
+        if len(symbols) > 1
+        for symbol in symbols
+    }
+
+    for task in batch:
+        symbol = task["Symbol"]
+        downloaded_df = prepared_by_symbol[symbol]
+        existing_df = task["ExistingData"]
+
+        if downloaded_df.empty:
+            if not existing_df.empty:
+                rows.append({
+                    "Index": task["Index"],
+                    "Row": {"Symbol": symbol, "Downloaded": True, "Rows Added": 0, "Status": "Already current", "Error": ""},
+                })
+            else:
+                rows.append({
+                    "Index": task["Index"],
+                    "Row": {"Symbol": symbol, "Downloaded": False, "Rows Added": 0, "Status": "Failed", "Error": "No data returned"},
+                })
+            continue
+
+        if symbol in duplicate_symbols:
+            duplicate_group = next(
+                symbols for symbols in hash_groups.values()
+                if symbol in symbols and len(symbols) > 1
+            )
+            rows.append({
+                "Index": task["Index"],
+                "Row": {
+                    "Symbol": symbol,
+                    "Downloaded": False,
+                    "Rows Added": 0,
+                    "Status": "Duplicate data blocked",
+                    "Error": f"Identical candle data returned for: {', '.join(duplicate_group)}",
+                },
+            })
+            continue
+
+        merged_df = _merge_price_data(existing_df, downloaded_df)
+        rows_before = task["RowsBefore"]
+        rows_after = len(merged_df)
+        rows_added = max(0, rows_after - rows_before)
+        _write_records_atomic(task["OutFile"], merged_df)
+        status = "Full download" if existing_df.empty else ("Updated" if rows_added else "Already current")
+        rows.append({
+            "Index": task["Index"],
+            "Row": {"Symbol": symbol, "Downloaded": True, "Rows Added": rows_added, "Status": status, "Error": ""},
+        })
+
+    return rows
+
+
+def _download_batch_rows(batch, config):
+    try:
+        data = _download_batch_data(batch, config["interval"])
+        return _process_downloaded_batch(batch, data)
+    except Exception as exc:
+        return [
+            {
+                "Index": task["Index"],
+                "Row": {"Symbol": task["Symbol"], "Downloaded": False, "Rows Added": 0, "Status": "Failed", "Error": str(exc)},
+            }
+            for task in batch
+        ]
 
 
 def download_symbol(symbol, interval, period, out_file, max_retries=2, incremental=True):
@@ -294,6 +519,7 @@ def download_top_stocks(
     progress_callback=None,
     max_workers=DEFAULT_MAX_DOWNLOAD_WORKERS,
     incremental=True,
+    batch_size=DEFAULT_DOWNLOAD_BATCH_SIZE,
 ):
     config = timeframe_config(timeframe)
     target_dir = config["target_dir"]
@@ -304,34 +530,56 @@ def download_top_stocks(
     if total == 0:
         return []
 
-    worker_count = max(1, min(int(max_workers or 1), total))
+    ready_rows, download_tasks = _build_download_plan(symbols, config, incremental)
     results_by_index = [None] * total
-    downloaded_count = 0
+
     completed_count = 0
+    downloaded_count = 0
+    for item in ready_rows:
+        row = item["Row"]
+        results_by_index[item["Index"]] = row
+        completed_count += 1
+        if row["Downloaded"]:
+            downloaded_count += 1
+        if progress_callback:
+            progress_callback(completed_count, total, downloaded_count, row["Symbol"])
+
+    batches = _split_tasks_into_batches(download_tasks, batch_size)
+    worker_count = max(1, min(int(max_workers or 1), len(batches) or 1))
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_index = {
-            executor.submit(_download_symbol_row, symbol, config, incremental): index
-            for index, symbol in enumerate(symbols)
+        future_to_batch = {
+            executor.submit(_download_batch_rows, batch, config): batch
+            for batch in batches
         }
 
-        for future in as_completed(future_to_index):
-            index = future_to_index[future]
-            symbol = symbols[index]
+        for future in as_completed(future_to_batch):
             try:
-                row = future.result()
+                batch_rows = future.result()
             except Exception as exc:
-                # Defensive fallback: _download_symbol_row already catches exceptions,
-                # but keep this guard so one unexpected failure never stops the full batch.
-                row = {"Symbol": symbol, "Downloaded": False, "Rows Added": 0, "Status": "Failed", "Error": str(exc)}
+                batch_rows = [
+                    {
+                        "Index": task["Index"],
+                        "Row": {
+                            "Symbol": task["Symbol"],
+                            "Downloaded": False,
+                            "Rows Added": 0,
+                            "Status": "Failed",
+                            "Error": str(exc),
+                        },
+                    }
+                    for task in future_to_batch[future]
+                ]
 
-            results_by_index[index] = row
-            completed_count += 1
-            if row["Downloaded"]:
-                downloaded_count += 1
+            for item in batch_rows:
+                row = item["Row"]
+                results_by_index[item["Index"]] = row
+                completed_count += 1
+                if row["Downloaded"]:
+                    downloaded_count += 1
 
-            if progress_callback:
-                progress_callback(completed_count, total, downloaded_count, symbol)
+                if progress_callback:
+                    progress_callback(completed_count, total, downloaded_count, row["Symbol"])
 
     # Preserve the original symbol order for any downstream display/reporting.
     return [row for row in results_by_index if row is not None]
