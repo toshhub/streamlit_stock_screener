@@ -20,7 +20,7 @@ TIMEFRAME_CONFIG = {
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
 # Increase carefully if your network and yfinance remain stable.
 DEFAULT_MAX_DOWNLOAD_WORKERS = 3
-DEFAULT_DOWNLOAD_BATCH_SIZE = 50
+DEFAULT_DOWNLOAD_BATCH_SIZE = 25
 NIFTY_DATA_SYMBOL = "NIFTY"
 INDEX_YFINANCE_SYMBOLS = {
     NIFTY_DATA_SYMBOL: "^NSEI",
@@ -259,10 +259,9 @@ def _download_batch_data(batch, interval, max_retries=2):
     raise RuntimeError(last_error or "Batch download failed")
 
 
-def _process_downloaded_batch(batch, data):
+def _prepare_batch_frames(batch, data):
     prepared_by_symbol = {}
     hash_groups = {}
-    rows = []
 
     for task in batch:
         symbol = task["Symbol"]
@@ -273,6 +272,14 @@ def _process_downloaded_batch(batch, data):
         if data_hash:
             hash_groups.setdefault(data_hash, []).append(symbol)
 
+    return prepared_by_symbol, hash_groups
+
+
+def _process_downloaded_batch(batch, data, config=None):
+    prepared_by_symbol, hash_groups = _prepare_batch_frames(batch, data)
+    tasks_by_symbol = {task["Symbol"]: task for task in batch}
+    rows = []
+
     duplicate_symbols = {
         symbol
         for symbols in hash_groups.values()
@@ -280,8 +287,23 @@ def _process_downloaded_batch(batch, data):
         for symbol in symbols
     }
 
+    retry_symbols = set()
+    if config is not None:
+        for symbols in hash_groups.values():
+            if len(symbols) <= 1:
+                continue
+
+            retry_symbols.update(symbols)
+            duplicate_tasks = [tasks_by_symbol[symbol] for symbol in symbols]
+            retry_batch_size = max(1, len(duplicate_tasks) // 2)
+            for retry_batch in _chunked(duplicate_tasks, retry_batch_size):
+                rows.extend(_download_batch_rows(retry_batch, config))
+
     for task in batch:
         symbol = task["Symbol"]
+        if symbol in retry_symbols:
+            continue
+
         downloaded_df = prepared_by_symbol[symbol]
         existing_df = task["ExistingData"]
 
@@ -332,7 +354,7 @@ def _process_downloaded_batch(batch, data):
 def _download_batch_rows(batch, config):
     try:
         data = _download_batch_data(batch, config["interval"])
-        return _process_downloaded_batch(batch, data)
+        return _process_downloaded_batch(batch, data, config=config)
     except Exception as exc:
         return [
             {
