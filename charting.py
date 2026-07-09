@@ -2,6 +2,7 @@ import base64
 import hashlib
 import html
 import json
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -35,7 +36,41 @@ def load_price_data(path):
     return df.dropna(subset=["Close"])
 
 
-def _chart_context_fingerprint(json_path, filter_set, max_points, swing_annotations, date_markers):
+def _symbol_key(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _chart_source_from_path(chart_path):
+    stem = Path(chart_path).stem
+    parts = stem.rsplit("_", 1)
+    if len(parts) == 2 and re.fullmatch(r"[0-9a-f]{12}", parts[1]):
+        return parts[0]
+    return stem
+
+
+def _row_chart_matches_symbol(row_symbol, chart_path, chart_source=None):
+    expected = _symbol_key(row_symbol)
+    if not expected or not chart_path:
+        return False
+
+    source = chart_source or _chart_source_from_path(chart_path)
+    return _symbol_key(source) == expected
+
+
+def _chart_data_hash(chart_df):
+    signature_columns = [
+        column
+        for column in ["Date", "Open", "High", "Low", "Close"]
+        if column in chart_df.columns
+    ]
+    signature_df = chart_df[signature_columns].copy()
+    if "Date" in signature_df.columns:
+        signature_df["Date"] = pd.to_datetime(signature_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    raw = signature_df.to_json(orient="records", date_format="iso", default_handler=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, swing_annotations, date_markers):
     try:
         stat = json_path.stat()
         file_signature = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
@@ -45,6 +80,7 @@ def _chart_context_fingerprint(json_path, filter_set, max_points, swing_annotati
     payload = {
         "source": str(json_path),
         "file": file_signature,
+        "data_hash": _chart_data_hash(chart_df),
         "filter_set": filter_set,
         "max_points": max_points,
         "swing_annotations": swing_annotations or [],
@@ -68,6 +104,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
     output_dir.mkdir(parents=True, exist_ok=True)
     fingerprint = _chart_context_fingerprint(
         json_path,
+        chart_df,
         filter_set,
         max_points,
         swing_annotations,
@@ -210,7 +247,7 @@ def image_to_data_uri(path):
 
 
 def results_hover_table_html(df):
-    visible_df = df.drop(columns=["ChartPath"], errors="ignore")
+    visible_df = df.drop(columns=["ChartPath", "ChartSource"], errors="ignore")
     chart_paths = df.get("ChartPath")
 
     styles = """
@@ -516,12 +553,14 @@ def results_hover_table_html(df):
         for index, column in enumerate(visible_df.columns)
     )
     rows = []
+    chart_sources = df.get("ChartSource")
     for row_index, row in visible_df.iterrows():
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
+        chart_source = chart_sources.loc[row_index] if chart_sources is not None else None
         chart_html = ""
         data_uri = ""
-        if chart_path:
+        if chart_path and _row_chart_matches_symbol(row.get("Symbol"), chart_path, chart_source):
             try:
                 data_uri = image_to_data_uri(chart_path)
                 chart_html = (
@@ -546,7 +585,7 @@ def results_hover_table_html(df):
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
-    script = """
+    script = r"""
     <script>
       // Per-column sort directions (keyed by columnIndex)
       const numericSortDirections = {};

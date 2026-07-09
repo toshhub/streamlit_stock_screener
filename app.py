@@ -286,6 +286,7 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
                 chart_path = create_stock_chart(stock_file, filter_set, date_markers=date_markers)
                 if chart_path:
                     enriched_row["ChartPath"] = chart_path
+                    enriched_row["ChartSource"] = stock_file.stem
             enriched_rows.append(enriched_row)
         enriched_details[filter_name] = enriched_rows
 
@@ -1856,6 +1857,7 @@ with tab2:
                             )
                             if chart_path:
                                 r["ChartPath"] = chart_path
+                                r["ChartSource"] = f.stem
                         rows.append(r)
 
                 total = len(stock_files)
@@ -2092,6 +2094,8 @@ with tab4:
         if "ChartPath" in df.columns:
             chart_df = display_df.copy()
             chart_df["ChartPath"] = df["ChartPath"]
+            if "ChartSource" in df.columns:
+                chart_df["ChartSource"] = df["ChartSource"]
             sortable_results_table(chart_df)
         else:
             sortable_results_table(display_df)

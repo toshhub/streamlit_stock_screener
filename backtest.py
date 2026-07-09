@@ -310,6 +310,7 @@ def run_backtest(
                 }
                 if chart_paths[chart_key]:
                     stock_row["ChartPath"] = chart_paths[chart_key]
+                    stock_row["ChartSource"] = event["Symbol"]
                 stock_rows.append(stock_row)
 
             path_df = pd.DataFrame(path_rows)
