@@ -414,6 +414,25 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         height: 10px;
         width: 10px;
       }}
+      .series-toggle-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        margin: 8px 0 6px 0;
+      }}
+      .series-toggle {{
+        align-items: center;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        color: #334155;
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 13px;
+        gap: 6px;
+        padding: 5px 8px;
+        user-select: none;
+      }}
+      .series-toggle input {{ cursor: pointer; margin: 0; }}
       .chart-detail {{
         background: #f8fafc;
         border: 1px solid #cbd5e1;
@@ -568,6 +587,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         );
       }});
       const comparisonColors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
+      const comparisonVisible = {{}};
 
       function signed(value) {{
         return (value > 0 ? "+" : "") + value.toFixed(2) + "%";
@@ -885,10 +905,45 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
 
       function renderComparisonChart() {{
         const panel = document.getElementById("backtest-chart-panel");
-        const entries = Object.entries(backtestSeries).filter(([_, rows]) => rows && rows.length);
-        if (!entries.length) {{
+        const allEntries = Object.entries(backtestSeries)
+          .filter(([_, rows]) => rows && rows.length)
+          .map(([filterName, rows], seriesIndex) => ({{
+            filterName,
+            rows,
+            color: comparisonColors[seriesIndex % comparisonColors.length],
+          }}));
+        if (!allEntries.length) {{
           panel.className = "chart-empty";
           panel.textContent = "No matching stocks found for the selected filters and dates.";
+          return;
+        }}
+
+        allEntries.forEach(entry => {{
+          if (!(entry.filterName in comparisonVisible)) comparisonVisible[entry.filterName] = true;
+        }});
+        const entries = allEntries.filter(entry => comparisonVisible[entry.filterName]);
+        const controls = allEntries.map((entry, seriesIndex) => `
+          <label class="series-toggle">
+            <input type="checkbox" data-series-index="${{seriesIndex}}" ${{comparisonVisible[entry.filterName] ? "checked" : ""}}>
+            <span class="legend-swatch" style="background:${{entry.color}}"></span>
+            <span>${{escapeHtml(entry.filterName)}}</span>
+          </label>
+        `).join("");
+
+        if (!entries.length) {{
+          panel.className = "";
+          panel.innerHTML = `
+            <div class="chart-title">Equal-weight portfolio gain comparison</div>
+            <div class="series-toggle-row">${{controls}}</div>
+            <div class="chart-empty">Select at least one filter or benchmark to show the chart.</div>
+          `;
+          panel.querySelectorAll("[data-series-index]").forEach(input => {{
+            input.addEventListener("change", event => {{
+              const entry = allEntries[Number(event.target.dataset.seriesIndex)];
+              if (entry) comparisonVisible[entry.filterName] = event.target.checked;
+              renderComparisonChart();
+            }});
+          }});
           return;
         }}
 
@@ -897,8 +952,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         const pad = {{ left: 62, right: 26, top: 34, bottom: 64 }};
         const plotW = width - pad.left - pad.right;
         const plotH = height - pad.top - pad.bottom;
-        const maxLen = Math.max(...entries.map(([_, rows]) => rows.length));
-        const allGains = entries.flatMap(([_, rows]) => rows.map(row => Number(row["Portfolio Gain %"] ?? row["Average Gain %"])));
+        const maxLen = Math.max(...entries.map(entry => entry.rows.length));
+        const allGains = entries.flatMap(entry => entry.rows.map(row => Number(row["Portfolio Gain %"] ?? row["Average Gain %"])));
         const minY = Math.min(...allGains, 0);
         const maxY = Math.max(...allGains, 0);
         const spanY = Math.max(1, maxY - minY);
@@ -917,7 +972,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             .replace(/'/g, "&#39;");
         }}
 
-        const referenceRows = entries.reduce((best, [_, rows]) => rows.length > best.length ? rows : best, []);
+        const referenceRows = entries.reduce((best, entry) => entry.rows.length > best.length ? entry.rows : best, []);
         const firstDate = pointDateLabel(referenceRows[0]);
         const lastDate = pointDateLabel(referenceRows[referenceRows.length - 1]);
         const yTickValues = Array.from(new Set([minY, minY + spanY * 0.25, minY + spanY * 0.5, minY + spanY * 0.75, maxY, 0].map(value => Number(value.toFixed(2))))).sort((a, b) => b - a);
@@ -933,23 +988,22 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
           <text x="${{x(index).toFixed(2)}}" y="${{height - 22}}" text-anchor="middle" class="axis-label">${{pointDateLabel(referenceRows[index])}}</text>
         `).join("");
 
-        const seriesLines = entries.map(([filterName, rows], seriesIndex) => {{
-          const color = comparisonColors[seriesIndex % comparisonColors.length];
-          const points = rows.map((row, index) => {{
+        const seriesLines = entries.map(entry => {{
+          const points = entry.rows.map((row, index) => {{
             const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
             return `${{x(index).toFixed(2)}},${{y(gain).toFixed(2)}}`;
           }}).join(" ");
-          return `<polyline points="${{points}}" fill="none" stroke="${{color}}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" />`;
+          return `<polyline points="${{points}}" fill="none" stroke="${{entry.color}}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" />`;
         }}).join("");
 
-        const legend = entries.map(([filterName, _], seriesIndex) => {{
-          const color = comparisonColors[seriesIndex % comparisonColors.length];
-          return `<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}</span>`;
+        const legend = entries.map(entry => {{
+          return `<span class="legend-item"><span class="legend-swatch" style="background:${{entry.color}}"></span>${{escapeHtml(entry.filterName)}}</span>`;
         }}).join("");
 
         panel.className = "";
         panel.innerHTML = `
           <div class="chart-title">Equal-weight portfolio gain comparison</div>
+          <div class="series-toggle-row">${{controls}}</div>
           <div class="chart-legend">${{legend}}</div>
           <svg id="comparison-chart" viewBox="0 0 ${{width}} ${{height}}" width="100%" height="380" role="img">
             ${{yTicks}}
@@ -973,6 +1027,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         const guide = panel.querySelector("#comparison-guide");
         const pointLayer = panel.querySelector("#comparison-points");
         const detail = panel.querySelector("#comparison-detail");
+        panel.querySelectorAll("[data-series-index]").forEach(input => {{
+          input.addEventListener("change", event => {{
+            const entry = allEntries[Number(event.target.dataset.seriesIndex)];
+            if (entry) comparisonVisible[entry.filterName] = event.target.checked;
+            renderComparisonChart();
+          }});
+        }});
 
         function showIndex(index) {{
           const boundedIndex = Math.max(0, Math.min(maxLen - 1, index));
@@ -984,14 +1045,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
           const dateLabel = pointDateLabel(referenceRows[boundedIndex]);
           const detailRows = [];
           const markers = [];
-          entries.forEach(([filterName, rows], seriesIndex) => {{
-            const row = rows[Math.min(boundedIndex, rows.length - 1)];
+          entries.forEach(entry => {{
+            const row = entry.rows[Math.min(boundedIndex, entry.rows.length - 1)];
             if (!row) return;
             const gain = Number(row["Portfolio Gain %"] ?? row["Average Gain %"]);
-            const color = comparisonColors[seriesIndex % comparisonColors.length];
-            markers.push(`<circle cx="${{guideX.toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="${{color}}" stroke="#ffffff" stroke-width="1.5" />`);
+            markers.push(`<circle cx="${{guideX.toFixed(2)}}" cy="${{y(gain).toFixed(2)}}" r="4.5" fill="${{entry.color}}" stroke="#ffffff" stroke-width="1.5" />`);
             const suffix = row["Benchmark"] ? "benchmark" : `${{row["Stocks Found"]}} stocks`;
-            detailRows.push(`<span class="legend-item"><span class="legend-swatch" style="background:${{color}}"></span>${{escapeHtml(filterName)}}: <b>${{signed(gain)}}</b> (${{suffix}})</span>`);
+            detailRows.push(`<span class="legend-item"><span class="legend-swatch" style="background:${{entry.color}}"></span>${{escapeHtml(entry.filterName)}}: <b>${{signed(gain)}}</b> (${{suffix}})</span>`);
           }});
 
           pointLayer.innerHTML = markers.join("");
