@@ -1,0 +1,31 @@
+name: Streamlit Cron
+
+on:
+  schedule:
+    # Ping every 6 hours to keep app awake
+    - cron: "0 */6 * * *"
+
+    # 5:00 AM IST = 23:30 UTC previous day
+    - cron: "30 23 * * *"
+
+    # 5:00 PM IST = 11:30 UTC
+    - cron: "30 11 * * *"
+
+  workflow_dispatch:
+
+jobs:
+  call-streamlit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide URL
+        id: url
+        run: |
+          if [ "${{ github.event.schedule }}" = "0 */6 * * *" ]; then
+            echo "url=https://stockscreener09219.streamlit.app/?ping=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://stockscreener09219.streamlit.app/?scheduled_download=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}&market=ALL&timeframe=DAY" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call Streamlit app
+        run: |
+          curl --fail --show-error --location "${{ steps.url.outputs.url }}"
