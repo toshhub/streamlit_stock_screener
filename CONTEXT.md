@@ -77,6 +77,9 @@ Responsibilities:
 - Generates charts for matching symbols.
 - Saves and reloads the last result set.
 - After a successful Run Screener, sets `st.session_state["switch_to_results_tab"] = True`, calls `st.rerun()`, and `switch_to_tab(3)` activates the Results tab on the next pass.
+- Supports protected query-param maintenance calls for external cron:
+  - `?ping=1&token=...` keeps the app awake with a lightweight response.
+  - `?scheduled_download=1&token=...&market=ALL&timeframe=DAY` runs an incremental scheduled download.
 - Provides email controls for sending screener output.
 
 Key imports:
@@ -96,6 +99,7 @@ When changing this file:
 - Avoid putting heavy logic here if it can live in `screener.py`, `pattern.py`, `downloader.py`, or `charting.py`.
 - Native `st.tabs` has no direct selected-tab API. Current tab switching uses a one-shot session flag plus a tiny `components.html` script that clicks the target tab.
 - Keep the market selector only in Data Management unless the UX requirement changes. Other tabs intentionally read `settings["market"]` / the current Data-tab selection.
+- Scheduled-download requests require `SCHEDULED_DOWNLOAD_TOKEN` from Streamlit secrets or an environment variable. Never commit this token.
 
 ### `config.py`
 
@@ -371,6 +375,11 @@ Note: `.gitignore` currently ignores daily/weekly/monthly/charts/metadata but do
 - NSE Yahoo symbols are constructed by appending `.NS` to cleaned symbols.
 - US Yahoo symbols are used as-is from the Nasdaq CSV after basic cleanup.
 - Market selection is stored in settings as `market`, with supported values `INDIA` and `US`.
+- External cron should call Streamlit maintenance URLs instead of relying on an in-app scheduler. Streamlit Community Cloud apps can sleep after 12 hours without traffic, so use a lightweight ping more often than every 12 hours and scheduled downloads at the desired times.
+- Scheduled download URL examples:
+  - Keep-awake ping: `https://your-app.streamlit.app/?ping=1&token=SECRET`
+  - Download selected/default market: `https://your-app.streamlit.app/?scheduled_download=1&token=SECRET`
+  - Download both markets: `https://your-app.streamlit.app/?scheduled_download=1&token=SECRET&market=ALL&timeframe=DAY`
 - Keep downloaded stock data as one JSON file per stock per timeframe. This supports independent updates, simpler screening, and cleaner failure recovery than one large combined JSON file.
 - Download speed is mostly limited by yfinance/network calls. Future speedups should prefer trading-date skip logic, chunked yfinance downloads, and a small manifest/index before changing the per-stock JSON storage shape.
 - P/E lookups can trigger network calls, so they are deferred and cached.

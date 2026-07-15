@@ -1,5 +1,7 @@
 import json
 import html
+import hmac
+import os
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +50,116 @@ favorite_filter_sets = load_favourite_filter_sets()
 if not favorite_filter_sets and settings.get("favorite_filter_sets"):
     favorite_filter_sets = settings["favorite_filter_sets"]
     save_favourite_filter_sets(favorite_filter_sets)
+
+
+def query_param_value(name, default=None):
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value
+
+
+def scheduled_task_token():
+    try:
+        token = st.secrets.get("SCHEDULED_DOWNLOAD_TOKEN", "")
+    except Exception:
+        token = ""
+    return str(token or os.environ.get("SCHEDULED_DOWNLOAD_TOKEN", "")).strip()
+
+
+def valid_scheduled_task_token():
+    expected = scheduled_task_token()
+    provided = str(query_param_value("token", "") or "")
+    return bool(expected) and hmac.compare_digest(provided, expected)
+
+
+def symbols_file_for_market(market):
+    market = normalize_market(market)
+    if market == MARKET_US:
+        return EXCEL_DIR / "nasdaq_screener_1784114565446.csv"
+    return EXCEL_DIR / "MCAP_JUGAAD.xlsx"
+
+
+def download_limit_for_market(market, symbols_file):
+    market = normalize_market(market)
+    if market == MARKET_US:
+        if not symbols_file.exists():
+            return int(settings.get("download_limit_us", 1000))
+        default_limit = len(load_top_symbols(symbols_file, limit=1_000_000, market=market))
+        return int(settings.get("download_limit_us", default_limit))
+    return int(settings.get("download_limit", 1000))
+
+
+def run_scheduled_download():
+    if not valid_scheduled_task_token():
+        st.error("Unauthorized scheduled task request.")
+        st.stop()
+
+    scheduled_mode = str(query_param_value("scheduled_download", "") or "").lower()
+    ping_mode = str(query_param_value("ping", "") or "").lower()
+    if scheduled_mode not in {"1", "true", "yes"} and ping_mode in {"1", "true", "yes"}:
+        st.success("pong")
+        st.stop()
+
+    requested_market = str(query_param_value("market", settings.get("market", MARKET_INDIA)) or "").upper()
+    markets = [MARKET_INDIA, MARKET_US] if requested_market == "ALL" else [normalize_market(requested_market)]
+    timeframe = str(query_param_value("timeframe", settings.get("download_tf", "DAY")) or "DAY").upper()
+    incremental = str(query_param_value("full_refresh", "0") or "0").lower() not in {"1", "true", "yes"}
+
+    st.header("Scheduled Stock Data Download")
+    summary_rows = []
+    total_rows_added = 0
+    for market in markets:
+        symbols_file = symbols_file_for_market(market)
+        if not symbols_file.exists():
+            summary_rows.append({
+                "Market": market_label(market),
+                "Status": "Missing symbols file",
+                "Processed": 0,
+                "Rows Added": 0,
+                "File": str(symbols_file),
+            })
+            continue
+
+        limit = download_limit_for_market(market, symbols_file)
+        if not incremental:
+            clear_downloaded_json_files(timeframe, market=market)
+
+        download_rows = download_top_stocks(
+            symbols_file,
+            timeframe,
+            limit=limit,
+            incremental=incremental,
+            market=market,
+        )
+        if market == MARKET_INDIA:
+            download_nifty_index(timeframe, incremental=incremental, market=market)
+
+        downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
+        rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
+        total_rows_added += rows_added
+        summary_rows.append({
+            "Market": market_label(market),
+            "Status": "Completed",
+            "Processed": f"{downloaded_count}/{len(download_rows)}",
+            "Rows Added": rows_added,
+            "File": symbols_file.name,
+        })
+
+    last_download_at = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    update_settings({
+        "last_download_at": last_download_at,
+        "last_download_tf": timeframe,
+        "last_download_market": ",".join(markets),
+        "last_scheduled_download_at": last_download_at,
+    })
+    st.success(f"Scheduled download complete at {last_download_at}. Rows added: {total_rows_added}")
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+    st.stop()
+
+
+if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true", "yes"} or str(query_param_value("ping", "") or "").lower() in {"1", "true", "yes"}:
+    run_scheduled_download()
 
 # ---- Inject custom CSS ----
 st.markdown(
