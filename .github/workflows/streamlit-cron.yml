@@ -2,8 +2,13 @@ name: Streamlit Cron
 
 on:
   schedule:
+    # Ping every 6 hours to reduce Streamlit hibernation risk
     - cron: "0 */6 * * *"
+
+    # 5:00 AM IST = 11:30 PM UTC previous day
     - cron: "30 23 * * *"
+
+    # 5:00 PM IST = 11:30 AM UTC
     - cron: "30 11 * * *"
 
   workflow_dispatch:
@@ -20,6 +25,7 @@ on:
 jobs:
   call-streamlit:
     runs-on: ubuntu-latest
+
     steps:
       - name: Decide URL
         id: url
@@ -58,16 +64,30 @@ jobs:
             const page = await browser.newPage();
 
             const response = await page.goto(url, {
-              waitUntil: "networkidle",
+              waitUntil: "domcontentloaded",
               timeout: 120000
             });
 
             console.log("HTTP status:", response && response.status());
-            const text = await page.locator("body").innerText({ timeout: 30000 });
+
+            await page.waitForFunction(() => {
+              const text = document.body ? document.body.innerText : "";
+              return (
+                text.includes("pong") ||
+                text.includes("Scheduled download complete") ||
+                text.includes("Unauthorized scheduled task request")
+              );
+            }, { timeout: 120000 });
+
+            const text = await page.locator("body").innerText();
             console.log("Page text preview:");
             console.log(text.slice(0, 2000));
 
             await browser.close();
+
+            if (text.includes("Unauthorized scheduled task request")) {
+              throw new Error("Streamlit token was rejected.");
+            }
 
             if (!text.includes("pong") && !text.includes("Scheduled download complete")) {
               throw new Error("Expected ping/download response was not found.");
