@@ -25,6 +25,7 @@ on:
 jobs:
   call-streamlit:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Decide URL
@@ -69,13 +70,13 @@ jobs:
 
             const response = await page.goto(url, {
               waitUntil: "domcontentloaded",
-              timeout: 180000
+              timeout: 300000
             });
 
             console.log("HTTP status:", response && response.status());
 
             let finalText = "";
-            const deadline = Date.now() + 180000;
+            const deadline = Date.now() + 45 * 60 * 1000;
 
             while (Date.now() < deadline) {
               const texts = [];
