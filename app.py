@@ -12,10 +12,15 @@ from backtest import get_backtest_calendar_dates, run_backtest, split_favorite_f
 from config import *
 from charting import create_stock_chart, image_to_data_uri, sortable_results_table
 from downloader import (
+    MARKET_INDIA,
+    MARKET_US,
     NIFTY_DATA_SYMBOL,
     clear_downloaded_json_files,
     download_nifty_index,
     download_top_stocks,
+    load_top_symbols,
+    market_label,
+    normalize_market,
     timeframe_config,
 )
 from emailer import send_results_email
@@ -293,17 +298,18 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
     return enriched_details
 
 
-def render_data_availability_status():
+def render_data_availability_status(market=MARKET_INDIA):
     """Render data availability cards for all timeframes."""
+    market = normalize_market(market)
     st.markdown(
         '<p class="section-header">📊 Data Availability Status</p>',
         unsafe_allow_html=True,
     )
 
     timeframes = [
-        ("Daily", DAILY_DIR),
-        ("Weekly", WEEKLY_DIR),
-        ("Monthly", MONTHLY_DIR),
+        ("Daily", timeframe_config("DAY", market)["target_dir"]),
+        ("Weekly", timeframe_config("WEEK", market)["target_dir"]),
+        ("Monthly", timeframe_config("MONTH", market)["target_dir"]),
     ]
 
     any_available = False
@@ -1103,7 +1109,39 @@ def stock_file_signatures(stock_files):
     return tuple(signatures)
 
 
+def switch_to_tab(tab_index):
+    components.html(
+        f"""
+        <script>
+        const tabIndex = {tab_index};
+        const clickTargetTab = () => {{
+          const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
+          if (tabs[tabIndex]) {{
+            tabs[tabIndex].click();
+            return true;
+          }}
+          return false;
+        }};
+
+        if (!clickTargetTab()) {{
+          let attempts = 0;
+          const timer = window.setInterval(() => {{
+            attempts += 1;
+            if (clickTargetTab() || attempts >= 20) {{
+              window.clearInterval(timer);
+            }}
+          }}, 100);
+        }}
+        </script>
+        """,
+        height=0,
+    )
+
+
 tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "Backtest", "📊 Results"])
+
+if st.session_state.pop("switch_to_results_tab", False):
+    switch_to_tab(3)
 
 
 # =====================================================================
@@ -1112,14 +1150,36 @@ tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "Backtest", "�
 with tab1:
     st.header("📥 Data Management")
 
-    render_data_availability_status()
+    market_options = [MARKET_INDIA, MARKET_US]
+    selected_market = st.selectbox(
+        "Market",
+        market_options,
+        index=market_options.index(normalize_market(settings.get("market", MARKET_INDIA))),
+        format_func=market_label,
+        help="Select India to use the XLS universe with .NS Yahoo symbols, or US to use the Nasdaq CSV with plain Yahoo symbols.",
+    )
+
+    render_data_availability_status(selected_market)
 
     st.markdown(
         '<p class="section-header">⬇️ Download Fresh Stock Data</p>',
         unsafe_allow_html=True,
     )
 
-    excel_file = EXCEL_DIR / "MCAP_JUGAAD.xlsx"
+    india_excel_file = EXCEL_DIR / "MCAP_JUGAAD.xlsx"
+    us_csv_file = EXCEL_DIR / "nasdaq_screener_1784114565446.csv"
+    symbols_file = us_csv_file if selected_market == MARKET_US else india_excel_file
+    source_label = "CSV" if selected_market == MARKET_US else "Excel"
+
+    available_symbol_count = 0
+    if symbols_file.exists():
+        available_symbol_count = len(load_top_symbols(symbols_file, limit=1_000_000, market=selected_market))
+
+    limit_setting_key = "download_limit_us" if selected_market == MARKET_US else "download_limit"
+    default_download_limit = available_symbol_count if selected_market == MARKET_US and available_symbol_count else 1000
+    saved_download_limit = int(settings.get(limit_setting_key, default_download_limit))
+    if available_symbol_count:
+        saved_download_limit = min(saved_download_limit, available_symbol_count)
 
     download_tf = st.selectbox(
         "📅 Download Timeframe",
@@ -1129,8 +1189,10 @@ with tab1:
     download_limit = st.number_input(
         "🔢 Number of stocks to download",
         min_value=1,
-        value=int(settings.get("download_limit", 1000)),
+        max_value=available_symbol_count or None,
+        value=saved_download_limit,
         step=50,
+        help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
     )
 
     full_refresh = st.checkbox(
@@ -1139,24 +1201,26 @@ with tab1:
         help="Leave unchecked for a faster incremental refresh that appends only candles after each stock file's latest saved date.",
     )
 
-    if excel_file.exists():
-        st.success(f"✅ Default Excel Found: {excel_file.name}")
+    if symbols_file.exists():
+        st.success(f"✅ {market_label(selected_market)} {source_label} Found: {symbols_file.name}")
     else:
-        st.warning("⚠️ Upload initial MCAP_JUGAAD.xlsx")
+        st.warning(f"⚠️ Add the {market_label(selected_market)} {source_label} file before downloading stock data.")
 
-    uploaded = st.file_uploader("📂 Replace Excel", type=["xlsx"])
-    if uploaded:
-        excel_file.write_bytes(uploaded.getbuffer())
-        st.success("✅ Excel replaced")
+    if selected_market == MARKET_INDIA:
+        uploaded = st.file_uploader("📂 Replace Excel", type=["xlsx"])
+        if uploaded:
+            india_excel_file.write_bytes(uploaded.getbuffer())
+            st.success("✅ Excel replaced")
 
     update_settings({
+        "market": selected_market,
         "download_tf": download_tf,
-        "download_limit": download_limit,
+        limit_setting_key: download_limit,
     })
 
     if st.button("⬇️ Download Stocks Data", type="primary"):
-        if not excel_file.exists():
-            st.error("❌ Upload MCAP_JUGAAD.xlsx before downloading stock data.")
+        if not symbols_file.exists():
+            st.error(f"❌ Add {symbols_file.name} before downloading {market_label(selected_market)} stock data.")
         else:
             progress_bar = st.progress(0)
             progress_text = st.empty()
@@ -1170,27 +1234,30 @@ with tab1:
                 )
 
             if full_refresh:
-                deleted_count = clear_downloaded_json_files(download_tf)
+                deleted_count = clear_downloaded_json_files(download_tf, market=selected_market)
                 if deleted_count:
                     progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
 
-            with st.spinner(f"⬇️ Downloading top {download_limit} stocks from yfinance..."):
+            with st.spinner(f"⬇️ Downloading {download_limit} {market_label(selected_market)} stocks from yfinance..."):
                 download_rows = download_top_stocks(
-                    excel_file,
+                    symbols_file,
                     download_tf,
                     limit=download_limit,
                     progress_callback=show_download_progress,
                     incremental=not full_refresh,
+                    market=selected_market,
                 )
-                nifty_row = download_nifty_index(download_tf, incremental=not full_refresh)
+                nifty_row = download_nifty_index(download_tf, incremental=not full_refresh, market=selected_market)
 
             downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
             rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
             progress_bar.progress(1.0)
             last_download_at = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
             update_settings({
+                "market": selected_market,
                 "last_download_at": last_download_at,
                 "last_download_tf": download_tf,
+                "last_download_market": selected_market,
             })
             progress_text.success(
                 f"✅ Processed {downloaded_count} of {len(download_rows)} stocks. "
@@ -1200,9 +1267,9 @@ with tab1:
 
             st.caption(f"Incremental rows added: {rows_added}")
 
-            if nifty_row["Downloaded"]:
+            if selected_market == MARKET_INDIA and nifty_row["Downloaded"]:
                 st.success("Downloaded Nifty 50 benchmark data")
-            else:
+            elif selected_market == MARKET_INDIA:
                 st.warning(f"Could not download Nifty 50 benchmark data: {nifty_row['Error'] or 'No data returned'}")
 
             failed = [row for row in download_rows if not row["Downloaded"]]
@@ -1221,6 +1288,8 @@ with tab1:
 # =====================================================================
 with tab2:
     st.header("🔍 Screener")
+    current_market = normalize_market(selected_market)
+    st.caption(f"Market: {market_label(current_market)}")
 
     # ---- Initialize session state for filter set ----
     if "screener_filter_set" in settings:
@@ -1822,7 +1891,7 @@ with tab2:
                 st.error(f"Short MA must be less than Long MA in: {label}.")
                 st.stop()
 
-        target_dir = timeframe_config(tf)["target_dir"]
+        target_dir = timeframe_config(tf, current_market)["target_dir"]
         rows = []
         stock_files = stock_data_files(target_dir)
 
@@ -1835,6 +1904,7 @@ with tab2:
                 r = screen_json_file(
                     f,
                     filter_set=run_filter_set,
+                    market=current_market,
                 )
                 if r:
                     pattern_passed = True
@@ -1870,11 +1940,14 @@ with tab2:
 
             # Persist results both in-memory and on-disk
             st.session_state["results"] = rows
+            update_settings({"last_results_market": current_market})
             save_results(rows)
 
             progress_bar.progress(1.0)
             progress_text.success(f"✅ Screened {len(stock_files)} stocks. Matches found: {len(rows)}")
             st.success(f"🎯 {len(rows)} stocks found")
+            st.session_state["switch_to_results_tab"] = True
+            st.rerun()
 
 
 # =====================================================================
@@ -1882,6 +1955,8 @@ with tab2:
 # =====================================================================
 with tab3:
     st.header("Backtest")
+    current_market = normalize_market(selected_market)
+    st.caption(f"Market: {market_label(current_market)}")
 
     favorite_names = sorted(favorite_filter_sets.keys())
     if not favorite_names:
@@ -1896,9 +1971,9 @@ with tab3:
                 key="backtest_tf_select",
             )
 
-        target_dir = timeframe_config(backtest_tf)["target_dir"]
+        target_dir = timeframe_config(backtest_tf, current_market)["target_dir"]
         stock_files = stock_data_files(target_dir)
-        nifty_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json"
+        benchmark_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json" if current_market == MARKET_INDIA else None
         available_dates = cached_backtest_calendar_dates(stock_file_signatures(stock_files))
 
         selected_start_date = None
@@ -1988,9 +2063,9 @@ with tab3:
                     )
 
                 with st.spinner("Running backtest across saved filters and selected dates..."):
-                    if not nifty_file.exists():
+                    if benchmark_file is not None and not benchmark_file.exists():
                         progress_text.info("Downloading Nifty 50 benchmark data for this timeframe...")
-                        nifty_download_row = download_nifty_index(backtest_tf)
+                        nifty_download_row = download_nifty_index(backtest_tf, market=current_market)
                     summary_rows, series_by_filter, stock_details_by_filter = run_backtest(
                         stock_files,
                         favorite_filter_sets,
@@ -1998,7 +2073,8 @@ with tab3:
                         effective_start_date,
                         effective_end_date,
                         progress_callback=show_backtest_progress,
-                        benchmark_file=nifty_file,
+                        benchmark_file=benchmark_file,
+                        market=current_market,
                     )
                     stock_details_by_filter = attach_backtest_chart_paths(
                         stock_details_by_filter,
@@ -2016,7 +2092,7 @@ with tab3:
                     f"Backtest complete. Processed {len(stock_files)} stocks. "
                     f"Stocks found on start date: {match_summary or 'none'}."
                 )
-                if "Nifty 50" not in series_by_filter:
+                if current_market == MARKET_INDIA and "Nifty 50" not in series_by_filter:
                     if nifty_download_row and not nifty_download_row["Downloaded"]:
                         st.warning(
                             "Nifty 50 benchmark could not be downloaded, so it was not added to the chart. "
@@ -2066,7 +2142,16 @@ with tab4:
         else:
             heading_label = "Custom Filter"
 
-        st.info(f"📌 Showing last screener run results — {len(rows)} stock(s) matched | **{heading_label}**")
+        result_market = normalize_market(settings.get("last_results_market", selected_market))
+        st.info(
+            f"📌 Showing last screener run results — {len(rows)} stock(s) matched | "
+            f"**{heading_label}** | **{market_label(result_market)}**"
+        )
+        if result_market != normalize_market(selected_market):
+            st.warning(
+                f"These results are from {market_label(result_market)}. "
+                f"Run the screener again to refresh results for {market_label(selected_market)}."
+            )
 
         df = pd.DataFrame(rows)
         df.index = range(1, len(df) + 1)

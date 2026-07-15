@@ -8,8 +8,22 @@ EXCEL_DIR = DATA_DIR / "excel"
 DAILY_DIR = DATA_DIR / "daily"
 WEEKLY_DIR = DATA_DIR / "weekly"
 MONTHLY_DIR = DATA_DIR / "monthly"
+US_DATA_DIR = DATA_DIR / "us"
+US_DAILY_DIR = US_DATA_DIR / "daily"
+US_WEEKLY_DIR = US_DATA_DIR / "weekly"
+US_MONTHLY_DIR = US_DATA_DIR / "monthly"
 CHARTS_DIR = DATA_DIR / "charts"
 META_DIR = DATA_DIR / "metadata"
 
-for d in [EXCEL_DIR, DAILY_DIR, WEEKLY_DIR, MONTHLY_DIR, CHARTS_DIR, META_DIR]:
+for d in [
+    EXCEL_DIR,
+    DAILY_DIR,
+    WEEKLY_DIR,
+    MONTHLY_DIR,
+    US_DAILY_DIR,
+    US_WEEKLY_DIR,
+    US_MONTHLY_DIR,
+    CHARTS_DIR,
+    META_DIR,
+]:
     d.mkdir(parents=True, exist_ok=True)

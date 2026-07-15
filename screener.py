@@ -8,6 +8,7 @@ from functools import lru_cache
 import pandas as pd
 import yfinance as yf
 
+from downloader import MARKET_INDIA, normalize_market, yfinance_symbol
 from storage import load_pe_ratios, save_pe_ratios
 
 FILTER_TYPE_LABELS = {
@@ -104,22 +105,31 @@ def get_screener_in_pe_ratio(symbol):
     return clean_pe_ratio(match.group(1).replace(",", ""))
 
 @lru_cache(maxsize=2048)
-def get_pe_ratio(symbol):
+def get_pe_ratio(symbol, market=MARKET_INDIA):
+    market = normalize_market(market)
+    cache_key = f"{market}:{symbol}"
     pe_cache = load_pe_ratios()
-    if symbol in pe_cache:
+    if cache_key in pe_cache:
+        return pe_cache[cache_key]
+    if market == MARKET_INDIA and symbol in pe_cache:
         return pe_cache[symbol]
 
-    yahoo_symbol = symbol + ".NS"
+    yahoo_symbol = yfinance_symbol(symbol, market)
     errors = []
-    for source_name, pe_lookup in [
+    pe_sources = [
         ("yfinance", get_yfinance_pe_ratio),
         ("Yahoo quote API", get_quote_api_pe_ratio),
-        ("Screener.in", get_screener_in_pe_ratio),
-    ]:
+    ]
+    if market == MARKET_INDIA:
+        pe_sources.append(("Screener.in", get_screener_in_pe_ratio))
+
+    for source_name, pe_lookup in pe_sources:
         try:
             pe = pe_lookup(symbol if source_name == "Screener.in" else yahoo_symbol)
             if pe != "":
-                pe_cache[symbol] = pe
+                pe_cache[cache_key] = pe
+                if market == MARKET_INDIA:
+                    pe_cache[symbol] = pe
                 save_pe_ratios(pe_cache)
                 return pe
         except Exception as exc:
@@ -345,7 +355,7 @@ def load_price_dataframe(path):
     return df.dropna(subset=["Close"]).reset_index(drop=True)
 
 
-def screen_dataframe(df, symbol, filter_set=None, include_pe=True):
+def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET_INDIA):
     filter_set = normalize_filter_set(filter_set, use_default=False)
 
     df = df.copy()
@@ -497,7 +507,7 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True):
             if result["PE Ratio"] == "":
                 if not include_pe:
                     return None
-                result["PE Ratio"] = get_pe_ratio(symbol)
+                result["PE Ratio"] = get_pe_ratio(symbol, market)
             pe = result["PE Ratio"]
             passed = pe != "" and float(pe) < float(config["max_pe"])
             result[f"{prefix}_Passed"] = passed
@@ -505,11 +515,11 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True):
                 return None
 
     if include_pe and result["PE Ratio"] == "":
-        result["PE Ratio"] = get_pe_ratio(symbol)
+        result["PE Ratio"] = get_pe_ratio(symbol, market)
     return result
 
 
-def screen_json_file(path, filter_set=None, **legacy_kwargs):
+def screen_json_file(path, filter_set=None, market=MARKET_INDIA, **legacy_kwargs):
     if not path.exists():
         return None
 
@@ -517,4 +527,4 @@ def screen_json_file(path, filter_set=None, **legacy_kwargs):
         filter_set = legacy_kwargs_to_filter_set(legacy_kwargs)
 
     df = load_price_dataframe(path)
-    return screen_dataframe(df, path.stem, filter_set=filter_set)
+    return screen_dataframe(df, path.stem, filter_set=filter_set, market=market)

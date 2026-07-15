@@ -26,10 +26,10 @@ def split_favorite_filter(saved_filter):
     }
 
 
-def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings):
+def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings, market):
     window = df.iloc[: position + 1].copy()
     needs_pe = any(filter_item["type"] == "pe_less_than" for filter_item in filter_set)
-    result = screen_dataframe(window, symbol, filter_set=filter_set, include_pe=needs_pe)
+    result = screen_dataframe(window, symbol, filter_set=filter_set, include_pe=needs_pe, market=market)
     if not result:
         return False
 
@@ -121,7 +121,7 @@ def _build_backtest_chart_annotations(gain_path):
     return annotations
 
 
-def _backtest_stock_file(path, favorite_configs, calendar_dates):
+def _backtest_stock_file(path, favorite_configs, calendar_dates, market):
     df = load_price_dataframe(path)
     if df.empty or "Date" not in df.columns or not calendar_dates:
         return {name: [] for name in favorite_configs}
@@ -164,6 +164,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates):
             reference_position,
             config["filter_set"],
             config["pattern"],
+            market,
         ):
             events_by_filter[filter_name].append({
                 "Filter Name": filter_name,
@@ -228,6 +229,7 @@ def run_backtest(
     end_date,
     progress_callback=None,
     benchmark_file=None,
+    market="INDIA",
 ):
     favorite_configs = {}
     for name in selected_filter_names:
@@ -253,6 +255,7 @@ def run_backtest(
                 path,
                 favorite_configs,
                 calendar_dates,
+                market,
             )
             for path in stock_files
         ]

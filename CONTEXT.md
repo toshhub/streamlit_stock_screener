@@ -6,11 +6,12 @@ This file is intended to give future coding sessions enough context to make safe
 
 `streamlit_stock_screener` is a Streamlit app for screening Indian NSE stocks. It downloads historical price data from Yahoo Finance, stores that data locally as JSON, applies configurable technical and valuation filters, generates charts, persists the latest results, and can email screener output as a CSV attachment.
 
-The main app title is **NSE Stock Screener**. The UI is organized into three primary tabs:
+The main app title is **NSE Stock Screener**. The UI is organized into four primary tabs:
 
 1. **Data** - upload/replace the stock universe Excel file and download price data.
 2. **Screener** - configure filters and run screening over downloaded JSON files.
-3. **Results** - view, sort, chart, and optionally email matching stocks.
+3. **Backtest** - run saved favourite filters over a historical start/end date range.
+4. **Results** - view, sort, chart, and optionally email matching stocks.
 
 ## Runtime / Dependency Overview
 
@@ -22,20 +23,38 @@ Dependencies are listed in `requirements.txt`:
 - `openpyxl` - Excel file support for `pandas.read_excel`.
 - `matplotlib` - chart generation.
 
+Known working Codex/runtime Python for checks:
+
+```powershell
+C:\Users\tusha\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe
+```
+
+Use this interpreter when the Windows `py` launcher reports `No installed Python found!`.
+
+Common verification command:
+
+```powershell
+& 'C:\Users\tusha\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -c "from pathlib import Path; [compile(Path(name).read_text(encoding='utf-8'), name, 'exec') for name in ['app.py','downloader.py','screener.py','storage.py','config.py','emailer.py','backtest.py','charting.py','pattern.py']]; print('syntax ok')"
+```
+
 ## Data Flow
 
-1. The user provides or replaces `data/excel/MCAP_JUGAAD.xlsx`.
-2. `downloader.py` reads symbols from the Excel file, optionally sorts by market cap, and downloads top N NSE symbols from Yahoo Finance using the `.NS` suffix.
-3. Downloaded data is written as JSON files under one of:
+1. The user selects the market in the Data tab. Default is India.
+2. India uses `data/excel/MCAP_JUGAAD.xlsx`; US uses `data/excel/nasdaq_screener_1784114565446.csv`.
+3. `downloader.py` reads symbols from the selected file, optionally sorts by market cap, and downloads symbols from Yahoo Finance.
+   - India yfinance symbols append `.NS`.
+   - US yfinance symbols are used as-is.
+4. Downloaded India data is written as JSON files under one of:
    - `data/daily/`
    - `data/weekly/`
    - `data/monthly/`
-4. `app.py` lets the user configure screener filters and choose a timeframe.
-5. `screener.py` loads each JSON file, computes required SMAs, applies filters, and returns a row for each passing stock.
-6. `pattern.py` optionally evaluates swing high / swing low expression filters.
-7. `charting.py` generates chart PNG files under `data/charts/` and renders an interactive results table.
-8. `storage.py` persists settings, favourite filters, P/E cache, and last results under `data/metadata/`.
-9. `emailer.py` can email results as a CSV attachment through Gmail SMTP.
+5. Downloaded US data is written as JSON files under `data/us/daily/`, `data/us/weekly/`, or `data/us/monthly/`.
+6. Screener, Backtest, and Results follow the market selected in the Data tab; there are no separate market selectors in those tabs.
+7. `screener.py` loads each JSON file, computes required SMAs, applies filters, and returns a row for each passing stock.
+8. `pattern.py` optionally evaluates swing high / swing low expression filters.
+9. `charting.py` generates chart PNG files under `data/charts/` and renders an interactive results table.
+10. `storage.py` persists settings, favourite filters, P/E cache, and last results under `data/metadata/`.
+11. `emailer.py` can email results as a CSV attachment through Gmail SMTP.
 
 ## File-by-File Map
 
@@ -48,14 +67,16 @@ Responsibilities:
 - Sets Streamlit page config and title.
 - Loads persisted settings and favourite filter sets.
 - Injects custom CSS for buttons, tabs, badges, and data availability cards.
-- Renders the three main app tabs: Data, Screener, Results.
-- Handles Excel upload/replacement for the stock universe file.
+- Renders four app tabs: Data, Screener, Backtest, Results.
+- Handles market selection in Data Management. India uses XLS; US uses the Nasdaq CSV.
+- Handles India Excel upload/replacement for the stock universe file.
 - Lets the user download fresh stock data for daily, weekly, or monthly timeframes.
 - Lets the user configure moving-average filters, P/E filters, ATH filters, green candle filters, and pattern-expression filters.
 - Saves selected filter settings and favourite filter sets.
 - Runs screening against downloaded JSON stock files.
 - Generates charts for matching symbols.
 - Saves and reloads the last result set.
+- After a successful Run Screener, sets `st.session_state["switch_to_results_tab"] = True`, calls `st.rerun()`, and `switch_to_tab(3)` activates the Results tab on the next pass.
 - Provides email controls for sending screener output.
 
 Key imports:
@@ -73,6 +94,8 @@ When changing this file:
 - Be careful with `st.session_state` keys; many widgets rely on stable keys.
 - Keep saved settings backward compatible where possible.
 - Avoid putting heavy logic here if it can live in `screener.py`, `pattern.py`, `downloader.py`, or `charting.py`.
+- Native `st.tabs` has no direct selected-tab API. Current tab switching uses a one-shot session flag plus a tiny `components.html` script that clicks the target tab.
+- Keep the market selector only in Data Management unless the UX requirement changes. Other tabs intentionally read `settings["market"]` / the current Data-tab selection.
 
 ### `config.py`
 
@@ -102,16 +125,24 @@ Stock-universe loading and Yahoo Finance data download logic.
 Responsibilities:
 
 - Defines timeframe mapping:
+- India:
   - `DAY` -> interval `1d`, period `5y`, output `data/daily/`
   - `WEEK` -> interval `1wk`, period `10y`, output `data/weekly/`
   - `MONTH` -> interval `1mo`, period `max`, output `data/monthly/`
-- Downloads symbols from Yahoo Finance using `symbol + ".NS"`.
+- US:
+  - `DAY` -> interval `1d`, period `5y`, output `data/us/daily/`
+  - `WEEK` -> interval `1wk`, period `10y`, output `data/us/weekly/`
+  - `MONTH` -> interval `1mo`, period `max`, output `data/us/monthly/`
+- Downloads India symbols from Yahoo Finance using `symbol + ".NS"`.
+- Downloads US symbols from Yahoo Finance without a suffix.
 - Cleans and normalizes NSE symbols from Excel values.
+- Cleans and normalizes US symbols from the Nasdaq CSV `Symbol` column.
 - Detects symbol and market-cap columns in the uploaded Excel file.
 - Sorts by market cap when a market-cap column exists.
 - Deduplicates symbols and limits the number of symbols to download.
 - Writes each downloaded stock as one JSON file named `<SYMBOL>.json`.
 - Clears old downloaded JSON files for a selected timeframe before a fresh download.
+- Incremental downloads load the existing stock JSON, compute the next missing date from the latest saved candle, and request only the missing range where possible.
 - Supports a progress callback used by `app.py`.
 
 When changing this file:
@@ -296,6 +327,7 @@ These directories are created by `config.py` but ignored by Git:
 - `data/daily/` - downloaded daily JSON stock data.
 - `data/weekly/` - downloaded weekly JSON stock data.
 - `data/monthly/` - downloaded monthly JSON stock data.
+- `data/us/` - downloaded US JSON stock data, with daily/weekly/monthly subfolders.
 - `data/charts/` - generated PNG chart files.
 - `data/metadata/` - app settings, favourite filters, P/E cache, and last results.
 
@@ -337,6 +369,10 @@ Note: `.gitignore` currently ignores daily/weekly/monthly/charts/metadata but do
 ## Important Implementation Notes
 
 - NSE Yahoo symbols are constructed by appending `.NS` to cleaned symbols.
+- US Yahoo symbols are used as-is from the Nasdaq CSV after basic cleanup.
+- Market selection is stored in settings as `market`, with supported values `INDIA` and `US`.
+- Keep downloaded stock data as one JSON file per stock per timeframe. This supports independent updates, simpler screening, and cleaner failure recovery than one large combined JSON file.
+- Download speed is mostly limited by yfinance/network calls. Future speedups should prefer trading-date skip logic, chunked yfinance downloads, and a small manifest/index before changing the per-stock JSON storage shape.
 - P/E lookups can trigger network calls, so they are deferred and cached.
 - `pe_less_than` is evaluated after other filters to reduce unnecessary P/E fetches.
 - `config.py` creates directories at import time.

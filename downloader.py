@@ -7,12 +7,26 @@ from threading import Lock
 import pandas as pd
 import yfinance as yf
 
-from config import DAILY_DIR, MONTHLY_DIR, WEEKLY_DIR
+from config import DAILY_DIR, MONTHLY_DIR, US_DAILY_DIR, US_MONTHLY_DIR, US_WEEKLY_DIR, WEEKLY_DIR
+
+MARKET_INDIA = "INDIA"
+MARKET_US = "US"
+MARKET_LABELS = {
+    MARKET_INDIA: "India",
+    MARKET_US: "US",
+}
 
 TIMEFRAME_CONFIG = {
-    "DAY": {"interval": "1d", "period": "5y", "target_dir": DAILY_DIR},
-    "WEEK": {"interval": "1wk", "period": "10y", "target_dir": WEEKLY_DIR},
-    "MONTH": {"interval": "1mo", "period": "max", "target_dir": MONTHLY_DIR},
+    MARKET_INDIA: {
+        "DAY": {"interval": "1d", "period": "5y", "target_dir": DAILY_DIR},
+        "WEEK": {"interval": "1wk", "period": "10y", "target_dir": WEEKLY_DIR},
+        "MONTH": {"interval": "1mo", "period": "max", "target_dir": MONTHLY_DIR},
+    },
+    MARKET_US: {
+        "DAY": {"interval": "1d", "period": "5y", "target_dir": US_DAILY_DIR},
+        "WEEK": {"interval": "1wk", "period": "10y", "target_dir": US_WEEKLY_DIR},
+        "MONTH": {"interval": "1mo", "period": "max", "target_dir": US_MONTHLY_DIR},
+    },
 }
 
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
@@ -25,14 +39,25 @@ INDEX_YFINANCE_SYMBOLS = {
 YFINANCE_DOWNLOAD_LOCK = Lock()
 
 
+def normalize_market(market):
+    clean = str(market or MARKET_INDIA).strip().upper()
+    return clean if clean in MARKET_LABELS else MARKET_INDIA
+
+
+def market_label(market):
+    return MARKET_LABELS[normalize_market(market)]
+
+
 def flatten_columns(df):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] if c[0] else c[1] for c in df.columns]
     return df
 
 
-def yfinance_symbol(symbol):
+def yfinance_symbol(symbol, market=MARKET_INDIA):
     clean = str(symbol).strip().upper()
+    if normalize_market(market) == MARKET_US:
+        return INDEX_YFINANCE_SYMBOLS.get(clean, clean)
     return INDEX_YFINANCE_SYMBOLS.get(clean, clean + ".NS")
 
 
@@ -117,7 +142,7 @@ def _merge_price_data(existing_df, downloaded_df):
     return merged
 
 
-def download_symbol(symbol, interval, period, out_file, max_retries=2, incremental=True):
+def download_symbol(symbol, interval, period, out_file, max_retries=2, incremental=True, market=MARKET_INDIA):
     existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
     download_start = _next_download_start(existing_df, interval) if incremental else None
     today = pd.Timestamp.today().normalize()
@@ -128,7 +153,7 @@ def download_symbol(symbol, interval, period, out_file, max_retries=2, increment
     for attempt in range(1, max_retries + 1):
         try:
             download_kwargs = {
-                "tickers": yfinance_symbol(symbol),
+                "tickers": yfinance_symbol(symbol, market),
                 "interval": interval,
                 "auto_adjust": True,
                 "progress": False,
@@ -171,12 +196,13 @@ def download_symbol(symbol, interval, period, out_file, max_retries=2, increment
     return {"Downloaded": False, "Rows Added": 0, "Status": "Failed"}
 
 
-def timeframe_config(timeframe):
-    return TIMEFRAME_CONFIG.get(timeframe, TIMEFRAME_CONFIG["DAY"])
+def timeframe_config(timeframe, market=MARKET_INDIA):
+    market_config = TIMEFRAME_CONFIG.get(normalize_market(market), TIMEFRAME_CONFIG[MARKET_INDIA])
+    return market_config.get(timeframe, market_config["DAY"])
 
 
-def clear_downloaded_json_files(timeframe):
-    target_dir = timeframe_config(timeframe)["target_dir"]
+def clear_downloaded_json_files(timeframe, market=MARKET_INDIA):
+    target_dir = timeframe_config(timeframe, market)["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
 
     deleted_count = 0
@@ -187,13 +213,16 @@ def clear_downloaded_json_files(timeframe):
     return deleted_count
 
 
-def clean_symbol(value):
+def clean_symbol(value, market=MARKET_INDIA):
     if pd.isna(value):
         return None
 
     symbol = str(value).strip().upper()
-    symbol = re.sub(r"\.NS$", "", symbol)
-    symbol = re.sub(r"^NSE[:\s-]*", "", symbol)
+    if normalize_market(market) == MARKET_INDIA:
+        symbol = re.sub(r"\.NS$", "", symbol)
+        symbol = re.sub(r"^NSE[:\s-]*", "", symbol)
+    else:
+        symbol = symbol.replace("/", "-")
     symbol = symbol.replace(" ", "")
     return symbol or None
 
@@ -213,8 +242,14 @@ def find_column(columns, required_terms, optional_terms=None):
     return None
 
 
-def load_top_symbols(excel_file, limit=1000):
-    df = pd.read_excel(excel_file)
+def _read_symbols_file(symbols_file):
+    if str(symbols_file).lower().endswith(".csv"):
+        return pd.read_csv(symbols_file)
+    return pd.read_excel(symbols_file)
+
+
+def load_top_symbols(symbols_file, limit=1000, market=MARKET_INDIA):
+    df = _read_symbols_file(symbols_file)
     if df.empty:
         return []
 
@@ -243,7 +278,7 @@ def load_top_symbols(excel_file, limit=1000):
     symbols = []
     seen = set()
     for value in df[symbol_col]:
-        symbol = clean_symbol(value)
+        symbol = clean_symbol(value, market)
         if symbol and symbol not in seen:
             symbols.append(symbol)
             seen.add(symbol)
@@ -253,7 +288,7 @@ def load_top_symbols(excel_file, limit=1000):
     return symbols
 
 
-def _download_symbol_row(symbol, config, incremental=True):
+def _download_symbol_row(symbol, config, incremental=True, market=MARKET_INDIA):
     out_file = config["target_dir"] / f"{symbol}.json"
     try:
         result = download_symbol(
@@ -262,14 +297,18 @@ def _download_symbol_row(symbol, config, incremental=True):
             config["period"],
             out_file,
             incremental=incremental,
+            market=market,
         )
         return {"Symbol": symbol, **result, "Error": ""}
     except Exception as exc:
         return {"Symbol": symbol, "Downloaded": False, "Rows Added": 0, "Status": "Failed", "Error": str(exc)}
 
 
-def download_nifty_index(timeframe, incremental=True):
-    config = timeframe_config(timeframe)
+def download_nifty_index(timeframe, incremental=True, market=MARKET_INDIA):
+    if normalize_market(market) != MARKET_INDIA:
+        return {"Symbol": NIFTY_DATA_SYMBOL, "Downloaded": False, "Rows Added": 0, "Status": "Skipped", "Error": ""}
+
+    config = timeframe_config(timeframe, market)
     target_dir = config["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
     out_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json"
@@ -280,6 +319,7 @@ def download_nifty_index(timeframe, incremental=True):
             config["period"],
             out_file,
             incremental=incremental,
+            market=market,
         )
         return {"Symbol": NIFTY_DATA_SYMBOL, **result, "Error": ""}
     except Exception as exc:
@@ -287,18 +327,20 @@ def download_nifty_index(timeframe, incremental=True):
 
 
 def download_top_stocks(
-    excel_file,
+    symbols_file,
     timeframe,
     limit=1000,
     progress_callback=None,
     max_workers=DEFAULT_MAX_DOWNLOAD_WORKERS,
     incremental=True,
+    market=MARKET_INDIA,
 ):
-    config = timeframe_config(timeframe)
+    market = normalize_market(market)
+    config = timeframe_config(timeframe, market)
     target_dir = config["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    symbols = load_top_symbols(excel_file, limit=limit)
+    symbols = load_top_symbols(symbols_file, limit=limit, market=market)
     total = len(symbols)
     if total == 0:
         return []
@@ -307,7 +349,7 @@ def download_top_stocks(
     downloaded_count = 0
 
     for completed_count, symbol in enumerate(symbols, start=1):
-        row = _download_symbol_row(symbol, config, incremental=incremental)
+        row = _download_symbol_row(symbol, config, incremental=incremental, market=market)
         rows.append(row)
         if row["Downloaded"]:
             downloaded_count += 1
