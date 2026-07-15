@@ -42,20 +42,35 @@ jobs:
             echo "url=https://stockscreener09219.streamlit.app/?scheduled_download=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}&market=ALL&timeframe=DAY" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Call Streamlit app
+      - name: Call Streamlit app with browser
         run: |
-          echo "Calling Streamlit URL..."
-          status=$(curl --silent --show-error \
-            --user-agent "Mozilla/5.0" \
-            --output response.html \
-            --write-out "%{http_code}" \
-            "${{ steps.url.outputs.url }}")
+          npm init -y
+          npm install playwright
+          npx playwright install chromium
+          node <<'NODE'
+          const { chromium } = require('playwright');
 
-          echo "HTTP status: $status"
-          echo "Response preview:"
-          head -80 response.html
+          (async () => {
+            const url = "${{ steps.url.outputs.url }}";
+            console.log("Opening:", url.replace(/token=[^&]+/, "token=***"));
 
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Request failed"
-            exit 1
-          fi
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+
+            const response = await page.goto(url, {
+              waitUntil: "networkidle",
+              timeout: 120000
+            });
+
+            console.log("HTTP status:", response && response.status());
+            const text = await page.locator("body").innerText({ timeout: 30000 });
+            console.log("Page text preview:");
+            console.log(text.slice(0, 2000));
+
+            await browser.close();
+
+            if (!text.includes("pong") && !text.includes("Scheduled download complete")) {
+              throw new Error("Expected ping/download response was not found.");
+            }
+          })();
+          NODE
