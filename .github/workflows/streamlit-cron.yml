@@ -5,7 +5,17 @@ on:
     - cron: "0 */6 * * *"
     - cron: "30 23 * * *"
     - cron: "30 11 * * *"
+
   workflow_dispatch:
+    inputs:
+      task:
+        description: "Task to run"
+        required: true
+        default: "ping"
+        type: choice
+        options:
+          - ping
+          - download
 
 jobs:
   call-streamlit:
@@ -14,7 +24,19 @@ jobs:
       - name: Decide URL
         id: url
         run: |
-          if [ "${{ github.event.schedule }}" = "0 */6 * * *" ]; then
+          TASK="${{ github.event.inputs.task }}"
+
+          if [ -z "$TASK" ]; then
+            if [ "${{ github.event.schedule }}" = "0 */6 * * *" ]; then
+              TASK="ping"
+            else
+              TASK="download"
+            fi
+          fi
+
+          echo "Task: $TASK"
+
+          if [ "$TASK" = "ping" ]; then
             echo "url=https://stockscreener09219.streamlit.app/?ping=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}" >> "$GITHUB_OUTPUT"
           else
             echo "url=https://stockscreener09219.streamlit.app/?scheduled_download=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}&market=ALL&timeframe=DAY" >> "$GITHUB_OUTPUT"
@@ -30,6 +52,7 @@ jobs:
             "${{ steps.url.outputs.url }}")
 
           echo "HTTP status: $status"
+          echo "Response preview:"
           head -80 response.html
 
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
