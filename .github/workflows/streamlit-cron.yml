@@ -56,6 +56,10 @@ jobs:
           node <<'NODE'
           const { chromium } = require('playwright');
 
+          function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+          }
+
           (async () => {
             const url = "${{ steps.url.outputs.url }}";
             console.log("Opening:", url.replace(/token=[^&]+/, "token=***"));
@@ -65,31 +69,49 @@ jobs:
 
             const response = await page.goto(url, {
               waitUntil: "domcontentloaded",
-              timeout: 120000
+              timeout: 180000
             });
 
             console.log("HTTP status:", response && response.status());
 
-            await page.waitForFunction(() => {
-              const text = document.body ? document.body.innerText : "";
-              return (
-                text.includes("pong") ||
-                text.includes("Scheduled download complete") ||
-                text.includes("Unauthorized scheduled task request")
-              );
-            }, { timeout: 120000 });
+            let finalText = "";
+            const deadline = Date.now() + 180000;
 
-            const text = await page.locator("body").innerText();
+            while (Date.now() < deadline) {
+              const texts = [];
+
+              for (const frame of page.frames()) {
+                try {
+                  const bodyText = await frame.locator("body").innerText({ timeout: 3000 });
+                  if (bodyText) texts.push(bodyText);
+                } catch (e) {
+                  // Frame not ready yet.
+                }
+              }
+
+              finalText = texts.join("\n\n");
+
+              if (
+                finalText.includes("pong") ||
+                finalText.includes("Scheduled download complete") ||
+                finalText.includes("Unauthorized scheduled task request")
+              ) {
+                break;
+              }
+
+              await sleep(3000);
+            }
+
             console.log("Page text preview:");
-            console.log(text.slice(0, 2000));
+            console.log(finalText.slice(0, 3000));
 
             await browser.close();
 
-            if (text.includes("Unauthorized scheduled task request")) {
+            if (finalText.includes("Unauthorized scheduled task request")) {
               throw new Error("Streamlit token was rejected.");
             }
 
-            if (!text.includes("pong") && !text.includes("Scheduled download complete")) {
+            if (!finalText.includes("pong") && !finalText.includes("Scheduled download complete")) {
               throw new Error("Expected ping/download response was not found.");
             }
           })();
