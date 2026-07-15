@@ -2,15 +2,9 @@ name: Streamlit Cron
 
 on:
   schedule:
-    # Ping every 6 hours to keep app awake
     - cron: "0 */6 * * *"
-
-    # 5:00 AM IST = 23:30 UTC previous day
     - cron: "30 23 * * *"
-
-    # 5:00 PM IST = 11:30 UTC
     - cron: "30 11 * * *"
-
   workflow_dispatch:
 
 jobs:
@@ -28,4 +22,12 @@ jobs:
 
       - name: Call Streamlit app
         run: |
-          curl --fail --show-error --location "${{ steps.url.outputs.url }}"
+          echo "Calling: ${{ steps.url.outputs.url }}"
+          status=$(curl --silent --show-error --output response.html --write-out "%{http_code}" "${{ steps.url.outputs.url }}")
+          echo "HTTP status: $status"
+          head -40 response.html
+
+          if [ "$status" -lt 200 ] || [ "$status" -ge 400 ]; then
+            echo "Request failed"
+            exit 1
+          fi
