@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import pandas as pd
 import streamlit.components.v1 as components
 
@@ -70,7 +70,7 @@ def _chart_data_hash(chart_df):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, swing_annotations, date_markers):
+def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, max_years, pe_ratio, swing_annotations, date_markers):
     try:
         stat = json_path.stat()
         file_signature = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
@@ -78,11 +78,14 @@ def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, swin
         file_signature = {}
 
     payload = {
+        "style_version": 4,
         "source": str(json_path),
         "file": file_signature,
         "data_hash": _chart_data_hash(chart_df),
         "filter_set": filter_set,
         "max_points": max_points,
+        "max_years": max_years,
+        "pe_ratio": pe_ratio,
         "swing_annotations": swing_annotations or [],
         "date_markers": date_markers or [],
     }
@@ -90,7 +93,63 @@ def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, swin
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=780, swing_annotations=None, date_markers=None):
+def _shade_trend_regions(ax, chart_df, short_trend_column, long_trend_column):
+    if (
+        not short_trend_column
+        or not long_trend_column
+        or short_trend_column not in chart_df.columns
+        or long_trend_column not in chart_df.columns
+        or len(chart_df) < 2
+    ):
+        return
+
+    short_values = chart_df[short_trend_column]
+    long_values = chart_df[long_trend_column]
+    regimes = short_values >= long_values
+    valid = regimes.notna() & short_values.notna() & long_values.notna()
+    if not valid.any():
+        return
+
+    dates = chart_df["Date"].reset_index(drop=True)
+    regimes = regimes.reset_index(drop=True)
+    valid = valid.reset_index(drop=True)
+
+    start_index = None
+    current_regime = None
+    for index, is_valid in enumerate(valid):
+        if not is_valid:
+            if start_index is not None and index - start_index > 1:
+                color = "#dcfce7" if current_regime else "#fee2e2"
+                ax.axvspan(dates.iloc[start_index], dates.iloc[index - 1], color=color, alpha=0.34, linewidth=0)
+            start_index = None
+            current_regime = None
+            continue
+
+        regime = bool(regimes.iloc[index])
+        if start_index is None:
+            start_index = index
+            current_regime = regime
+        elif regime != current_regime:
+            color = "#dcfce7" if current_regime else "#fee2e2"
+            ax.axvspan(dates.iloc[start_index], dates.iloc[index - 1], color=color, alpha=0.34, linewidth=0)
+            start_index = index
+            current_regime = regime
+
+    if start_index is not None and len(dates) - start_index > 1:
+        color = "#dcfce7" if current_regime else "#fee2e2"
+        ax.axvspan(dates.iloc[start_index], dates.iloc[-1], color=color, alpha=0.34, linewidth=0)
+
+
+def create_stock_chart(
+    json_path,
+    filter_set,
+    output_dir=CHARTS_DIR,
+    max_points=None,
+    max_years=5,
+    pe_ratio=None,
+    swing_annotations=None,
+    date_markers=None,
+):
     json_path = Path(json_path)
     df = load_price_data(json_path)
     ma_periods = required_ma_periods(filter_set)
@@ -100,32 +159,56 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
     for period in ma_periods:
         df[f"SMA{period}"] = df["Close"].rolling(period).mean()
 
-    chart_df = df.tail(max_points)
+    last_available_date = df["Date"].dropna().iloc[-1]
+    if max_years:
+        start_date = last_available_date - pd.DateOffset(years=max_years)
+        chart_df = df[df["Date"] >= start_date]
+    else:
+        chart_df = df
+    if max_points:
+        chart_df = chart_df.tail(max_points)
+    if chart_df.empty:
+        return None
+
     output_dir.mkdir(parents=True, exist_ok=True)
     fingerprint = _chart_context_fingerprint(
         json_path,
         chart_df,
         filter_set,
         max_points,
+        max_years,
+        pe_ratio,
         swing_annotations,
         date_markers,
     )
     out_file = output_dir / f"{json_path.stem}_{fingerprint}.png"
 
-    plt.figure(figsize=(10, 5.5))
+    fig = Figure(figsize=(11, 6), facecolor="#f8fafc")
+    ax = fig.subplots()
+    ax.set_facecolor("#ffffff")
 
     last_date = chart_df["Date"].iloc[-1]
     x_lim_right = chart_df["Date"].iloc[-1] + pd.Timedelta(days=(chart_df["Date"].iloc[-1] - chart_df["Date"].iloc[0]).days * 0.12)
 
-    plt.plot(chart_df["Date"], chart_df["Close"], label="Close", color="#111827", linewidth=1.8)
+    short_trend_period = min(ma_periods) if len(ma_periods) >= 2 else None
+    long_trend_period = max(ma_periods) if len(ma_periods) >= 2 else None
+    short_trend_column = f"SMA{short_trend_period}" if short_trend_period else None
+    long_trend_column = f"SMA{long_trend_period}" if long_trend_period else None
+    _shade_trend_regions(ax, chart_df, short_trend_column, long_trend_column)
+
+    close_min = chart_df["Close"].min()
+    ax.fill_between(chart_df["Date"], chart_df["Close"], close_min, color="#0f172a", alpha=0.045, linewidth=0)
+    ax.plot(chart_df["Date"], chart_df["Close"], label="Close", color="#0f172a", linewidth=2.15, zorder=4)
 
     for index, period in enumerate(ma_periods):
-        plt.plot(
+        ax.plot(
             chart_df["Date"],
             chart_df[f"SMA{period}"],
             label=f"SMA{period}",
             color=MA_COLORS[index % len(MA_COLORS)],
-            linewidth=1.4,
+            linewidth=1.55 if period != long_trend_period else 2.0,
+            alpha=0.92,
+            zorder=3,
         )
 
     # Annotate latest values at the right edge, stacked vertically to avoid overlap
@@ -146,7 +229,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
 
     for i, (y_value, label_text, col) in enumerate(annotation_entries):
         y_offset = start_offset + i * vertical_spacing
-        plt.annotate(
+        ax.annotate(
             f"{y_value:.2f}",
             (last_date, y_value),
             textcoords="offset points",
@@ -159,7 +242,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
             bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=col, alpha=0.85),
         )
 
-    plt.xlim(chart_df["Date"].iloc[0], x_lim_right)
+    ax.set_xlim(chart_df["Date"].iloc[0], x_lim_right)
 
     if swing_annotations:
         latest_by_type = {
@@ -174,8 +257,8 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
                 if swing["date"] not in chart_dates:
                     continue
                 label = f"{swing_type}{label_index}"
-                plt.scatter([swing["date"]], [swing["price"]], color=color, marker=marker, s=58, zorder=5)
-                plt.annotate(
+                ax.scatter([swing["date"]], [swing["price"]], color=color, marker=marker, s=58, zorder=5)
+                ax.annotate(
                     label,
                     (swing["date"], swing["price"]),
                     textcoords="offset points",
@@ -203,7 +286,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
             row = chart_df.loc[row_index]
             marker_price = row["Close"]
             style = marker_styles.get(label, {"color": "#7c3aed", "offset": 18, "va": "bottom"})
-            plt.scatter(
+            ax.scatter(
                 [row["Date"]],
                 [marker_price],
                 color=style["color"],
@@ -213,7 +296,7 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
                 linewidths=0.9,
                 zorder=6,
             )
-            plt.annotate(
+            ax.annotate(
                 label,
                 (row["Date"], marker_price),
                 textcoords="offset points",
@@ -227,14 +310,33 @@ def create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=
                 bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor=style["color"], alpha=0.9),
             )
 
-    plt.title(json_path.stem)
-    plt.xlabel("Date")
-    plt.ylabel("Price")
-    plt.grid(True, alpha=0.25)
-    plt.legend(loc="best")
-    plt.tight_layout()
-    plt.savefig(out_file, dpi=120)
-    plt.close()
+    if pe_ratio not in (None, ""):
+        ax.text(
+            0.012,
+            0.91,
+            f"PE: {pe_ratio}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9.5,
+            fontweight="bold",
+            color="#334155",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#ffffff", edgecolor="#94a3b8", alpha=0.9),
+        )
+
+    ax.set_title(json_path.stem, loc="left", fontsize=14, fontweight="bold", color="#0f172a", pad=14)
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price")
+    ax.grid(True, axis="y", color="#cbd5e1", alpha=0.45, linewidth=0.8)
+    ax.grid(True, axis="x", color="#e2e8f0", alpha=0.3, linewidth=0.6)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#cbd5e1")
+    ax.spines["bottom"].set_color("#cbd5e1")
+    ax.tick_params(colors="#475569", labelsize=9)
+    ax.legend(loc="upper left", bbox_to_anchor=(0, 1.005), frameon=False, ncol=min(4, len(ma_periods) + 1))
+    fig.tight_layout()
+    fig.savefig(out_file, dpi=120)
 
     return str(out_file)
 

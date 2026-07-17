@@ -276,5 +276,37 @@
       "reversal_pct": 7.5,
       "expressions": []
     }
+  },
+  "200 Weekly Support": {
+    "ma_filter_set": [
+      {
+        "id": 1,
+        "type": "ma_rising",
+        "params": {
+          "ma": 935
+        }
+      },
+      {
+        "id": 2,
+        "type": "price_near_long",
+        "params": {
+          "long_ma": 935,
+          "threshold_pct": 10.0
+        }
+      },
+      {
+        "id": 3,
+        "type": "short_above_long",
+        "params": {
+          "short_ma": 200,
+          "long_ma": 935
+        }
+      }
+    ],
+    "pattern": {
+      "lookback_days": 120,
+      "reversal_pct": 7.5,
+      "expressions": []
+    }
   }
 }

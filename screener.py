@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 import urllib.parse
 import urllib.request
 from copy import deepcopy
@@ -36,6 +37,8 @@ FILTER_TYPE_DEFAULTS = {
     "hitting_all_time_high": {"ts_lookback": 200, "recent_n": 10},
     "price_near_old_ath": {"n_bars": 200, "range_low": -5.0, "range_high": 10.0},
 }
+
+PE_CACHE_LOCK = threading.RLock()
 
 DEFAULT_FILTER_SET = [
     {"id": 1, "type": "ma_rising", "params": {"ma": 200}},
@@ -106,38 +109,39 @@ def get_screener_in_pe_ratio(symbol):
 
 @lru_cache(maxsize=2048)
 def get_pe_ratio(symbol, market=MARKET_INDIA):
-    market = normalize_market(market)
-    cache_key = f"{market}:{symbol}"
-    pe_cache = load_pe_ratios()
-    if cache_key in pe_cache:
-        return pe_cache[cache_key]
-    if market == MARKET_INDIA and symbol in pe_cache:
-        return pe_cache[symbol]
+    with PE_CACHE_LOCK:
+        market = normalize_market(market)
+        cache_key = f"{market}:{symbol}"
+        pe_cache = load_pe_ratios()
+        if cache_key in pe_cache:
+            return pe_cache[cache_key]
+        if market == MARKET_INDIA and symbol in pe_cache:
+            return pe_cache[symbol]
 
-    yahoo_symbol = yfinance_symbol(symbol, market)
-    errors = []
-    pe_sources = [
-        ("yfinance", get_yfinance_pe_ratio),
-        ("Yahoo quote API", get_quote_api_pe_ratio),
-    ]
-    if market == MARKET_INDIA:
-        pe_sources.append(("Screener.in", get_screener_in_pe_ratio))
+        yahoo_symbol = yfinance_symbol(symbol, market)
+        errors = []
+        pe_sources = [
+            ("yfinance", get_yfinance_pe_ratio),
+            ("Yahoo quote API", get_quote_api_pe_ratio),
+        ]
+        if market == MARKET_INDIA:
+            pe_sources.append(("Screener.in", get_screener_in_pe_ratio))
 
-    for source_name, pe_lookup in pe_sources:
-        try:
-            pe = pe_lookup(symbol if source_name == "Screener.in" else yahoo_symbol)
-            if pe != "":
-                pe_cache[cache_key] = pe
-                if market == MARKET_INDIA:
-                    pe_cache[symbol] = pe
-                save_pe_ratios(pe_cache)
-                return pe
-        except Exception as exc:
-            errors.append(f"{source_name}: {exc}")
+        for source_name, pe_lookup in pe_sources:
+            try:
+                pe = pe_lookup(symbol if source_name == "Screener.in" else yahoo_symbol)
+                if pe != "":
+                    pe_cache[cache_key] = pe
+                    if market == MARKET_INDIA:
+                        pe_cache[symbol] = pe
+                    save_pe_ratios(pe_cache)
+                    return pe
+            except Exception as exc:
+                errors.append(f"{source_name}: {exc}")
 
-    if errors:
-        print(f"PE not available for {symbol}: {'; '.join(errors)}")
-    return ""
+        if errors:
+            print(f"PE not available for {symbol}: {'; '.join(errors)}")
+        return ""
 
 def long_ma_rising_from_two_bars_back(series):
     values = series.dropna()
@@ -159,6 +163,13 @@ def pct_close_to_ma(price, moving_average):
     if pd.isna(moving_average) or moving_average == 0:
         return None
     return abs(price - moving_average) / moving_average * 100
+
+
+def signed_pct_diff_to_ma(price, moving_average):
+    if pd.isna(moving_average) or moving_average == 0:
+        return None
+    return (price - moving_average) / moving_average * 100
+
 
 def crossed_up(short_ma, long_ma, lookback_days):
     diff = short_ma - long_ma
@@ -394,7 +405,7 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET
             return None
         sma_value = round(last[ma_label], 2)
         result[ma_label] = sma_value
-        pct_diff = pct_close_to_ma(price, sma_value)
+        pct_diff = signed_pct_diff_to_ma(price, sma_value)
         result[f"Diff{ma_label}"] = round(pct_diff, 2) if pct_diff is not None else None
         # Rate of Change of the MA from 2 bars back
         _, roc_pct = long_ma_rising_from_two_bars_back(df[ma_label])

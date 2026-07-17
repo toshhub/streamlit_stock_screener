@@ -2,6 +2,11 @@ import json
 import html
 import hmac
 import os
+import queue
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -382,6 +387,270 @@ def stock_data_files(directory):
     if not directory or not directory.exists():
         return []
     return sorted(path for path in directory.glob("*.json") if is_stock_data_file(path))
+
+
+CHART_CREATION_LOCK = threading.RLock()
+
+
+def screen_stock_file_worker(
+    index,
+    stock_file,
+    filter_set,
+    market,
+    pattern_lookback_days,
+    pattern_reversal_pct,
+    pattern_expressions,
+    create_charts=False,
+):
+    result = screen_json_file(
+        stock_file,
+        filter_set=filter_set,
+        market=market,
+    )
+    if not result:
+        return {
+            "index": index,
+            "path": stock_file,
+            "result": None,
+            "swings": [],
+            "pattern_error": "",
+            "error": "",
+        }
+
+    pattern_passed = True
+    swings = []
+    pattern_error = ""
+    if pattern_expressions:
+        pattern_passed, swings, pattern_error = evaluate_pattern_filters(
+            stock_file,
+            pattern_lookback_days,
+            pattern_reversal_pct,
+            pattern_expressions,
+        )
+
+    if pattern_passed and create_charts:
+        has_pattern_filters = bool(pattern_expressions)
+        with CHART_CREATION_LOCK:
+            chart_path = create_stock_chart(
+                stock_file,
+                filter_set,
+                pe_ratio=result.get("PE Ratio"),
+                swing_annotations=swings if has_pattern_filters else None,
+            )
+        if chart_path:
+            result["ChartPath"] = chart_path
+            result["ChartSource"] = stock_file.stem
+
+    return {
+        "index": index,
+        "path": stock_file,
+        "result": result if pattern_passed else None,
+        "swings": swings,
+        "pattern_error": pattern_error,
+        "error": "",
+    }
+
+
+def run_live_screener_job(
+    job_queue,
+    stock_files,
+    filter_set,
+    market,
+    pattern_lookback_days,
+    pattern_reversal_pct,
+    pattern_expressions,
+    create_charts,
+):
+    total = len(stock_files)
+    max_workers = min(8, max(1, total))
+    matched_rows = []
+    failed_count = 0
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    screen_stock_file_worker,
+                    index,
+                    stock_file,
+                    filter_set,
+                    market,
+                    pattern_lookback_days,
+                    pattern_reversal_pct,
+                    pattern_expressions,
+                    create_charts,
+                )
+                for index, stock_file in enumerate(stock_files, start=1)
+            ]
+
+            for done, future in enumerate(as_completed(futures), start=1):
+                stock_name = "unknown"
+                try:
+                    worker_result = future.result()
+                    stock_file = worker_result.get("path")
+                    stock_name = stock_file.stem if stock_file else stock_name
+                    result = worker_result.get("result")
+                    if result:
+                        matched_rows.append(result)
+                        job_queue.put({
+                            "type": "match",
+                            "row": result,
+                            "symbol": result.get("Symbol", stock_name),
+                            "done": done,
+                            "total": total,
+                        })
+                except Exception as exc:
+                    failed_count += 1
+                    job_queue.put({
+                        "type": "worker_error",
+                        "message": str(exc),
+                        "done": done,
+                        "total": total,
+                    })
+
+                job_queue.put({
+                    "type": "progress",
+                    "done": done,
+                    "total": total,
+                    "matches": len(matched_rows),
+                    "finished": stock_name,
+                    "max_workers": max_workers,
+                })
+
+        save_results(matched_rows)
+        job_queue.put({
+            "type": "complete",
+            "rows": matched_rows,
+            "failed_count": failed_count,
+            "total": total,
+            "matches": len(matched_rows),
+        })
+    except Exception as exc:
+        job_queue.put({"type": "fatal_error", "message": str(exc), "rows": matched_rows})
+
+
+def start_live_screener_job(
+    stock_files,
+    filter_set,
+    market,
+    pattern_lookback_days,
+    pattern_reversal_pct,
+    pattern_expressions,
+    create_charts,
+):
+    job_queue = queue.Queue()
+    total = len(stock_files)
+    max_workers = min(8, max(1, total))
+    thread = threading.Thread(
+        target=run_live_screener_job,
+        args=(
+            job_queue,
+            stock_files,
+            filter_set,
+            market,
+            pattern_lookback_days,
+            pattern_reversal_pct,
+            pattern_expressions,
+            create_charts,
+        ),
+        daemon=True,
+    )
+    job = {
+        "id": uuid.uuid4().hex,
+        "queue": job_queue,
+        "thread": thread,
+        "total": total,
+        "done": 0,
+        "matches": 0,
+        "failed_count": 0,
+        "max_workers": max_workers,
+        "running": True,
+        "error": "",
+        "started_at": datetime.now().strftime("%H:%M:%S"),
+    }
+    thread.start()
+    return job
+
+
+def drain_live_screener_events():
+    job = st.session_state.get("screener_job")
+    if not job:
+        return None
+
+    rows = st.session_state.setdefault("results", [])
+    while True:
+        try:
+            event = job["queue"].get_nowait()
+        except queue.Empty:
+            break
+
+        event_type = event.get("type")
+        if event_type == "match":
+            rows.append(event["row"])
+            job["matches"] = len(rows)
+            job["last_symbol"] = event.get("symbol", "")
+        elif event_type == "progress":
+            job["done"] = event.get("done", job.get("done", 0))
+            job["total"] = event.get("total", job.get("total", 0))
+            job["matches"] = event.get("matches", job.get("matches", len(rows)))
+            job["last_finished"] = event.get("finished", "")
+            job["max_workers"] = event.get("max_workers", job.get("max_workers", 1))
+        elif event_type == "worker_error":
+            job["failed_count"] = job.get("failed_count", 0) + 1
+            job["last_error"] = event.get("message", "")
+        elif event_type == "complete":
+            st.session_state["results"] = event.get("rows", rows)
+            job["done"] = event.get("total", job.get("total", 0))
+            job["total"] = event.get("total", job.get("total", 0))
+            job["matches"] = event.get("matches", len(st.session_state["results"]))
+            job["failed_count"] = event.get("failed_count", job.get("failed_count", 0))
+            job["running"] = False
+        elif event_type == "fatal_error":
+            job["error"] = event.get("message", "Unknown screener error")
+            job["running"] = False
+
+    thread = job.get("thread")
+    if job.get("running") and thread is not None and not thread.is_alive():
+        job["running"] = False
+    return job
+
+
+def chart_file_needs_regeneration(chart_path):
+    if not chart_path:
+        return True
+    try:
+        path = Path(chart_path)
+        return not path.exists() or path.stat().st_size < 10_000
+    except OSError:
+        return True
+
+
+def repair_blank_result_charts(rows, filter_set, market, timeframe):
+    if not rows:
+        return False
+
+    target_dir = timeframe_config(timeframe, market)["target_dir"]
+    changed = False
+    for row in rows:
+        if not chart_file_needs_regeneration(row.get("ChartPath")):
+            continue
+
+        symbol = row.get("ChartSource") or row.get("Symbol")
+        if not symbol:
+            continue
+
+        stock_file = target_dir / f"{symbol}.json"
+        if not stock_file.exists():
+            continue
+
+        with CHART_CREATION_LOCK:
+            chart_path = create_stock_chart(stock_file, filter_set, pe_ratio=row.get("PE Ratio"))
+        if chart_path:
+            row["ChartPath"] = chart_path
+            row["ChartSource"] = symbol
+            changed = True
+
+    return changed
 
 
 def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_filter_sets, start_date=None, end_date=None):
@@ -1222,13 +1491,17 @@ def stock_file_signatures(stock_files):
 
 
 def switch_to_tab(tab_index):
+    switch_token = st.session_state.get("_tab_switch_token", 0) + 1
+    st.session_state["_tab_switch_token"] = switch_token
     components.html(
         f"""
         <script>
         const tabIndex = {tab_index};
+        const switchToken = {switch_token};
         const clickTargetTab = () => {{
           const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
           if (tabs[tabIndex]) {{
+            window.parent.document.body.dataset.codexLastTabSwitch = String(switchToken);
             tabs[tabIndex].click();
             return true;
           }}
@@ -1239,7 +1512,7 @@ def switch_to_tab(tab_index):
           let attempts = 0;
           const timer = window.setInterval(() => {{
             attempts += 1;
-            if (clickTargetTab() || attempts >= 20) {{
+            if (clickTargetTab() || attempts >= 50) {{
               window.clearInterval(timer);
             }}
           }}, 100);
@@ -2004,62 +2277,27 @@ with tab2:
                 st.stop()
 
         target_dir = timeframe_config(tf, current_market)["target_dir"]
-        rows = []
         stock_files = stock_data_files(target_dir)
 
-        # Render progress bar inside the placeholder below the Run button
-        with screener_progress_placeholder.container():
-            progress_bar = st.progress(0)
-            progress_text = st.empty()
-
-            for index, f in enumerate(stock_files, start=1):
-                r = screen_json_file(
-                    f,
-                    filter_set=run_filter_set,
-                    market=current_market,
-                )
-                if r:
-                    pattern_passed = True
-                    swings = []
-                    pattern_error = ""
-                    if run_pattern_expressions:
-                        pattern_passed, swings, pattern_error = evaluate_pattern_filters(
-                            f,
-                            run_lookback_days,
-                            run_reversal_pct,
-                            run_pattern_expressions,
-                        )
-                    if pattern_passed:
-                        if create_charts:
-                            has_pattern_filters = bool(run_pattern_expressions)
-                            chart_path = create_stock_chart(
-                                f,
-                                run_filter_set,
-                                swing_annotations=swings if has_pattern_filters else None,
-                            )
-                            if chart_path:
-                                r["ChartPath"] = chart_path
-                                r["ChartSource"] = f.stem
-                        rows.append(r)
-
-                total = len(stock_files)
-                progress = index / total if total else 0
-                progress_bar.progress(progress)
-                progress_text.info(
-                    f"🔍 Screened {index} of {total} stocks. "
-                    f"Matches found: {len(rows)}. Processing: {f.stem}"
-                )
-
-            # Persist results both in-memory and on-disk
-            st.session_state["results"] = rows
-            update_settings({"last_results_market": current_market})
-            save_results(rows)
-
-            progress_bar.progress(1.0)
-            progress_text.success(f"✅ Screened {len(stock_files)} stocks. Matches found: {len(rows)}")
-            st.success(f"🎯 {len(rows)} stocks found")
+        active_job = drain_live_screener_events()
+        if active_job and active_job.get("running"):
+            st.warning("A screener run is already in progress. Open the Results tab to watch live matches.")
             st.session_state["switch_to_results_tab"] = True
             st.rerun()
+
+        st.session_state["results"] = []
+        update_settings({"last_results_market": current_market})
+        st.session_state["screener_job"] = start_live_screener_job(
+            stock_files,
+            run_filter_set,
+            current_market,
+            run_lookback_days,
+            run_reversal_pct,
+            run_pattern_expressions,
+            create_charts,
+        )
+        st.session_state["switch_to_results_tab"] = True
+        st.rerun()
 
 
 # =====================================================================
@@ -2240,11 +2478,43 @@ with tab3:
 with tab4:
     st.header("📊 Results")
 
+    live_screener_job = drain_live_screener_events()
+
     # Load persisted results if session state is empty
     if "results" not in st.session_state:
         st.session_state["results"] = load_results()
 
     rows = st.session_state.get("results", [])
+    if live_screener_job:
+        total = live_screener_job.get("total", 0)
+        done = live_screener_job.get("done", 0)
+        matches = live_screener_job.get("matches", len(rows))
+        max_workers = live_screener_job.get("max_workers", 1)
+        progress = done / total if total else 0
+        st.progress(progress)
+        if live_screener_job.get("running"):
+            st.info(
+                f"Screening live with {max_workers} workers: {done}/{total} processed, "
+                f"{matches} match(es) streamed so far."
+            )
+        elif live_screener_job.get("error"):
+            st.error(f"Screener stopped: {live_screener_job['error']}")
+        else:
+            failed_count = live_screener_job.get("failed_count", 0)
+            st.success(f"Screening complete: {done}/{total} processed, {matches} match(es) found.")
+            if failed_count:
+                st.warning(f"{failed_count} stock file(s) were skipped due to errors.")
+
+    if rows:
+        result_market_for_repair = normalize_market(settings.get("last_results_market", selected_market))
+        result_timeframe_for_repair = settings.get("tf", "DAY")
+        repair_filter_set = normalize_filter_set(
+            settings.get("screener_filter_set", st.session_state.get("current_filter_set", [])),
+            use_default=False,
+        )
+        if repair_blank_result_charts(rows, repair_filter_set, result_market_for_repair, result_timeframe_for_repair):
+            st.session_state["results"] = rows
+            save_results(rows)
 
     if rows:
         # Determine heading: favorite filter name or "Custom Filter"
@@ -2272,7 +2542,7 @@ with tab4:
         # Base columns that always appear (if present)
         result_columns = ["Symbol", "PE Ratio"]
 
-        # Insert DiffSMA* columns (absolute % diff from price to each MA) right after PE Ratio
+        # Insert DiffSMA* columns (signed % diff from price to each MA) right after PE Ratio
         diff_ma_cols = sorted(
             [col for col in display_df.columns if col.startswith("DiffSMA")],
             key=lambda c: int(c.replace("DiffSMA", "")),
@@ -2356,4 +2626,12 @@ with tab4:
                 except Exception as exc:
                     st.error(f"❌ Email failed: {exc}")
     else:
-        st.info("No results yet. Run the screener from the '🔍 Screener' tab to see results here.")
+        if live_screener_job and live_screener_job.get("running"):
+            st.info("Waiting for the first matching stock. Results will appear here automatically.")
+        else:
+            st.info("No results yet. Run the screener from the 'Screener' tab to see results here.")
+
+    if live_screener_job and live_screener_job.get("running"):
+        st.session_state["switch_to_results_tab"] = True
+        time.sleep(0.75)
+        st.rerun()
