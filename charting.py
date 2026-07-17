@@ -354,20 +354,146 @@ def results_hover_table_html(df):
 
     styles = """
     <style>
-      .results-table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      .hover-results-table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 400px; }
+      :root {
+        --ink: #10243e;
+        --muted: #64748b;
+        --brand: #176b87;
+        --brand-dark: #10536a;
+        --brand-soft: #e9f6f8;
+        --border: #dce6ee;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 2px;
+        background: transparent;
+        color: #334a63;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .results-table-shell {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 8px 28px rgba(16, 36, 62, 0.08);
+      }
+      .results-table-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(135deg, #f8fbfc, #eef7f9);
+      }
+      .results-table-toolbar__title {
+        color: var(--ink);
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .results-table-toolbar__meta {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-align: right;
+      }
+      .results-count {
+        display: inline-block;
+        margin-left: 7px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: var(--brand);
+        color: #ffffff;
+        font-size: 10px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+      .results-table-wrapper {
+        max-height: 430px;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .hover-results-table {
+        width: 100%;
+        min-width: 560px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+      }
       .hover-results-table th, .hover-results-table td {
         border-bottom: 1px solid #e5e7eb;
-        padding: 7px 9px;
+        padding: 11px 13px;
         text-align: left;
-        vertical-align: top;
+        vertical-align: middle;
       }
-      .hover-results-table th { background: #f8fafc; font-weight: 600; user-select: none; }
-      .hover-results-table th.sortable { cursor: pointer; color: #2563eb; }
-      .stock-hover { color: #2563eb; font-weight: 600; cursor: pointer; }
+      .hover-results-table th {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        background: #102f45;
+        color: rgba(255, 255, 255, 0.88);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.065em;
+        text-transform: uppercase;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .hover-results-table th:not(:first-child),
+      .hover-results-table td:not(:first-child) {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .hover-results-table th.sortable {
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      .hover-results-table th.sortable:hover { background: #17445f; }
+      .hover-results-table th.sortable::after {
+        content: "↕";
+        margin-left: 6px;
+        color: #82d4db;
+        font-size: 10px;
+      }
+      .hover-results-table th.sortable[data-sort-dir="asc"]::after { content: "↑"; }
+      .hover-results-table th.sortable[data-sort-dir="desc"]::after { content: "↓"; }
+      .hover-results-table tbody tr:nth-child(even) { background: #f8fbfc; }
+      .hover-results-table tbody tr { transition: background 0.14s ease, box-shadow 0.14s ease; }
+      .hover-results-table tbody tr:hover {
+        background: #edf7f9;
+        box-shadow: inset 3px 0 0 var(--brand);
+      }
+      .hover-results-table tbody tr:last-child td { border-bottom: none; }
+      .hover-results-table td:first-child { font-weight: 750; }
+      .stock-hover {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 9px;
+        border: 1px solid #c7e2e7;
+        border-radius: 999px;
+        background: var(--brand-soft);
+        color: var(--brand-dark);
+        font-weight: 800;
+        cursor: pointer;
+        transition: transform 0.14s ease, box-shadow 0.14s ease;
+      }
+      .stock-hover::after {
+        content: "↗";
+        color: var(--brand);
+        font-size: 11px;
+      }
+      .stock-hover:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(23, 107, 135, 0.14);
+      }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
-      .stock-hover-active { background-color: #e0e7ff !important; border-radius: 4px; }
+      .stock-hover-active {
+        border-color: var(--brand) !important;
+        background: #d9f1f3 !important;
+        box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.10);
+      }
 
       /* ---- Fixed chart panel below table (all screen sizes) ---- */
       .chart-panel {
@@ -376,19 +502,21 @@ def results_hover_table_html(df):
         bottom: 0;
         z-index: 1000;
         background: #fff;
-        border-top: 2px solid #cbd5e1;
-        padding: 8px;
+        margin-top: 12px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 10px;
         max-height: 55vh;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
-        box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.15);
+        box-shadow: 0 8px 24px rgba(16, 36, 62, 0.08);
       }
       .chart-panel img { width: 100%; height: auto; display: block; max-height: 50vh; object-fit: contain; }
       .chart-panel .panel-placeholder {
-        color: #9ca3af;
+        color: var(--muted);
         font-size: 13px;
         text-align: center;
-        padding: 16px 0;
+        padding: 18px 0;
       }
       .chart-frame {
         position: relative;
@@ -646,11 +774,22 @@ def results_hover_table_html(df):
     # Columns that support click-to-sort: all except Symbol (text column)
     _sort_exempt = {"Symbol"}
 
+    def display_column_label(column):
+        label = str(column)
+        diff_match = re.fullmatch(r"DiffSMA(\d+)", label)
+        if diff_match:
+            return f"Price vs SMA {diff_match.group(1)}"
+        roc_match = re.fullmatch(r"RocSMA(\d+)", label)
+        if roc_match:
+            return f"SMA {roc_match.group(1)} ROC"
+        return label
+
     header_cells = "".join(
         (
-            f"<th class=\"sortable\" onclick=\"sortNumericColumn({index})\">{html.escape(str(column))}</th>"
+            f"<th class=\"sortable\" onclick=\"sortNumericColumn({index})\">"
+            f"{html.escape(display_column_label(column))}</th>"
             if column not in _sort_exempt
-            else f"<th>{html.escape(str(column))}</th>"
+            else f"<th>{html.escape(display_column_label(column))}</th>"
         )
         for index, column in enumerate(visible_df.columns)
     )
@@ -719,11 +858,32 @@ def results_hover_table_html(df):
           return dir === "asc" ? av - bv : bv - av;
         });
         rows.forEach(row => tbody.appendChild(row));
+
+        table.querySelectorAll("th.sortable").forEach(header => {
+          header.removeAttribute("data-sort-dir");
+        });
+        const activeHeader = table.tHead.rows[0].cells[columnIndex];
+        if (activeHeader) activeHeader.setAttribute("data-sort-dir", dir);
       }
     </script>
     """
 
-    return f"{styles}{script}<div class='results-table-wrapper'><table class='hover-results-table'><thead><tr>{header_cells}</tr></thead><tbody>{''.join(rows)}</tbody></table></div><div class='chart-panel' id='chart-panel'><div class='panel-placeholder'>📈 Tap a stock symbol to view its chart</div></div>"
+    result_count = len(visible_df)
+    table_html = (
+        f"<div class='results-table-shell'>"
+        f"<div class='results-table-toolbar'>"
+        f"<div class='results-table-toolbar__title'>Screening Results"
+        f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"
+        f"<div class='results-table-toolbar__meta'>Click a metric to sort · Select a symbol to view its chart</div>"
+        f"</div>"
+        f"<div class='results-table-wrapper'>"
+        f"<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        f"</div></div>"
+        f"<div class='chart-panel' id='chart-panel'>"
+        f"<div class='panel-placeholder'>📈 Select a stock symbol to view its chart</div></div>"
+    )
+    return f"{styles}{script}{table_html}"
 
 
 def sortable_results_table(df, height=700):

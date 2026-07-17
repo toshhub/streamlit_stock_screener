@@ -7,7 +7,7 @@ from threading import Lock
 import pandas as pd
 import yfinance as yf
 
-from config import DAILY_DIR, MONTHLY_DIR, US_DAILY_DIR, US_MONTHLY_DIR, US_WEEKLY_DIR, WEEKLY_DIR
+from config import DAILY_DIR, US_DAILY_DIR
 
 MARKET_INDIA = "INDIA"
 MARKET_US = "US"
@@ -19,13 +19,9 @@ MARKET_LABELS = {
 TIMEFRAME_CONFIG = {
     MARKET_INDIA: {
         "DAY": {"interval": "1d", "period": "5y", "target_dir": DAILY_DIR},
-        "WEEK": {"interval": "1wk", "period": "10y", "target_dir": WEEKLY_DIR},
-        "MONTH": {"interval": "1mo", "period": "max", "target_dir": MONTHLY_DIR},
     },
     MARKET_US: {
         "DAY": {"interval": "1d", "period": "5y", "target_dir": US_DAILY_DIR},
-        "WEEK": {"interval": "1wk", "period": "10y", "target_dir": US_WEEKLY_DIR},
-        "MONTH": {"interval": "1mo", "period": "max", "target_dir": US_MONTHLY_DIR},
     },
 }
 

@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 from charting import create_stock_chart
-from pattern import evaluate_pattern_filters_from_df
+from pattern import evaluate_pattern_filters_from_df, expression_uses_pe
 from screener import load_price_dataframe, normalize_filter_set, screen_dataframe
 
 
@@ -28,12 +28,15 @@ def split_favorite_filter(saved_filter):
 
 def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings, market):
     window = df.iloc[: position + 1].copy()
-    needs_pe = any(filter_item["type"] == "pe_less_than" for filter_item in filter_set)
+    expressions = pattern_settings.get("expressions", [])
+    needs_pe = (
+        any(filter_item["type"] == "pe_less_than" for filter_item in filter_set)
+        or any(expression_uses_pe(expression) for expression in expressions)
+    )
     result = screen_dataframe(window, symbol, filter_set=filter_set, include_pe=needs_pe, market=market)
     if not result:
         return False
 
-    expressions = pattern_settings.get("expressions", [])
     if not expressions:
         return True
 
@@ -42,6 +45,7 @@ def _screen_backtest_signal(df, symbol, position, filter_set, pattern_settings, 
         pattern_settings.get("lookback_days", 120),
         pattern_settings.get("reversal_pct", 5.0),
         expressions,
+        pe_ratio=result.get("PE Ratio"),
     )
     return passed
 

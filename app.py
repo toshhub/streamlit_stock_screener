@@ -108,7 +108,7 @@ def run_scheduled_download():
 
     requested_market = str(query_param_value("market", settings.get("market", MARKET_INDIA)) or "").upper()
     markets = [MARKET_INDIA, MARKET_US] if requested_market == "ALL" else [normalize_market(requested_market)]
-    timeframe = str(query_param_value("timeframe", settings.get("download_tf", "DAY")) or "DAY").upper()
+    timeframe = "DAY"
     incremental = str(query_param_value("full_refresh", "0") or "0").lower() not in {"1", "true", "yes"}
 
     st.header("Scheduled Stock Data Download")
@@ -170,108 +170,571 @@ if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true
 st.markdown(
     """
     <style>
-    /* Primary button - green */
-    div.stButton > button[kind="primary"] {
-        background-color: #4CAF50;
-        border-color: #4CAF50;
+    :root {
+        --ink-strong: #10243e;
+        --ink: #334a63;
+        --ink-muted: #6b7f93;
+        --brand: #176b87;
+        --brand-dark: #10536a;
+        --brand-soft: #e9f6f8;
+        --accent: #e89b35;
+        --surface: #ffffff;
+        --surface-soft: #f5f8fb;
+        --border: #dce6ee;
+        --shadow-sm: 0 1px 2px rgba(16, 36, 62, 0.05);
+        --shadow-md: 0 10px 30px rgba(16, 36, 62, 0.09);
+    }
+
+    /* App shell */
+    .stApp {
+        background:
+            radial-gradient(circle at 8% -10%, rgba(23, 107, 135, 0.10), transparent 28rem),
+            radial-gradient(circle at 92% 0%, rgba(232, 155, 53, 0.08), transparent 24rem),
+            #f5f8fb;
+        color: var(--ink);
+    }
+    .stMainBlockContainer {
+        max-width: 1480px;
+        padding-top: 1.35rem;
+        padding-bottom: 4rem;
+    }
+    header[data-testid="stHeader"] {
+        background: rgba(245, 248, 251, 0.82);
+        backdrop-filter: blur(14px);
+    }
+    h1, h2, h3 {
+        color: var(--ink-strong);
+        letter-spacing: -0.025em;
+    }
+    h2 {
+        margin-top: 0.8rem;
+    }
+    p, label, .stCaption {
+        color: var(--ink);
+    }
+
+    /* Product header */
+    .app-hero {
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 2rem;
+        min-height: 126px;
+        margin: 0 0 1.15rem;
+        padding: 1.55rem 1.8rem;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 22px;
+        background: linear-gradient(118deg, #10243e 0%, #145a73 58%, #1c7c8f 100%);
+        box-shadow: 0 16px 38px rgba(16, 53, 76, 0.20);
+    }
+    .app-hero::after {
+        content: "";
+        position: absolute;
+        width: 230px;
+        height: 230px;
+        right: -55px;
+        top: -105px;
+        border-radius: 50%;
+        border: 42px solid rgba(255, 255, 255, 0.07);
+    }
+    .app-hero__content {
+        position: relative;
+        z-index: 1;
+    }
+    .app-hero__eyebrow {
+        margin-bottom: 0.35rem;
+        color: #8de0e4;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+    }
+    .app-hero__title {
+        margin: 0;
+        color: #ffffff !important;
+        font-size: clamp(1.75rem, 3vw, 2.55rem);
+        font-weight: 800;
+        line-height: 1.1;
+        letter-spacing: -0.035em;
+    }
+    .app-hero__subtitle {
+        max-width: 650px;
+        margin: 0.55rem 0 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 0.96rem;
+    }
+    .app-hero__mark {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        place-items: center;
+        width: 70px;
+        height: 70px;
+        flex: 0 0 70px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.11);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20);
         color: #ffffff;
-        font-weight: bold;
-        border-radius: 8px;
-        padding: 0.5rem 1.5rem;
-        transition: all 0.2s ease;
+        font-size: 2rem;
+    }
+
+    /* Buttons */
+    div.stButton > button,
+    div.stDownloadButton > button {
+        min-height: 2.65rem;
+        border-radius: 10px;
+        border: 1px solid #cbd9e4;
+        background: #ffffff;
+        color: var(--ink-strong);
+        font-weight: 700;
+        box-shadow: var(--shadow-sm);
+        transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+    }
+    div.stButton > button:hover,
+    div.stDownloadButton > button:hover {
+        transform: translateY(-1px);
+        border-color: #78a9b9;
+        color: var(--brand-dark);
+        box-shadow: 0 7px 18px rgba(16, 53, 76, 0.10);
+    }
+    div.stButton > button:focus-visible,
+    div.stDownloadButton > button:focus-visible {
+        outline: 3px solid rgba(23, 107, 135, 0.22);
+        outline-offset: 2px;
+    }
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #176b87, #168297);
+        border-color: #176b87;
+        color: #ffffff;
+        box-shadow: 0 7px 18px rgba(23, 107, 135, 0.22);
     }
     div.stButton > button[kind="primary"]:hover,
     div.stButton > button[kind="primary"]:focus {
-        background-color: #43A047;
-        border-color: #43A047;
+        background: linear-gradient(135deg, #10536a, #176b87);
+        border-color: #10536a;
         color: #ffffff;
-        box-shadow: 0 2px 8px rgba(76,175,80,0.4);
+        box-shadow: 0 10px 24px rgba(23, 107, 135, 0.28);
+    }
+    div.stButton > button[kind="primary"] p {
+        color: #ffffff !important;
     }
 
-    /* Favorite save button - yellow */
+    /* Secondary actions */
     button[kind="secondary"][data-testid="baseButton-secondary"] {
-        background-color: #FFC107 !important;
-        border-color: #FFC107 !important;
-        color: #000000 !important;
-        font-weight: bold;
+        background: #ffffff;
+        border-color: #cbd9e4;
+        color: var(--ink-strong);
     }
 
-    /* Run Screener button - prominent */
-    div.stButton > button[kind="primary"]#run-screener-btn {
-        background-color: #1565C0 !important;
-        border-color: #1565C0 !important;
-        font-size: 1.1rem;
-        padding: 0.6rem 2rem;
+    /* Inputs */
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="base-input"],
+    textarea,
+    [data-testid="stFileUploaderDropzone"] {
+        border-radius: 10px !important;
+        border-color: #cbd9e4 !important;
+        background-color: rgba(255, 255, 255, 0.92) !important;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease;
+    }
+    div[data-baseweb="select"] > div:focus-within,
+    div[data-baseweb="input"] > div:focus-within,
+    div[data-baseweb="base-input"]:focus-within,
+    textarea:focus {
+        border-color: var(--brand) !important;
+        box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.12) !important;
+    }
+    [data-testid="stWidgetLabel"] p {
+        color: #304860;
+        font-weight: 650;
     }
 
-    /* Tab styling */
+    /* Toggle and checkbox accent */
+    label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child {
+        background-color: var(--brand) !important;
+        border-color: var(--brand) !important;
+    }
+
+    /* Primary navigation */
     div.stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%);
-        border-radius: 12px 12px 0 0;
-        padding: 6px 8px 0 8px;
+        gap: 0.4rem;
+        padding: 0.4rem;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: var(--shadow-sm);
     }
     div.stTabs [data-baseweb="tab"] {
-        border-radius: 10px 10px 0 0;
-        padding: 10px 24px;
-        font-weight: 600;
-        font-size: 0.95rem;
-        color: #ffffffcc;
-        background: rgba(255,255,255,0.08);
+        min-height: 2.85rem;
+        padding: 0.6rem 1.35rem;
+        border-radius: 10px;
         border: none;
-        transition: all 0.2s ease;
+        background: transparent;
+        color: var(--ink-muted);
+        font-size: 0.93rem;
+        font-weight: 700;
+        transition: all 0.16s ease;
     }
     div.stTabs [data-baseweb="tab"]:hover {
-        background: rgba(255,255,255,0.18);
-        color: #ffffff;
+        background: var(--brand-soft);
+        color: var(--brand-dark);
     }
     div.stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background: #ffffff;
-        color: #1a237e;
-        font-weight: 700;
+        background: linear-gradient(135deg, #176b87, #168297);
+        color: #ffffff;
+        box-shadow: 0 5px 14px rgba(23, 107, 135, 0.19);
+    }
+    div.stTabs [data-baseweb="tab"][aria-selected="true"] p {
+        color: #ffffff !important;
+    }
+    div.stTabs [data-baseweb="tab-highlight"],
+    div.stTabs [data-baseweb="tab-border"] {
+        display: none;
+    }
+    div.stTabs [data-baseweb="tab-panel"] {
+        padding-top: 1.1rem;
     }
 
     /* Filter row badges */
     .filter-badge {
         display: inline-block;
-        padding: 4px 12px;
-        border-radius: 16px;
-        font-weight: 600;
-        font-size: 0.85rem;
+        padding: 0.3rem 0.75rem;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.8rem;
         color: #fff;
-        margin: 2px 4px;
+        margin: 0.15rem 0.25rem;
+        box-shadow: var(--shadow-sm);
     }
 
     /* Data availability cards */
     .data-status-card {
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin: 6px 0;
-        color: #fff;
-        font-weight: 600;
+        border: 1px solid;
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        margin: 0.5rem 0;
+        font-weight: 650;
+        box-shadow: var(--shadow-sm);
     }
     .data-status-available {
-        background: linear-gradient(135deg, #2E7D32, #43A047);
+        border-color: #b9dfd1;
+        background: linear-gradient(135deg, #effaf5, #e4f6ef);
+        color: #176148;
     }
     .data-status-empty {
-        background: linear-gradient(135deg, #757575, #9E9E9E);
+        border-color: #dce4ea;
+        background: linear-gradient(135deg, #f7f9fb, #eef3f6);
+        color: #65788a;
+    }
+    .data-panel-heading {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        margin: 0 0 0.25rem;
+        color: var(--ink-strong);
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+    }
+    .data-panel-heading span {
+        display: inline-grid;
+        place-items: center;
+        width: 2rem;
+        height: 2rem;
+        border-radius: 9px;
+        background: var(--brand-soft);
+        font-size: 1rem;
+    }
+    .data-panel-subtitle {
+        min-height: 2.4rem;
+        margin: 0 0 0.85rem;
+        color: var(--ink-muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+    }
+    .source-file-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.8rem;
+        padding: 0.75rem 0.85rem;
+        border: 1px solid #cfe4dc;
+        border-radius: 10px;
+        background: #f1faf6;
+        color: #285c4a;
+    }
+    .source-file-summary__name {
+        overflow: hidden;
+        font-weight: 750;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .source-file-summary__badge {
+        flex: 0 0 auto;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        background: #d9f2e7;
+        color: #176148;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: var(--border) !important;
+        border-radius: 15px !important;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 7px 22px rgba(16, 36, 62, 0.06);
+    }
+    .screener-market-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 0.1rem 0 1rem;
+        padding: 0.28rem 0.7rem;
+        border: 1px solid #cfe2e8;
+        border-radius: 999px;
+        background: #edf7f9;
+        color: var(--brand-dark);
+        font-size: 0.78rem;
+        font-weight: 750;
+    }
+    .screener-section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 1.45rem 0 0.7rem;
+    }
+    .screener-section-heading__title {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        color: var(--ink-strong);
+        font-size: 1.18rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+    .screener-section-heading__count {
+        flex: 0 0 auto;
+        padding: 0.25rem 0.65rem;
+        border: 1px solid #cfe2e8;
+        border-radius: 999px;
+        background: var(--brand-soft);
+        color: var(--brand-dark);
+        font-size: 0.75rem;
+        font-weight: 800;
+    }
+    .screener-section-copy {
+        margin: -0.45rem 0 0.8rem;
+        color: var(--ink-muted);
+        font-size: 0.84rem;
+    }
+    .expression-reference {
+        display: grid;
+        gap: 0.85rem;
+    }
+    .expression-reference__group {
+        display: grid;
+        gap: 0.38rem;
+    }
+    .expression-reference__label {
+        color: var(--ink-muted);
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+    }
+    .expression-reference__chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+    }
+    details.expression-keyword {
+        overflow: hidden;
+        flex: 0 0 auto;
+        border: 1px solid #cfe2e8;
+        border-radius: 7px;
+        background: #f0f8fa;
+        color: var(--brand-dark);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.72rem;
+        font-weight: 750;
+        transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+    }
+    details.expression-keyword:hover {
+        border-color: #86b5c2;
+        background: #e8f5f7;
+    }
+    details.expression-keyword[open] {
+        flex: 1 0 100%;
+        border-color: #78a9b9;
+        background: #ffffff;
+        box-shadow: 0 5px 14px rgba(16, 53, 76, 0.08);
+    }
+    .expression-keyword summary {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.3rem 0.5rem;
+        cursor: pointer;
+        list-style: none;
+        user-select: none;
+    }
+    .expression-keyword summary::-webkit-details-marker {
+        display: none;
+    }
+    .expression-keyword summary::after {
+        content: "?";
+        display: inline-grid;
+        place-items: center;
+        width: 0.9rem;
+        height: 0.9rem;
+        border-radius: 50%;
+        background: #d7edf1;
+        color: #176b87;
+        font-family: system-ui, sans-serif;
+        font-size: 0.58rem;
+        font-weight: 850;
+    }
+    .expression-keyword[open] summary::after {
+        content: "×";
+    }
+    .expression-keyword__meaning {
+        padding: 0.55rem 0.65rem 0.65rem;
+        border-top: 1px solid #e2edf2;
+        background: #f8fbfc;
+        color: #40586d;
+        font-family: system-ui, sans-serif;
+        font-size: 0.75rem;
+        font-weight: 500;
+        line-height: 1.45;
+    }
+    .expression-example {
+        padding: 0.55rem 0.65rem;
+        border-left: 3px solid var(--brand);
+        border-radius: 6px;
+        background: #f5f8fb;
+        color: #314a61;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.72rem;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
     }
 
     /* Section headers */
     .section-header {
-        font-size: 1.15rem;
-        font-weight: 700;
-        margin-top: 18px;
-        margin-bottom: 8px;
-        padding-bottom: 4px;
-        border-bottom: 2px solid #e0e0e0;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 1.35rem 0 0.75rem;
+        padding-bottom: 0.55rem;
+        border-bottom: 1px solid var(--border);
+        color: var(--ink-strong);
+        font-size: 1.08rem;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+    }
+
+    /* Expanders act as filter cards */
+    [data-testid="stExpander"] {
+        overflow: hidden;
+        margin-bottom: 0.65rem;
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: var(--shadow-sm);
+    }
+    [data-testid="stExpander"] summary {
+        min-height: 3.2rem;
+        color: var(--ink-strong);
+        font-weight: 750;
+    }
+    [data-testid="stExpander"]:hover {
+        border-color: #bdd2de;
+        box-shadow: 0 6px 20px rgba(16, 36, 62, 0.07);
+    }
+    [data-testid="stExpander"]:focus-within {
+        border-color: #78a9b9 !important;
+        box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.10);
+    }
+
+    /* Status messages, tables and progress */
+    [data-testid="stAlert"] {
+        border-radius: 12px;
+        border-width: 1px;
+        box-shadow: var(--shadow-sm);
+    }
+    [data-testid="stDataFrame"],
+    [data-testid="stTable"] {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: var(--shadow-sm);
+    }
+    [data-testid="stProgress"] > div > div {
+        background: linear-gradient(90deg, var(--brand), #22a6a1);
+    }
+    hr {
+        border-color: var(--border) !important;
+        margin: 1.4rem 0 !important;
+    }
+
+    /* Keep compact column layouts comfortable */
+    [data-testid="stHorizontalBlock"] {
+        gap: 1rem;
+    }
+
+    @media (max-width: 768px) {
+        .stMainBlockContainer {
+            padding-top: 0.8rem;
+        }
+        .app-hero {
+            min-height: 112px;
+            padding: 1.25rem;
+            border-radius: 17px;
+        }
+        .app-hero__mark {
+            display: none;
+        }
+        .app-hero__subtitle {
+            font-size: 0.86rem;
+        }
+        div.stTabs [data-baseweb="tab-list"] {
+            overflow-x: auto;
+            justify-content: flex-start;
+        }
+        div.stTabs [data-baseweb="tab"] {
+            flex: 0 0 auto;
+            padding-inline: 0.9rem;
+        }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("📈 NSE Stock Screener")
+st.markdown(
+    """
+    <section class="app-hero">
+        <div class="app-hero__content">
+            <div class="app-hero__eyebrow">Market intelligence workspace</div>
+            <h1 class="app-hero__title">NSE Stock Screener</h1>
+            <p class="app-hero__subtitle">
+                Download market data, build precise screeners, validate strategies,
+                and review opportunities in one focused workspace.
+            </p>
+        </div>
+        <div class="app-hero__mark" aria-hidden="true">↗</div>
+    </section>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def sync_pattern_lookback_from_slider():
@@ -426,16 +889,15 @@ def screen_stock_file_worker(
             pattern_lookback_days,
             pattern_reversal_pct,
             pattern_expressions,
+            pe_ratio=result.get("PE Ratio"),
         )
 
     if pattern_passed and create_charts:
-        has_pattern_filters = bool(pattern_expressions)
         with CHART_CREATION_LOCK:
             chart_path = create_stock_chart(
                 stock_file,
                 filter_set,
                 pe_ratio=result.get("PE Ratio"),
-                swing_annotations=swings if has_pattern_filters else None,
             )
         if chart_path:
             result["ChartPath"] = chart_path
@@ -653,6 +1115,109 @@ def repair_blank_result_charts(rows, filter_set, market, timeframe):
     return changed
 
 
+def expression_keyword_reference_html():
+    keyword_groups = [
+        (
+            "Market values",
+            [
+                ("P", "The stock's current price, using the latest available closing price."),
+                ("PE", "The stock's current price-to-earnings ratio."),
+                ("SMA100", "The latest 100-day simple moving average of closing prices."),
+                ("SMA200", "The latest 200-day simple moving average of closing prices."),
+                (
+                    "SMA&lt;days&gt;",
+                    "Any simple moving average. Replace days with a positive whole number, such as SMA20 or SMA75.",
+                ),
+            ],
+        ),
+        (
+            "MA functions",
+            [
+                (
+                    "CD(short, long)",
+                    "Days since the short-period SMA most recently crossed above the long-period SMA. "
+                    "Example: CD(50, 200) &lt; 40.",
+                ),
+                (
+                    "ROI(period)",
+                    "The one-day percentage increase or decrease in the selected SMA. Example: ROI(50) &gt; 0.",
+                ),
+                (
+                    "MA_MIN(period, days)",
+                    "The lowest value of the selected SMA during the specified recent number of trading days.",
+                ),
+                (
+                    "MA_MAX(period, days)",
+                    "The highest value of the selected SMA during the specified recent number of trading days.",
+                ),
+                (
+                    "MA_VAR(period, days)",
+                    "The percentage range from the maximum to minimum value of the selected SMA during the lookback.",
+                ),
+            ],
+        ),
+        (
+            "Logic & comparisons",
+            [
+                ("and", "Both conditions must be true."),
+                ("or", "At least one of the conditions must be true."),
+                ("&gt;", "The value on the left must be greater than the value on the right."),
+                ("&gt;=", "The value on the left must be greater than or equal to the value on the right."),
+                ("&lt;", "The value on the left must be less than the value on the right."),
+                ("&lt;=", "The value on the left must be less than or equal to the value on the right."),
+                ("==", "The values on both sides must be equal."),
+                ("!=", "The values on both sides must be different."),
+            ],
+        ),
+        (
+            "Math & functions",
+            [
+                ("+", "Adds two values."),
+                ("−", "Subtracts the right value from the left value. Type it using the standard minus sign: -."),
+                ("*", "Multiplies two values."),
+                ("/", "Divides the value on the left by the value on the right."),
+                ("%", "Returns the remainder after division."),
+                ("**", "Raises the value on the left to the power on the right."),
+                ("abs()", "Returns the absolute value of a number."),
+                ("min()", "Returns the smallest supplied value."),
+                ("max()", "Returns the largest supplied value."),
+                ("round()", "Rounds a value to the requested number of decimal places."),
+            ],
+        ),
+    ]
+
+    groups_html = []
+    for group_label, keywords in keyword_groups:
+        chips_html = "".join(
+            '<details class="expression-keyword">'
+            f"<summary>{label}</summary>"
+            f'<div class="expression-keyword__meaning">{meaning}</div>'
+            "</details>"
+            for label, meaning in keywords
+        )
+        groups_html.append(
+            '<div class="expression-reference__group">'
+            f'<div class="expression-reference__label">{group_label}</div>'
+            f'<div class="expression-reference__chips">{chips_html}</div>'
+            "</div>"
+        )
+
+    examples_html = (
+        '<div class="expression-reference__group">'
+        '<div class="expression-reference__label">Examples &amp; meaning</div>'
+        '<div class="expression-example">SMA100 &gt; SMA200</div>'
+        '<div class="expression-example">CD(50, 200) &lt; 40 · bullish cross within 40 days</div>'
+        '<div class="expression-example">ROI(50) &gt; 0 · one-day SMA growth rate %</div>'
+        '<div class="expression-example">MA_MIN(50, 120) · lowest SMA50 in 120 days</div>'
+        '<div class="expression-example">MA_MAX(50, 100) · highest SMA50 in 100 days</div>'
+        '<div class="expression-example">MA_VAR(200, 150) &gt; 15 · max-to-min variation %</div>'
+        '<div class="expression-example">P &gt; SMA200 and PE &lt; 30</div>'
+        '<div class="expression-example">Positive decimal parameters are rounded to the nearest trading day.</div>'
+        "</div>"
+    )
+    return '<div class="expression-reference">' + "".join(groups_html) + examples_html + "</div>"
+
+
 def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_filter_sets, start_date=None, end_date=None):
     files_by_symbol = {path.stem: path for path in stock_files}
     enriched_details = {}
@@ -680,42 +1245,26 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
 
 
 def render_data_availability_status(market=MARKET_INDIA):
-    """Render data availability cards for all timeframes."""
+    """Render the latest available data date."""
     market = normalize_market(market)
-    st.markdown(
-        '<p class="section-header">📊 Data Availability Status</p>',
-        unsafe_allow_html=True,
-    )
-
-    timeframes = [
-        ("Daily", timeframe_config("DAY", market)["target_dir"]),
-        ("Weekly", timeframe_config("WEEK", market)["target_dir"]),
-        ("Monthly", timeframe_config("MONTH", market)["target_dir"]),
-    ]
-
-    any_available = False
-    for label, directory in timeframes:
-        file_count = len(stock_data_files(directory))
-        last_date = _get_last_date_from_json_dir(directory)
-        if file_count > 0 and last_date:
-            any_available = True
-            date_formatted = last_date.strftime("%d-%m-%Y")
-            st.markdown(
-                f'<div class="data-status-card data-status-available">'
-                f'✅ <b>{label}</b> — {file_count} stocks | '
-                f'Latest data: <b>{date_formatted}</b>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div class="data-status-card data-status-empty">'
-                f'❌ <b>{label}</b> — No stocks data available'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-    if not any_available:
-        st.warning("No stock data found for any timeframe. Click '⬇️ Download Stocks Data' to begin.")
+    directory = timeframe_config("DAY", market)["target_dir"]
+    last_date = _get_last_date_from_json_dir(directory)
+    if last_date:
+        date_formatted = last_date.strftime("%d-%m-%Y")
+        st.markdown(
+            f'<div class="data-status-card data-status-available">'
+            f'📅 Last download: <b>{date_formatted}</b>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="data-status-card data-status-empty">'
+            'No stock data available'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.warning("No stock data found. Click '⬇️ Download Stocks Data' to begin.")
 
 
 def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=1200):
@@ -1534,22 +2083,34 @@ if st.session_state.pop("switch_to_results_tab", False):
 # =====================================================================
 with tab1:
     st.header("📥 Data Management")
+    st.caption("Manage your market universe and refresh stock prices from one place.")
 
     market_options = [MARKET_INDIA, MARKET_US]
-    selected_market = st.selectbox(
-        "Market",
-        market_options,
-        index=market_options.index(normalize_market(settings.get("market", MARKET_INDIA))),
-        format_func=market_label,
-        help="Select India to use the XLS universe with .NS Yahoo symbols, or US to use the Nasdaq CSV with plain Yahoo symbols.",
-    )
+    market_col, status_col = st.columns(2)
+    with market_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>🌐</span>Market</div>'
+                '<p class="data-panel-subtitle">Choose the stock market universe used throughout the app.</p>',
+                unsafe_allow_html=True,
+            )
+            selected_market = st.selectbox(
+                "Market",
+                market_options,
+                index=market_options.index(normalize_market(settings.get("market", MARKET_INDIA))),
+                format_func=market_label,
+                help="Select India to use the XLS universe with .NS Yahoo symbols, or US to use the Nasdaq CSV with plain Yahoo symbols.",
+                label_visibility="collapsed",
+            )
 
-    render_data_availability_status(selected_market)
-
-    st.markdown(
-        '<p class="section-header">⬇️ Download Fresh Stock Data</p>',
-        unsafe_allow_html=True,
-    )
+    with status_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>◷</span>Data Status</div>'
+                '<p class="data-panel-subtitle">The latest date currently available for the selected market.</p>',
+                unsafe_allow_html=True,
+            )
+            render_data_availability_status(selected_market)
 
     india_excel_file = EXCEL_DIR / "MCAP_JUGAAD.xlsx"
     us_csv_file = EXCEL_DIR / "nasdaq_screener_1784114565446.csv"
@@ -1566,36 +2127,66 @@ with tab1:
     if available_symbol_count:
         saved_download_limit = min(saved_download_limit, available_symbol_count)
 
-    download_tf = st.selectbox(
-        "📅 Download Timeframe",
-        ["DAY", "WEEK", "MONTH"],
-        index=["DAY", "WEEK", "MONTH"].index(settings.get("download_tf", "DAY")),
-    )
-    download_limit = st.number_input(
-        "🔢 Number of stocks to download",
-        min_value=1,
-        max_value=available_symbol_count or None,
-        value=saved_download_limit,
-        step=50,
-        help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
-    )
+    download_tf = "DAY"
+    source_col, settings_col = st.columns(2)
+    with source_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>🗂️</span>Source File</div>'
+                '<p class="data-panel-subtitle">Review or replace the symbol universe used for downloads.</p>',
+                unsafe_allow_html=True,
+            )
+            if symbols_file.exists():
+                st.markdown(
+                    f'<div class="source-file-summary">'
+                    f'<span class="source-file-summary__name">{html.escape(symbols_file.name)}</span>'
+                    f'<span class="source-file-summary__badge">Ready</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"{available_symbol_count:,} symbols available")
+            else:
+                st.warning(f"Add {symbols_file.name} before downloading stock data.")
 
-    full_refresh = st.checkbox(
-        "Full refresh: clear existing JSON files before downloading",
-        value=False,
-        help="Leave unchecked for a faster incremental refresh that appends only candles after each stock file's latest saved date.",
-    )
+            if selected_market == MARKET_INDIA:
+                uploaded = st.file_uploader(
+                    "Replace source file",
+                    type=["xlsx"],
+                    help="Upload a replacement Excel file containing the India stock universe.",
+                )
+                if uploaded:
+                    india_excel_file.write_bytes(uploaded.getbuffer())
+                    st.success("Source file replaced successfully.")
+            else:
+                st.caption("The US market uses the configured Nasdaq CSV source.")
 
-    if symbols_file.exists():
-        st.success(f"✅ {market_label(selected_market)} {source_label} Found: {symbols_file.name}")
-    else:
-        st.warning(f"⚠️ Add the {market_label(selected_market)} {source_label} file before downloading stock data.")
+    with settings_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>⚙️</span>Download Settings</div>'
+                '<p class="data-panel-subtitle">Set the universe size and choose incremental or full refresh.</p>',
+                unsafe_allow_html=True,
+            )
+            download_limit = st.number_input(
+                "Number of stocks",
+                min_value=1,
+                max_value=available_symbol_count or None,
+                value=saved_download_limit,
+                step=50,
+                help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
+            )
 
-    if selected_market == MARKET_INDIA:
-        uploaded = st.file_uploader("📂 Replace Excel", type=["xlsx"])
-        if uploaded:
-            india_excel_file.write_bytes(uploaded.getbuffer())
-            st.success("✅ Excel replaced")
+            full_refresh = st.checkbox(
+                "Clear existing data before downloading",
+                value=False,
+                help="Leave unchecked for a faster incremental refresh that appends only candles after each stock file's latest saved date.",
+            )
+
+            download_clicked = st.button(
+                "⬇️ Download Stocks Data",
+                type="primary",
+                use_container_width=True,
+            )
 
     update_settings({
         "market": selected_market,
@@ -1603,10 +2194,14 @@ with tab1:
         limit_setting_key: download_limit,
     })
 
-    if st.button("⬇️ Download Stocks Data", type="primary"):
+    if download_clicked:
         if not symbols_file.exists():
             st.error(f"❌ Add {symbols_file.name} before downloading {market_label(selected_market)} stock data.")
         else:
+            st.markdown(
+                '<div class="data-panel-heading"><span>↻</span>Download Activity</div>',
+                unsafe_allow_html=True,
+            )
             progress_bar = st.progress(0)
             progress_text = st.empty()
 
@@ -1674,7 +2269,10 @@ with tab1:
 with tab2:
     st.header("🔍 Screener")
     current_market = normalize_market(selected_market)
-    st.caption(f"Market: {market_label(current_market)}")
+    st.markdown(
+        f'<div class="screener-market-chip">● {html.escape(market_label(current_market))} market</div>',
+        unsafe_allow_html=True,
+    )
 
     # ---- Initialize session state for filter set ----
     if "screener_filter_set" in settings:
@@ -1696,19 +2294,19 @@ with tab2:
     filter_widget_prefix = "ma_filter"
 
     # ===== TOP SECTION: Favorite Filter Selection + Run Screener =====
-    st.markdown(
-        '<p class="section-header">⚡ Quick Run</p>',
-        unsafe_allow_html=True,
-    )
-
-    # ---- Screening Timeframe ----
-    col_tf, col_green, col_charts = st.columns([1, 1, 1])
-    with col_tf:
-        tf = st.selectbox(
-            "📅 Screening Timeframe",
-            ["DAY", "WEEK", "MONTH"],
-            index=["DAY", "WEEK", "MONTH"].index(settings.get("tf", "DAY")),
+    command_col, builder_col = st.columns([1.35, 1])
+    with command_col:
+        quick_run_panel = st.container(border=True)
+    with quick_run_panel:
+        st.markdown(
+            '<div class="data-panel-heading"><span>⚡</span>Quick Run</div>'
+            '<p class="data-panel-subtitle">Choose a filter set, adjust optional checks, and start screening.</p>',
+            unsafe_allow_html=True,
         )
+
+    tf = "DAY"
+    with quick_run_panel:
+        col_green, col_charts = st.columns(2)
     with col_green:
         green_candle_toggle = st.toggle(
             "🟢 Green Candle Today",
@@ -1724,15 +2322,16 @@ with tab2:
         )
     green_candle_min_gain_pct = float(settings.get("green_candle_min_gain_pct", 1.0))
     if green_candle_toggle:
-        green_candle_min_gain_pct = float(st.number_input(
-            "Minimum Gain %",
-            min_value=0.0,
-            max_value=100.0,
-            value=green_candle_min_gain_pct,
-            step=0.1,
-            key="green_candle_min_gain_pct",
-            help="Minimum percentage gain from previous close required for the green candle filter.",
-        ))
+        with quick_run_panel:
+            green_candle_min_gain_pct = float(st.number_input(
+                "Minimum Gain %",
+                min_value=0.0,
+                max_value=100.0,
+                value=green_candle_min_gain_pct,
+                step=0.1,
+                key="green_candle_min_gain_pct",
+                help="Minimum percentage gain from previous close required for the green candle filter.",
+            ))
     update_settings({
         "tf": tf,
         "create_charts": create_charts,
@@ -1741,7 +2340,8 @@ with tab2:
     })
 
     # ---- Favorite Filter Set + Run Button side by side ----
-    col_fav, col_run = st.columns([3, 1])
+    with quick_run_panel:
+        col_fav, col_run = st.columns([3, 1])
     with col_fav:
         favorite_names = sorted(favorite_filter_sets.keys())
         if favorite_names:
@@ -1765,7 +2365,7 @@ with tab2:
                 favorite_options,
                 key="_favorite_select_widget",
                 on_change=on_favorite_filter_selected,
-                help="Select a saved favorite filter set to load its MA & pattern filters.",
+                help="Select a saved favorite filter set to load its MA and expression filters.",
             )
             # Ensure the save-name field is pre-filled with the currently-selected favourite
             if "_favorite_name_to_save" not in st.session_state:
@@ -1786,13 +2386,16 @@ with tab2:
     # Read current_filter_set from session state now (after selectbox may have updated it)
     current_filter_set = st.session_state["current_filter_set"]
 
-    st.divider()
-
-    # ===== MA Based Filtering =====
-    st.subheader("📐 MA Based Filtering")
-
     # ---- Add Filter Row ----
-    col1, col2 = st.columns([3, 1])
+    with builder_col:
+        add_filter_panel = st.container(border=True)
+    with add_filter_panel:
+        st.markdown(
+            '<div class="data-panel-heading"><span>＋</span>Add a Filter</div>'
+            '<p class="data-panel-subtitle">Choose a technical or valuation rule for the current set.</p>',
+            unsafe_allow_html=True,
+        )
+        col1, col2 = st.columns([3, 1])
     with col1:
         filter_type_to_add = st.selectbox(
             "Filter Category",
@@ -1800,7 +2403,11 @@ with tab2:
             format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
     with col2:
-        add_filter = st.button("➕ Add Filter")
+        add_filter = st.button(
+            "➕ Add",
+            use_container_width=True,
+            help="Add the selected rule to the current filter set.",
+        )
 
     if add_filter:
         current_filter_set.append({
@@ -1816,12 +2423,19 @@ with tab2:
     # Streamlit reusing frontend-cached values from the previous filter set.
     widget_key_version = st.session_state.get("_widget_key_version", 1)
 
-    st.markdown('<p class="section-header">📋 Current Filter Set</p>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="screener-section-heading">'
+        f'<div class="screener-section-heading__title">Current Filter Set</div>'
+        f'<div class="screener-section-heading__count">{len(current_filter_set)} active</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     if not current_filter_set:
         st.info("No MA filters selected. Screening will pass stocks through this tab.")
 
     rendered_filter_set = []
+    filter_grid_columns = st.columns(2)
 
     for index, filter_item in enumerate(current_filter_set, start=1):
         filter_id = filter_item["id"]
@@ -1838,7 +2452,10 @@ with tab2:
 
         expander_label = f"{index}. {filter_label}"
 
-        with st.expander(expander_label, expanded=True):
+        with filter_grid_columns[(index - 1) % 2]:
+            filter_expander = st.expander(expander_label, expanded=False)
+
+        with filter_expander:
             remove_filter = st.button(
                 "❌ Remove Filter",
                 key=f"{filter_widget_prefix}_remove_filter_{filter_id}_v{widget_key_version}",
@@ -2062,73 +2679,49 @@ with tab2:
     st.session_state["current_filter_set"] = rendered_filter_set
     filter_set = normalize_filter_set(rendered_filter_set, use_default=False)
     active_filter_count = len(filter_set)
-    st.info(f"📌 Filters in current set: {active_filter_count}")
 
     update_settings({
         "screener_filter_set": filter_set,
     })
 
-    st.divider()
-
-    # ===== Pattern Based Filtering =====
-    st.subheader("🔄 Pattern Based Filtering")
-
+    # ===== Expression Based Filtering =====
     initialize_pattern_expression_state()
 
-    if "pattern_lookback_days_slider" not in st.session_state:
-        st.session_state["pattern_lookback_days_slider"] = int(settings.get("pattern_lookback_days", 120))
-    if "pattern_lookback_days_number" not in st.session_state:
-        st.session_state["pattern_lookback_days_number"] = int(settings.get("pattern_lookback_days", 120))
-    if "pattern_reversal_pct_slider" not in st.session_state:
-        st.session_state["pattern_reversal_pct_slider"] = float(settings.get("pattern_reversal_pct", 5.0))
-    if "pattern_reversal_pct_number" not in st.session_state:
-        st.session_state["pattern_reversal_pct_number"] = float(settings.get("pattern_reversal_pct", 5.0))
+    pattern_lookback_days = int(
+        st.session_state.get("pattern_lookback_days_number", settings.get("pattern_lookback_days", 120))
+    )
+    pattern_reversal_pct = float(
+        st.session_state.get("pattern_reversal_pct_number", settings.get("pattern_reversal_pct", 5.0))
+    )
+    pattern_expression_filters = st.session_state["pattern_expression_filters"]
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.slider(
-            "📅 Lookback Days",
-            min_value=10,
-            max_value=1000,
-            step=5,
-            key="pattern_lookback_days_slider",
-            on_change=sync_pattern_lookback_from_slider,
-        )
-    with col2:
-        st.number_input(
-            "📅 Lookback Days",
-            min_value=10,
-            max_value=1000,
-            step=1,
-            key="pattern_lookback_days_number",
-            on_change=sync_pattern_lookback_from_number,
-        )
+    st.markdown(
+        '<div class="screener-section-heading">'
+        '<div class="screener-section-heading__title">📝 Expression Filters</div>'
+        '</div>'
+        '<p class="screener-section-copy">Build formulas with price, PE, moving averages, crosses, and MA statistics.</p>',
+        unsafe_allow_html=True,
+    )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.slider(
-            "📉 Swing Reversal %",
-            min_value=0.5,
-            max_value=50.0,
-            step=0.5,
-            key="pattern_reversal_pct_slider",
-            on_change=sync_pattern_reversal_from_slider,
-        )
-    with col2:
-        st.number_input(
-            "📉 Swing Reversal %",
-            min_value=0.5,
-            max_value=50.0,
-            step=0.1,
-            key="pattern_reversal_pct_number",
-            on_change=sync_pattern_reversal_from_number,
-        )
+    if pattern_expression_filters:
+        expression_col, reference_col = st.columns([1.35, 1])
+        with expression_col:
+            expression_panel = st.container(border=True)
+    else:
+        expression_panel = st.container(border=True)
 
-    pattern_lookback_days = int(st.session_state["pattern_lookback_days_number"])
-    pattern_reversal_pct = float(st.session_state["pattern_reversal_pct_number"])
-
-    st.markdown('<p class="section-header">📝 Swing Expression Filters</p>', unsafe_allow_html=True)
-    if st.button("➕ Add Expression", key="add_pattern_filter"):
+    with expression_panel:
+        st.markdown(
+            '<div class="data-panel-heading"><span>📝</span>Expressions</div>'
+            '<p class="data-panel-subtitle">Every expression must evaluate to true for a stock to match.</p>',
+            unsafe_allow_html=True,
+        )
+        add_expression = st.button(
+            "➕ Add Expression",
+            key="add_pattern_filter",
+            use_container_width=True,
+        )
+    if add_expression:
         st.session_state["pattern_expression_filters"].append({
             "id": st.session_state["next_pattern_expression_id"],
             "expression": "",
@@ -2136,21 +2729,33 @@ with tab2:
         st.session_state["next_pattern_expression_id"] += 1
         st.rerun()
 
-    pattern_expression_filters = st.session_state["pattern_expression_filters"]
     valid_pattern_expressions = []
     invalid_pattern_errors = []
 
     if not pattern_expression_filters:
-        st.info("No swing filters selected. Pattern screening will pass stocks through this tab.")
+        with expression_panel:
+            st.info("No expressions selected. Click Add Expression to build a custom rule.")
+    else:
+        with reference_col:
+            with st.container(border=True):
+                st.markdown(
+                    '<div class="data-panel-heading"><span>⌨️</span>Allowed Keywords</div>'
+                    '<p class="data-panel-subtitle">Tap or click any keyword to see what it means.</p>'
+                    + expression_keyword_reference_html(),
+                    unsafe_allow_html=True,
+                )
 
     for index, expression_filter in enumerate(pattern_expression_filters, start=1):
         filter_id = expression_filter["id"]
-        col1, col2 = st.columns([5, 1])
+        with expression_panel:
+            col1, col2 = st.columns([5, 1])
         with col1:
             expression = st.text_input(
                 f"Expression {index}",
                 value=expression_filter.get("expression", ""),
                 key=f"pattern_expression_{filter_id}",
+                placeholder="e.g. P > SMA200 and ROI(50) > 0",
+                help="Use the allowed-keyword reference shown beside this form.",
             )
         with col2:
             remove_expression = st.button(
@@ -2166,15 +2771,18 @@ with tab2:
 
         expression_filter["expression"] = expression
         if not expression.strip():
-            st.info("Blank expression ignored.")
+            with expression_panel:
+                st.info("Blank expression ignored.")
             continue
 
         is_valid, error = validate_expression(expression)
         if is_valid:
-            st.success("✅ Valid expression")
+            with expression_panel:
+                st.success("✅ Valid expression")
             valid_pattern_expressions.append(expression.strip())
         else:
-            st.error(f"❌ {error}")
+            with expression_panel:
+                st.error(f"❌ {error}")
             invalid_pattern_errors.append(f"Expression {index}: {error}")
 
     update_settings({
@@ -2186,20 +2794,55 @@ with tab2:
         ],
     })
 
-    st.divider()
+    # ===== Favorite Filter Management =====
+    st.markdown(
+        '<div class="screener-section-heading">'
+        '<div class="screener-section-heading__title">⭐ Favorite Sets</div>'
+        '</div>'
+        '<p class="screener-section-copy">Save the current setup for reuse or remove a set you no longer need.</p>',
+        unsafe_allow_html=True,
+    )
+    save_col, remove_col = st.columns(2)
+    with save_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>💾</span>Save Current Set</div>'
+                '<p class="data-panel-subtitle">Store all current MA and expression filters under a memorable name.</p>',
+                unsafe_allow_html=True,
+            )
+            favorite_name = st.text_input(
+                "Favorite Filter Name",
+                key="_favorite_name_to_save",
+                placeholder="e.g. Golden Cross + PE < 30",
+            )
+            save_fav = st.button(
+                "⭐ Add To Favorites",
+                type="primary",
+                use_container_width=True,
+            )
 
-    # ===== Save Current Filters =====
-    st.markdown('<p class="section-header">💾 Save Current Filters</p>', unsafe_allow_html=True)
-    col_save_name, col_save_btn = st.columns([3, 1])
-    with col_save_name:
-        favorite_name = st.text_input(
-            "Favorite Filter Name",
-            key="_favorite_name_to_save",
-            placeholder="e.g. Golden Cross + PE < 30",
-        )
-    with col_save_btn:
-        st.write("")  # spacer
-        save_fav = st.button("⭐ Add To Favorites", use_container_width=True)
+    delete_fav = False
+    del_favorite_name = None
+    with remove_col:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>🗑️</span>Remove Saved Set</div>'
+                '<p class="data-panel-subtitle">Delete a saved set without changing the filters currently on screen.</p>',
+                unsafe_allow_html=True,
+            )
+            if favorite_filter_sets:
+                del_favorite_name = st.selectbox(
+                    "Favorite Filter Set",
+                    sorted(favorite_filter_sets.keys()),
+                    key="delete_favorite_select",
+                )
+                delete_fav = st.button(
+                    "Remove Favorite",
+                    type="primary",
+                    use_container_width=True,
+                )
+            else:
+                st.info("No saved favorite sets yet.")
 
     if save_fav:
         clean_name = favorite_name.strip()
@@ -2223,30 +2866,14 @@ with tab2:
             st.success(f"⭐ Saved favorite filters: {clean_name}")
             st.rerun()
 
-    # ===== Remove Favorite Filters =====
-    if favorite_filter_sets:
-        st.divider()
-        st.markdown('<p class="section-header">🗑️ Remove Favorite</p>', unsafe_allow_html=True)
-        col_del_name, col_del_btn = st.columns([3, 1])
-        with col_del_name:
-            del_favorite_name = st.selectbox(
-                "Select favorite to remove",
-                sorted(favorite_filter_sets.keys()),
-                key="delete_favorite_select",
-            )
-        with col_del_btn:
-            st.write("")  # spacer
-            delete_fav = st.button("🗑️ Remove Favorite", use_container_width=True)
-
-        if delete_fav:
-            if del_favorite_name in favorite_filter_sets:
-                del favorite_filter_sets[del_favorite_name]
-                save_favourite_filter_sets(favorite_filter_sets)
-                if settings.get("selected_favorite_filter_set") == del_favorite_name:
-                    update_settings({"selected_favorite_filter_set": "Current Filters"})
-                st.session_state.pop("_favorite_select_widget", None)
-                st.success(f"🗑️ Removed favorite: {del_favorite_name}")
-                st.rerun()
+    if delete_fav and del_favorite_name in favorite_filter_sets:
+        del favorite_filter_sets[del_favorite_name]
+        save_favourite_filter_sets(favorite_filter_sets)
+        if settings.get("selected_favorite_filter_set") == del_favorite_name:
+            update_settings({"selected_favorite_filter_set": "Current Filters"})
+        st.session_state.pop("_favorite_select_widget", None)
+        st.success(f"🗑️ Removed favorite: {del_favorite_name}")
+        st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:
@@ -2266,7 +2893,7 @@ with tab2:
             })
 
         if run_invalid_pattern_errors:
-            st.error("Fix invalid swing expressions before running the screener.")
+            st.error("Fix invalid expressions before running the screener.")
             st.stop()
 
         for filter_item in run_filter_set:
@@ -2312,14 +2939,7 @@ with tab3:
     if not favorite_names:
         st.info("No saved favorite filters yet. Save filters from the Screener tab before running a backtest.")
     else:
-        col_tf, col_dates = st.columns([1, 3])
-        with col_tf:
-            backtest_tf = st.selectbox(
-                "Backtest Timeframe",
-                ["DAY", "WEEK", "MONTH"],
-                index=["DAY", "WEEK", "MONTH"].index(settings.get("backtest_tf", settings.get("tf", "DAY"))),
-                key="backtest_tf_select",
-            )
+        backtest_tf = "DAY"
 
         target_dir = timeframe_config(backtest_tf, current_market)["target_dir"]
         stock_files = stock_data_files(target_dir)
@@ -2351,15 +2971,14 @@ with tab3:
                 else max_date
             )
 
-            with col_dates:
-                selected_start_date, selected_end_date = st.slider(
-                    "Backtest date range",
-                    min_value=min_date,
-                    max_value=max_date,
-                    value=(default_start, default_end),
-                    format="DD-MM-YYYY",
-                    help="Find stocks on the start date, then calculate the equal-weight portfolio gain through the end date.",
-                )
+            selected_start_date, selected_end_date = st.slider(
+                "Backtest date range",
+                min_value=min_date,
+                max_value=max_date,
+                value=(default_start, default_end),
+                format="DD-MM-YYYY",
+                help="Find stocks on the start date, then calculate the equal-weight portfolio gain through the end date.",
+            )
 
             start_candidates = [date for date in available_dates if date >= selected_start_date]
             end_candidates = [date for date in available_dates if date <= selected_end_date]
@@ -2507,7 +3126,7 @@ with tab4:
 
     if rows:
         result_market_for_repair = normalize_market(settings.get("last_results_market", selected_market))
-        result_timeframe_for_repair = settings.get("tf", "DAY")
+        result_timeframe_for_repair = "DAY"
         repair_filter_set = normalize_filter_set(
             settings.get("screener_filter_set", st.session_state.get("current_filter_set", [])),
             use_default=False,
