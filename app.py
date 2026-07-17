@@ -677,8 +677,16 @@ st.markdown(
         background: #ffffff;
         box-shadow: var(--shadow-sm);
     }
+    [data-testid="stProgress"] > div {
+        overflow: hidden;
+        border: 1px solid #c8d4de;
+        border-radius: 999px;
+        background: #e8eef3;
+        box-shadow: inset 0 1px 2px rgba(16, 36, 62, 0.10);
+    }
     [data-testid="stProgress"] > div > div {
-        background: linear-gradient(90deg, var(--brand), #22a6a1);
+        background: linear-gradient(90deg, #f6b73c, #ed762f) !important;
+        box-shadow: 0 0 8px rgba(237, 118, 47, 0.34);
     }
     hr {
         border-color: var(--border) !important;
