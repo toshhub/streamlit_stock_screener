@@ -37,8 +37,8 @@ from downloader import (
 )
 from fundamentals import (
     enrich_result_with_growth_metrics,
-    get_cached_company_growth_metrics,
-    get_cached_company_valuation_medians,
+    get_company_fundamentals,
+    repair_result_fundamentals,
 )
 from pattern import evaluate_pattern_filters, validate_expression
 from screener import (
@@ -206,8 +206,7 @@ def run_interactive_chart_view():
     has_previous = str(query_param_value("has_previous", "") or "").lower() in {"1", "true", "yes"}
     has_next = str(query_param_value("has_next", "") or "").lower() in {"1", "true", "yes"}
     chart_range = str(query_param_value("range", "252") or "252").lower()
-    growth_metrics = get_cached_company_growth_metrics(symbol, market)
-    valuation_medians = get_cached_company_valuation_medians(symbol, market)
+    growth_metrics, valuation_medians = get_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
         .stMainBlockContainer {
@@ -3235,6 +3234,9 @@ with tab4:
             use_default=False,
         )
         if repair_blank_result_charts(rows, repair_filter_set, result_market_for_repair, result_timeframe_for_repair):
+            st.session_state["results"] = rows
+            save_results(rows)
+        if repair_result_fundamentals(rows, result_market_for_repair):
             st.session_state["results"] = rows
             save_results(rows)
 

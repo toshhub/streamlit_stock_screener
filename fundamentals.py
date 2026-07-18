@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from html import unescape
 
@@ -34,8 +35,11 @@ VALUATION_PERIOD_DAYS = {
 
 _CACHE_LOCK = threading.RLock()
 _FETCH_LIMIT = threading.BoundedSemaphore(2)
+_REQUEST_RATE_LOCK = threading.Lock()
+_LAST_REQUEST_AT = 0.0
+_MIN_REQUEST_INTERVAL_SECONDS = 0.35
 _SUCCESS_TTL = timedelta(days=7)
-_EMPTY_TTL = timedelta(days=1)
+_EMPTY_TTL = timedelta(minutes=15)
 _RETRIABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 
 
@@ -114,6 +118,7 @@ def _cached_field(
     field,
     fetched_at_field,
     allow_stale=False,
+    completeness_check=None,
 ):
     with _CACHE_LOCK:
         entry = load_fundamentals().get(_cache_key(symbol, market))
@@ -133,7 +138,10 @@ def _cached_field(
     except (TypeError, ValueError):
         return None
 
-    ttl = _SUCCESS_TTL if value else _EMPTY_TTL
+    is_complete = bool(value)
+    if is_complete and completeness_check is not None:
+        is_complete = completeness_check(value)
+    ttl = _SUCCESS_TTL if is_complete else _EMPTY_TTL
     return value if datetime.now(timezone.utc) - fetched_at <= ttl else None
 
 
@@ -154,9 +162,40 @@ def get_cached_company_valuation_medians(symbol, market=MARKET_INDIA):
     )
 
 
+def _growth_metrics_complete(metrics):
+    return all(
+        isinstance(metrics.get(section), dict)
+        and set(periods).issubset(metrics[section])
+        for section, periods in GROWTH_SECTION_PERIODS.items()
+    )
+
+
+def _valuation_medians_complete(valuation_medians):
+    required_periods = set(VALUATION_PERIOD_DAYS)
+    return all(
+        required_periods.issubset(
+            valuation_medians.get(metric_name, {})
+            if isinstance(valuation_medians.get(metric_name), dict)
+            else {}
+        )
+        for metric_name in ("Median PE", "Median Market Cap to Sales")
+    )
+
+
+def _wait_for_request_slot():
+    global _LAST_REQUEST_AT
+    with _REQUEST_RATE_LOCK:
+        elapsed = time.monotonic() - _LAST_REQUEST_AT
+        wait_seconds = _MIN_REQUEST_INTERVAL_SECONDS - elapsed
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _LAST_REQUEST_AT = time.monotonic()
+
+
 def _read_url_with_retries(request, timeout=15, attempts=3):
     last_error = None
     for attempt in range(attempts):
+        _wait_for_request_slot()
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
@@ -164,11 +203,18 @@ def _read_url_with_retries(request, timeout=15, attempts=3):
             last_error = exc
             if exc.code not in _RETRIABLE_HTTP_CODES or attempt + 1 >= attempts:
                 raise
+            retry_after = 0.0
+            try:
+                retry_after = float(exc.headers.get("Retry-After", 0) or 0)
+            except (AttributeError, TypeError, ValueError):
+                retry_after = 0.0
+            time.sleep(max(retry_after, 1.5 * (attempt + 1)))
+            continue
         except (OSError, urllib.error.URLError) as exc:
             last_error = exc
             if attempt + 1 >= attempts:
                 raise
-        time.sleep(0.45 * (attempt + 1))
+        time.sleep(0.75 * (attempt + 1))
     if last_error:
         raise last_error
     return b""
@@ -309,12 +355,19 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
     if market != MARKET_INDIA:
         return {}, {}
 
-    cached_growth = _cached_field(symbol, market, "metrics", "fetched_at")
+    cached_growth = _cached_field(
+        symbol,
+        market,
+        "metrics",
+        "fetched_at",
+        completeness_check=_growth_metrics_complete,
+    )
     cached_valuations = _cached_field(
         symbol,
         market,
         "valuation_medians",
         "valuation_fetched_at",
+        completeness_check=_valuation_medians_complete,
     )
     if cached_growth is not None and cached_valuations is not None:
         return cached_growth, cached_valuations
@@ -369,6 +422,76 @@ def growth_summary_fields(metrics):
         "Price CAGR 3Y": value("Stock Price CAGR", "3 Years"),
         "ROE 3Y": value("Return on Equity", "3 Years"),
     }
+
+
+def apply_fundamentals_to_result(result, metrics, valuation_medians):
+    changed = False
+    if metrics and result.get("GrowthMetrics") != metrics:
+        result["GrowthMetrics"] = metrics
+        summary = growth_summary_fields(metrics)
+        for field, value in summary.items():
+            if result.get(field) != value:
+                result[field] = value
+        changed = True
+    if valuation_medians and result.get("ValuationMedians") != valuation_medians:
+        result["ValuationMedians"] = valuation_medians
+        changed = True
+    return changed
+
+
+def _result_needs_fundamentals(result):
+    return not _growth_metrics_complete(
+        result.get("GrowthMetrics", {})
+    ) or not _valuation_medians_complete(
+        result.get("ValuationMedians", {})
+    )
+
+
+def repair_result_fundamentals(results, market=MARKET_INDIA):
+    """Hydrate saved result rows and retry missing Screener.in fundamentals."""
+    market = normalize_market(market)
+    if market != MARKET_INDIA or not results:
+        return False
+
+    changed = False
+    pending = []
+    for result in results:
+        symbol = str(result.get("Symbol", "") or "").strip()
+        if not symbol:
+            continue
+        changed = apply_fundamentals_to_result(
+            result,
+            get_cached_company_growth_metrics(symbol, market),
+            get_cached_company_valuation_medians(symbol, market),
+        ) or changed
+        if _result_needs_fundamentals(result):
+            pending.append((result, symbol))
+
+    if not pending:
+        return changed
+
+    max_workers = min(2, len(pending))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_company_fundamentals, symbol, market): result
+            for result, symbol in pending
+        }
+        for future in as_completed(futures):
+            result = futures[future]
+            try:
+                metrics, valuation_medians = future.result()
+            except Exception as exc:
+                print(
+                    "Screener.in result fundamentals repair unavailable for "
+                    f"{result.get('Symbol', 'unknown')}: {exc}"
+                )
+                continue
+            changed = apply_fundamentals_to_result(
+                result,
+                metrics,
+                valuation_medians,
+            ) or changed
+    return changed
 
 
 def enrich_result_with_growth_metrics(result, symbol, market=MARKET_INDIA):

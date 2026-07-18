@@ -4,11 +4,14 @@ from unittest.mock import patch
 
 from fundamentals import (
     _read_url_with_retries,
+    _valuation_medians_complete,
+    apply_fundamentals_to_result,
     get_company_fundamentals,
     growth_summary_fields,
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
+    repair_result_fundamentals,
 )
 from downloader import MARKET_US
 
@@ -148,6 +151,7 @@ class ScreenerFundamentalsTests(unittest.TestCase):
             None,
         )
         with (
+            patch("fundamentals._wait_for_request_slot"),
             patch(
                 "fundamentals.urllib.request.urlopen",
                 side_effect=[throttled, self._Response(b"recovered")],
@@ -159,6 +163,66 @@ class ScreenerFundamentalsTests(unittest.TestCase):
         self.assertEqual(body, b"recovered")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
+
+    def test_cached_fundamentals_hydrate_an_existing_result(self):
+        row = {"Symbol": "IGPL", "GrowthMetrics": {}, "ValuationMedians": {}}
+        medians = {
+            "Median PE": {
+                "3 Years": 22.0,
+                "5 Years": 12.8,
+                "10 Years": 12.9,
+            }
+        }
+
+        changed = apply_fundamentals_to_result(
+            row,
+            parse_screener_growth_html(SAMPLE_HTML),
+            medians,
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(row["Sales CAGR 3Y"], 7.0)
+        self.assertEqual(row["ValuationMedians"], medians)
+
+    def test_result_repair_fetches_missing_fundamentals(self):
+        row = {"Symbol": "JAGRAN", "GrowthMetrics": {}, "ValuationMedians": {}}
+        metrics = parse_screener_growth_html(SAMPLE_HTML)
+        medians = {"Median PE": {"3 Years": 10.3}}
+        with (
+            patch("fundamentals.get_cached_company_growth_metrics", return_value={}),
+            patch("fundamentals.get_cached_company_valuation_medians", return_value={}),
+            patch(
+                "fundamentals.get_company_fundamentals",
+                return_value=(metrics, medians),
+            ) as fetch,
+        ):
+            changed = repair_result_fundamentals([row])
+
+        self.assertTrue(changed)
+        fetch.assert_called_once_with("JAGRAN", "INDIA")
+        self.assertEqual(row["GrowthMetrics"], metrics)
+        self.assertEqual(row["ValuationMedians"], medians)
+
+    def test_partial_valuation_periods_are_not_treated_as_complete(self):
+        partial = {
+            "Median PE": {"5 Years": 14.2},
+            "Median Market Cap to Sales": {"5 Years": 0.3},
+        }
+        complete = {
+            "Median PE": {
+                "3 Years": 8950.0,
+                "5 Years": 14.2,
+                "10 Years": 31.3,
+            },
+            "Median Market Cap to Sales": {
+                "3 Years": 0.3,
+                "5 Years": 0.3,
+                "10 Years": 0.2,
+            },
+        }
+
+        self.assertFalse(_valuation_medians_complete(partial))
+        self.assertTrue(_valuation_medians_complete(complete))
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -382,7 +383,8 @@ class InteractiveChartRouteTests(unittest.TestCase):
                 "ma": "50,200",
             }
         )
-        app.run(timeout=30)
+        with patch("fundamentals.get_company_fundamentals", return_value=({}, {})):
+            app.run(timeout=30)
 
         self.assertEqual(list(app.exception), [])
 
