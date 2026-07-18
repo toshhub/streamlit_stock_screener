@@ -6,7 +6,6 @@ from fundamentals import (
     _read_url_with_retries,
     get_company_fundamentals,
     growth_summary_fields,
-    has_complete_company_fundamentals,
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
@@ -160,34 +159,6 @@ class ScreenerFundamentalsTests(unittest.TestCase):
         self.assertEqual(body, b"recovered")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
-
-    def test_fundamentals_completeness_requires_all_three_median_periods(self):
-        metrics = parse_screener_growth_html(SAMPLE_HTML)
-        incomplete = {
-            "Median PE": {"10 Years": 12.9},
-            "Median Market Cap to Sales": {"10 Years": 0.8},
-        }
-        two_periods = {
-            "Median PE": {"3 Years": 22.0, "5 Years": 12.8},
-            "Median Market Cap to Sales": {"3 Years": 0.7, "5 Years": 0.7},
-        }
-        complete = {
-            "Median PE": {
-                "3 Years": 22.0,
-                "5 Years": 12.8,
-                "10 Years": 12.9,
-            },
-            "Median Market Cap to Sales": {
-                "3 Years": 0.7,
-                "5 Years": 0.7,
-                "10 Years": 0.8,
-            },
-        }
-
-        self.assertFalse(has_complete_company_fundamentals(metrics, incomplete))
-        self.assertFalse(has_complete_company_fundamentals(metrics, two_periods))
-        self.assertTrue(has_complete_company_fundamentals(metrics, complete))
-
 
 if __name__ == "__main__":
     unittest.main()

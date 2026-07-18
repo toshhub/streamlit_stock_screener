@@ -303,12 +303,16 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertIn('<button class="interactive-chart-link"', result)
         self.assertIn('<a class="screener-company-link"', result)
+        self.assertEqual(
+            result.count('class="screener-company-link"'),
+            len(df),
+        )
         self.assertIn(
             'href="https://www.screener.in/company/360ONE/consolidated/"',
             result,
         )
         self.assertIn('target="_blank" rel="noopener noreferrer"', result)
-        self.assertNotIn(
+        self.assertIn(
             'aria-label="Open COMPLETE on Screener.in"',
             result,
         )
@@ -318,7 +322,7 @@ class InteractiveChartTests(unittest.TestCase):
             'historical median PE data is available">LOSSMAKING</span>',
             result,
         )
-        self.assertNotIn(
+        self.assertIn(
             'aria-label="Open LOSSMAKING on Screener.in"',
             result,
         )

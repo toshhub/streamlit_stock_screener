@@ -3281,8 +3281,6 @@ with tab4:
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 
         table_df = display_df.copy()
-        if "GrowthMetrics" in df.columns:
-            table_df["GrowthMetrics"] = df["GrowthMetrics"]
         if "ValuationMedians" in df.columns:
             table_df["ValuationMedians"] = df["ValuationMedians"]
 

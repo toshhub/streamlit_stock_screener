@@ -1,5 +1,4 @@
 import json
-import math
 import re
 import threading
 import time
@@ -303,33 +302,6 @@ def _fetch_valuation_medians(page_html, symbol):
         for metric_name, period_values in values.items()
         if period_values
     }
-
-
-def _numeric_value_count(values):
-    if not isinstance(values, dict):
-        return 0
-    count = 0
-    for value in values.values():
-        try:
-            if value is not None and math.isfinite(float(value)):
-                count += 1
-        except (TypeError, ValueError):
-            continue
-    return count
-
-
-def has_complete_company_fundamentals(metrics, valuation_medians):
-    growth_available = all(
-        _numeric_value_count(metrics.get(section_name, {})) > 0
-        for section_name in GROWTH_SECTION_PERIODS
-    ) if isinstance(metrics, dict) else False
-    if not isinstance(valuation_medians, dict):
-        return False
-    pe_periods = _numeric_value_count(valuation_medians.get("Median PE", {}))
-    sales_periods = _numeric_value_count(
-        valuation_medians.get("Median Market Cap to Sales", {})
-    )
-    return growth_available and pe_periods >= 3 and sales_periods >= 3
 
 
 def get_company_fundamentals(symbol, market=MARKET_INDIA):
