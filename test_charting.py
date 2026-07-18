@@ -303,6 +303,7 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertIn('<button class="interactive-chart-link"', result)
         self.assertIn('<a class="screener-company-link"', result)
+        self.assertIn('<span aria-hidden="true">S</span></a>', result)
         self.assertEqual(
             result.count('class="screener-company-link"'),
             len(df),

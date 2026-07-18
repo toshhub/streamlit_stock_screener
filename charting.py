@@ -1505,7 +1505,6 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       .screener-company-link {
         display: inline-grid;
         place-items: center;
-        position: relative;
         width: 22px;
         height: 22px;
         flex: 0 0 22px;
@@ -1515,8 +1514,9 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         background: #eefaf1;
         color: #17713b;
         cursor: pointer;
-        font-size: 11px;
+        font-size: 13px;
         font-weight: 900;
+        line-height: 1;
         text-decoration: none;
         transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
         -webkit-tap-highlight-color: transparent;
@@ -1529,15 +1529,6 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         background: #ddf5e4;
         box-shadow: 0 3px 8px rgba(23, 113, 59, 0.16);
         outline: none;
-      }
-      .screener-company-link::after {
-        position: absolute;
-        top: 1px;
-        right: 2px;
-        content: "↗";
-        font-size: 7px;
-        line-height: 1;
-        pointer-events: none;
       }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
