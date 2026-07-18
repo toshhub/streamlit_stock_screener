@@ -1,6 +1,8 @@
 import json
+import math
 import re
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -35,6 +37,7 @@ _CACHE_LOCK = threading.RLock()
 _FETCH_LIMIT = threading.BoundedSemaphore(2)
 _SUCCESS_TTL = timedelta(days=7)
 _EMPTY_TTL = timedelta(days=1)
+_RETRIABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 
 
 def _plain_text(fragment):
@@ -152,6 +155,26 @@ def get_cached_company_valuation_medians(symbol, market=MARKET_INDIA):
     )
 
 
+def _read_url_with_retries(request, timeout=15, attempts=3):
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in _RETRIABLE_HTTP_CODES or attempt + 1 >= attempts:
+                raise
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                raise
+        time.sleep(0.45 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return b""
+
+
 def _fetch_screener_page(symbol):
     encoded_symbol = urllib.parse.quote(str(symbol).upper(), safe="")
     urls = (
@@ -168,8 +191,7 @@ def _fetch_screener_page(symbol):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                return response.read().decode("utf-8", errors="ignore")
+            return _read_url_with_retries(request).decode("utf-8", errors="ignore")
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code not in {404, 410}:
@@ -266,8 +288,9 @@ def _fetch_valuation_medians(page_html, symbol):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="ignore"))
+            payload = json.loads(
+                _read_url_with_retries(request).decode("utf-8", errors="ignore")
+            )
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             print(f"Screener.in valuation period unavailable for {symbol} ({period}): {exc}")
             continue
@@ -280,6 +303,45 @@ def _fetch_valuation_medians(page_html, symbol):
         for metric_name, period_values in values.items()
         if period_values
     }
+
+
+def _merge_valuation_medians(existing, refreshed):
+    merged = {}
+    for source in (existing, refreshed):
+        if not isinstance(source, dict):
+            continue
+        for metric_name, period_values in source.items():
+            if not isinstance(period_values, dict):
+                continue
+            merged.setdefault(metric_name, {}).update(period_values)
+    return merged
+
+
+def _numeric_value_count(values):
+    if not isinstance(values, dict):
+        return 0
+    count = 0
+    for value in values.values():
+        try:
+            if value is not None and math.isfinite(float(value)):
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
+def has_complete_company_fundamentals(metrics, valuation_medians):
+    growth_available = all(
+        _numeric_value_count(metrics.get(section_name, {})) > 0
+        for section_name in GROWTH_SECTION_PERIODS
+    ) if isinstance(metrics, dict) else False
+    if not isinstance(valuation_medians, dict):
+        return False
+    pe_periods = _numeric_value_count(valuation_medians.get("Median PE", {}))
+    sales_periods = _numeric_value_count(
+        valuation_medians.get("Median Market Cap to Sales", {})
+    )
+    return growth_available and pe_periods >= 2 and sales_periods >= 2
 
 
 def get_company_fundamentals(symbol, market=MARKET_INDIA):
@@ -354,7 +416,10 @@ def refresh_company_fundamentals(
             refreshed_metrics = parse_screener_growth_html(page_html)
             refreshed_valuations = _fetch_valuation_medians(page_html, symbol)
         metrics = refreshed_metrics or metrics
-        valuation_medians = refreshed_valuations or valuation_medians
+        valuation_medians = _merge_valuation_medians(
+            valuation_medians,
+            refreshed_valuations,
+        )
         fetched = True
     except Exception as exc:
         print(f"Screener.in fundamentals refresh unavailable for {symbol}: {exc}")

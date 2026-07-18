@@ -1,10 +1,14 @@
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fundamentals import (
+    _merge_valuation_medians,
+    _read_url_with_retries,
     get_company_fundamentals,
     growth_summary_fields,
+    has_complete_company_fundamentals,
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
@@ -68,6 +72,19 @@ CURRENT_TABLE_HTML = """
 
 
 class ScreenerFundamentalsTests(unittest.TestCase):
+    class _Response:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return self.body
+
     def test_growth_sections_and_negative_values_are_parsed(self):
         metrics = parse_screener_growth_html(SAMPLE_HTML)
 
@@ -125,6 +142,44 @@ class ScreenerFundamentalsTests(unittest.TestCase):
 
     def test_us_market_skips_screener_fundamentals(self):
         self.assertEqual(get_company_fundamentals("AAPL", MARKET_US), ({}, {}))
+
+    def test_transient_screener_error_is_retried(self):
+        throttled = urllib.error.HTTPError(
+            "https://www.screener.in/test",
+            429,
+            "Too Many Requests",
+            {},
+            None,
+        )
+        with (
+            patch(
+                "fundamentals.urllib.request.urlopen",
+                side_effect=[throttled, self._Response(b"recovered")],
+            ) as urlopen,
+            patch("fundamentals.time.sleep") as sleep,
+        ):
+            body = _read_url_with_retries("request")
+
+        self.assertEqual(body, b"recovered")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_fundamentals_completeness_accepts_two_available_median_periods(self):
+        metrics = parse_screener_growth_html(SAMPLE_HTML)
+        incomplete = {
+            "Median PE": {"10 Years": 12.9},
+            "Median Market Cap to Sales": {"10 Years": 0.8},
+        }
+        complete = _merge_valuation_medians(
+            incomplete,
+            {
+                "Median PE": {"3 Years": 22.0, "5 Years": 12.8},
+                "Median Market Cap to Sales": {"3 Years": 0.7, "5 Years": 0.7},
+            },
+        )
+
+        self.assertFalse(has_complete_company_fundamentals(metrics, incomplete))
+        self.assertTrue(has_complete_company_fundamentals(metrics, complete))
 
     def test_manual_refresh_bypasses_cached_values_and_saves_new_data(self):
         cache = {

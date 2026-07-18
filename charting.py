@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit.components.v1 as components
 
 from config import CHARTS_DIR
+from fundamentals import has_complete_company_fundamentals
 from screener import required_ma_periods
 
 
@@ -2060,6 +2061,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     )
     rows = []
     chart_sources = df.get("ChartSource")
+    growth_metrics_series = df.get("GrowthMetrics")
     valuation_medians_series = df.get("ValuationMedians")
     interactive_periods = normalize_interactive_ma_periods(interactive_ma_periods)
     interactive_ma_query = ",".join(str(period) for period in interactive_periods)
@@ -2070,6 +2072,11 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         valuation_medians = (
             valuation_medians_series.loc[row_index]
             if valuation_medians_series is not None
+            else None
+        )
+        growth_metrics = (
+            growth_metrics_series.loc[row_index]
+            if growth_metrics_series is not None
             else None
         )
         chart_html = ""
@@ -2151,6 +2158,10 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                 if (
                     str(interactive_market or "").strip().upper() == "INDIA"
                     and value
+                    and not has_complete_company_fundamentals(
+                        growth_metrics,
+                        valuation_medians,
+                    )
                 ):
                     retry_href = "?" + urlencode(
                         {

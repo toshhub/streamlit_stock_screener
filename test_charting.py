@@ -227,6 +227,24 @@ class InteractiveChartTests(unittest.TestCase):
                     "ValuationMedians": {},
                     "ChartSource": "NEUTRAL",
                 },
+                {
+                    "Symbol": "COMPLETE",
+                    "PE Ratio": 20,
+                    "GrowthMetrics": {
+                        "Compounded Sales Growth": {"3 Years": 5},
+                        "Compounded Profit Growth": {"3 Years": 6},
+                        "Stock Price CAGR": {"3 Years": 7},
+                        "Return on Equity": {"3 Years": 8},
+                    },
+                    "ValuationMedians": {
+                        "Median PE": {"3 Years": 24, "5 Years": 26},
+                        "Median Market Cap to Sales": {
+                            "3 Years": 3.1,
+                            "5 Years": 3.4,
+                        },
+                    },
+                    "ChartSource": "COMPLETE",
+                },
             ]
         )
 
@@ -244,6 +262,10 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("window.top.location.assign", result)
         self.assertIn("data-fundamentals-refresh-version='completed-1", result)
         self.assertNotIn("<th>FundamentalsRefreshToken</th>", result)
+        self.assertNotIn(
+            'aria-label="Retry Screener.in fundamentals for COMPLETE"',
+            result,
+        )
         self.assertLess(
             result.index('class="interactive-chart-link"'),
             result.index('class="fundamentals-retry-link"'),
