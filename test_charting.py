@@ -66,17 +66,57 @@ class InteractiveChartTests(unittest.TestCase):
                 has_previous=True,
                 has_next=True,
                 initial_range="756",
+                growth_metrics={
+                    "Compounded Sales Growth": {
+                        "10 Years": 11.0,
+                        "5 Years": 12.0,
+                        "3 Years": 7.0,
+                        "TTM": 10.0,
+                    },
+                    "Stock Price CAGR": {
+                        "10 Years": 7.0,
+                        "5 Years": -7.0,
+                        "3 Years": -9.0,
+                        "1 Year": -31.0,
+                    },
+                },
+                valuation_medians={
+                    "Median PE": {
+                        "10 Years": 30.0,
+                        "5 Years": 25.0,
+                        "3 Years": 20.0,
+                    },
+                    "Median Market Cap to Sales": {
+                        "10 Years": 5.4,
+                        "5 Years": 5.7,
+                        "3 Years": 5.3,
+                    },
+                },
             )
 
-        self.assertIn("PE 24.57 · Daily interactive candlestick chart", result)
+        self.assertIn('class="chart-pe-badge"', result)
+        self.assertIn('title="Price-to-Earnings ratio">PE 24.57</span>', result)
+        self.assertIn("Interactive candlestick chart", result)
+        self.assertIn("Selected stock", result)
+        self.assertIn("Browse matches", result)
+        self.assertIn("Time range", result)
+        self.assertIn("Chart view", result)
         self.assertIn('aria-label="Previous matched stock"', result)
         self.assertIn('aria-label="Next matched stock"', result)
+        self.assertIn('aria-label="Close interactive chart"', result)
         self.assertIn("2 / 8", result)
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("range-change", result)
         self.assertIn("showBars(\"756\")", result)
         self.assertIn("CrosshairMode.Normal", result)
         self.assertNotIn("CrosshairMode.Magnet", result)
+        self.assertIn("Growth &amp; valuation snapshot", result)
+        self.assertIn("Source: Screener.in", result)
+        self.assertIn("<strong>-9%</strong>", result)
+        self.assertIn("Median P/E", result)
+        self.assertIn("Median Market Cap / Sales", result)
+        self.assertIn("valuation-favorable", result)
+        self.assertIn("Below historical median", result)
 
     def test_ma_periods_are_sanitized_capped_and_defaulted(self):
         self.assertEqual(
@@ -89,14 +129,94 @@ class InteractiveChartTests(unittest.TestCase):
             [1, 2, 3, 4, 5, 6, 7],
         )
 
+    def test_growth_section_is_hidden_when_values_are_unavailable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(300)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                pe_ratio=20,
+                growth_metrics={
+                    "Compounded Sales Growth": {
+                        "10 Years": None,
+                        "5 Years": None,
+                        "3 Years": None,
+                        "TTM": None,
+                    }
+                },
+                valuation_medians={
+                    "Median PE": {
+                        "10 Years": None,
+                        "5 Years": None,
+                        "3 Years": None,
+                    }
+                },
+            )
+
+        self.assertNotIn('class="growth-snapshot"', result)
+        self.assertNotIn("Source: Screener.in", result)
+        self.assertIn('<div class="chart-title">', result)
+        self.assertNotIn('<div class="chart-title valuation-favorable">', result)
+        self.assertNotIn('<div class="chart-title valuation-unfavorable">', result)
+
+    def test_stock_box_is_red_when_current_pe_is_not_below_two_medians(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(300)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                pe_ratio=32,
+                valuation_medians={
+                    "Median PE": {
+                        "10 Years": 30,
+                        "5 Years": 25,
+                        "3 Years": 20,
+                    }
+                },
+            )
+
+        self.assertIn("valuation-unfavorable", result)
+        self.assertIn("Above historical median", result)
+
     def test_results_table_has_tiny_in_panel_interactive_button(self):
         df = pd.DataFrame(
             [
                 {
                     "Symbol": "360ONE",
                     "PE Ratio": 20,
+                    "Sales CAGR 3Y": 7,
+                    "Profit CAGR 3Y": 8,
+                    "Price CAGR 3Y": -9,
+                    "ROE 3Y": 31,
+                    "ValuationMedians": {
+                        "Median PE": {
+                            "3 Years": 30,
+                            "5 Years": 25,
+                            "10 Years": 15,
+                        }
+                    },
                     "ChartSource": "360ONE",
-                }
+                },
+                {
+                    "Symbol": "REDTEST",
+                    "PE Ratio": 40,
+                    "ValuationMedians": {
+                        "Median PE": {
+                            "3 Years": 30,
+                            "5 Years": 25,
+                            "10 Years": 20,
+                        }
+                    },
+                    "ChartSource": "REDTEST",
+                },
+                {
+                    "Symbol": "NEUTRAL",
+                    "PE Ratio": 20,
+                    "ValuationMedians": {},
+                    "ChartSource": "NEUTRAL",
+                },
             ]
         )
 
@@ -111,12 +231,22 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("market=INDIA", result)
         self.assertIn("ma=50%2C200", result)
         self.assertIn("pe=20", result)
+        self.assertNotIn("<th>Sales CAGR 3Y</th>", result)
+        self.assertNotIn("<th>Profit CAGR 3Y</th>", result)
+        self.assertNotIn("<th>Price CAGR 3Y</th>", result)
+        self.assertNotIn("<th>ROE 3Y</th>", result)
+        self.assertIn('class="stock-symbol-label valuation-favorable"', result)
+        self.assertIn('class="stock-symbol-label valuation-unfavorable"', result)
+        self.assertIn('class="stock-symbol-label">NEUTRAL</span>', result)
+        self.assertNotIn("<th>ValuationMedians</th>", result)
         self.assertIn('data-interactive-src="?', result)
         self.assertIn("embedded=1", result)
         self.assertIn("&position=", result)
         self.assertIn("&range=", result)
         self.assertIn("activeInteractiveRange", result)
         self.assertIn("message.action === 'range-change'", result)
+        self.assertIn("message.action === 'close'", result)
+        self.assertNotIn("data-interactive-close", result)
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("position: sticky", result)
         self.assertIn("revealInteractiveHeader", result)

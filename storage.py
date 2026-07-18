@@ -6,6 +6,7 @@ SETTINGS_FILE = META_DIR / "session_settings.json"
 LEGACY_SETTINGS_FILE = META_DIR / "app_settings.json"
 FAVOURITE_FILTERS_FILE = META_DIR / "favourite_filters.json"
 PE_RATIOS_FILE = META_DIR / "pe_ratios.json"
+FUNDAMENTALS_FILE = META_DIR / "screener_fundamentals.json"
 RESULTS_FILE = META_DIR / "last_results.json"
 
 def load_settings():
@@ -41,6 +42,14 @@ def load_pe_ratios():
 
 def save_pe_ratios(data):
     PE_RATIOS_FILE.write_text(json.dumps(data, indent=2))
+
+def load_fundamentals():
+    if FUNDAMENTALS_FILE.exists():
+        return json.loads(FUNDAMENTALS_FILE.read_text())
+    return {}
+
+def save_fundamentals(data):
+    FUNDAMENTALS_FILE.write_text(json.dumps(data, indent=2))
 
 def save_results(rows):
     """Persist screener results to disk so they survive app restarts."""

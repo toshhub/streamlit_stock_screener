@@ -434,6 +434,37 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
     }
 
 
+def historical_pe_valuation_state(current_pe, valuation_medians):
+    try:
+        numeric_pe = float(current_pe)
+        if not pd.notna(numeric_pe):
+            return ""
+    except (TypeError, ValueError):
+        return ""
+
+    pe_medians = (
+        valuation_medians.get("Median PE", {})
+        if isinstance(valuation_medians, dict)
+        else {}
+    )
+    historical_values = []
+    if isinstance(pe_medians, dict):
+        for period in ("3 Years", "5 Years", "10 Years"):
+            try:
+                value = float(pe_medians.get(period))
+                if pd.notna(value):
+                    historical_values.append(value)
+            except (TypeError, ValueError):
+                pass
+    if len(historical_values) != 3:
+        return ""
+    return (
+        "favorable"
+        if sum(numeric_pe < median for median in historical_values) >= 2
+        else "unfavorable"
+    )
+
+
 def interactive_stock_chart_html(
     symbol,
     json_path,
@@ -444,32 +475,137 @@ def interactive_stock_chart_html(
     has_previous=False,
     has_next=False,
     initial_range="252",
+    growth_metrics=None,
+    valuation_medians=None,
 ):
     payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
-    pe_label = ""
+    pe_badge_html = ""
+    current_pe = None
     try:
         numeric_pe = float(pe_ratio)
         if pd.notna(numeric_pe):
-            pe_label = f"PE {numeric_pe:,.2f} · "
+            current_pe = numeric_pe
+            pe_badge_html = (
+                f'<span class="chart-pe-badge" title="Price-to-Earnings ratio">'
+                f"PE {numeric_pe:,.2f}</span>"
+            )
     except (TypeError, ValueError):
         pass
     selected_range = str(initial_range or "252").lower()
     if selected_range not in {"126", "252", "756", "all"}:
         selected_range = "252"
+    valuation_state = historical_pe_valuation_state(current_pe, valuation_medians)
+    valuation_state_class = f" valuation-{valuation_state}" if valuation_state else ""
+    valuation_state_html = ""
+    if valuation_state == "favorable":
+        valuation_state_html = (
+            '<span class="chart-valuation-status">Below historical median</span>'
+        )
+    elif valuation_state == "unfavorable":
+        valuation_state_html = (
+            '<span class="chart-valuation-status">Above historical median</span>'
+        )
+    growth_cards_html = ""
+    cards = []
+    growth_sections = (
+        ("Compounded Sales Growth", "Sales growth", "sales"),
+        ("Compounded Profit Growth", "Profit growth", "profit"),
+        ("Stock Price CAGR", "Stock price CAGR", "price"),
+        ("Return on Equity", "Return on equity", "roe"),
+    )
+    if isinstance(growth_metrics, dict) and growth_metrics:
+        for source_title, display_title, color_class in growth_sections:
+            section_values = growth_metrics.get(source_title, {})
+            if not isinstance(section_values, dict):
+                continue
+            rows = []
+            has_usable_value = False
+            for period, value in section_values.items():
+                value_text = "—"
+                try:
+                    numeric_value = float(value)
+                    if pd.notna(numeric_value):
+                        value_text = f"{numeric_value:g}%"
+                        has_usable_value = True
+                except (TypeError, ValueError):
+                    pass
+                rows.append(
+                    '<div class="growth-metric-row">'
+                    f"<span>{html.escape(str(period))}</span>"
+                    f"<strong>{html.escape(value_text)}</strong>"
+                    "</div>"
+                )
+            if rows and has_usable_value:
+                cards.append(
+                    f'<article class="growth-card growth-card--{color_class}">'
+                    f"<h3>{html.escape(display_title)}</h3>"
+                    f"{''.join(rows)}</article>"
+                )
+    valuation_sections = (
+        ("Median PE", "Median P/E", "median-pe"),
+        (
+            "Median Market Cap to Sales",
+            "Median Market Cap / Sales",
+            "median-sales",
+        ),
+    )
+    if isinstance(valuation_medians, dict):
+        for source_title, display_title, color_class in valuation_sections:
+            section_values = valuation_medians.get(source_title, {})
+            if not isinstance(section_values, dict):
+                continue
+            rows = []
+            for period in ("10 Years", "5 Years", "3 Years"):
+                try:
+                    numeric_value = float(section_values.get(period))
+                    if not pd.notna(numeric_value):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                rows.append(
+                    '<div class="growth-metric-row">'
+                    f"<span>{html.escape(period)}</span>"
+                    f"<strong>{numeric_value:g}</strong>"
+                    "</div>"
+                )
+            if rows:
+                cards.append(
+                    f'<article class="growth-card growth-card--{color_class}">'
+                    f"<h3>{html.escape(display_title)}</h3>"
+                    f"{''.join(rows)}</article>"
+                )
+    if cards:
+        growth_cards_html = (
+            '<section class="growth-snapshot" aria-label="Growth and valuation metrics">'
+            '<div class="growth-snapshot__heading">'
+            '<div><span class="growth-snapshot__eyebrow">Fundamentals</span>'
+            '<h2>Growth &amp; valuation snapshot</h2></div>'
+            '<span class="growth-snapshot__source">Source: Screener.in</span>'
+            "</div>"
+            f'<div class="growth-grid">{"".join(cards)}</div>'
+            "</section>"
+        )
     match_navigation_html = ""
     if match_position and match_total:
         previous_disabled = "" if has_previous else "disabled"
         next_disabled = "" if has_next else "disabled"
         match_navigation_html = (
+            '<section class="chart-control-section chart-navigation-section">'
+            '<span class="chart-section-label">Browse matches</span>'
             '<div class="chart-match-navigation" aria-label="Matched stock navigation">'
             f'<button type="button" class="chart-match-nav" id="matched-prev" '
-            f'aria-label="Previous matched stock" {previous_disabled}>&lsaquo;</button>'
+            f'aria-label="Previous matched stock" title="Previous matched stock" '
+            f'{previous_disabled}>&lsaquo;</button>'
             f'<span class="chart-match-counter">{int(match_position)} / {int(match_total)}</span>'
             f'<button type="button" class="chart-match-nav" id="matched-next" '
-            f'aria-label="Next matched stock" {next_disabled}>&rsaquo;</button>'
-            "</div>"
+            f'aria-label="Next matched stock" title="Next matched stock" '
+            f'{next_disabled}>&rsaquo;</button>'
+            '<span class="chart-control-divider" aria-hidden="true"></span>'
+            '<button type="button" class="chart-close" id="chart-close" '
+            'aria-label="Close interactive chart" title="Close interactive chart">&times;</button>'
+            "</div></section>"
         )
 
     return f"""
@@ -497,23 +633,40 @@ def interactive_stock_chart_html(
         }}
         .chart-shell {{
           display: grid;
-          grid-template-rows: auto auto minmax(300px, 1fr) auto;
+          grid-template-rows: auto auto minmax(300px, 1fr) auto auto;
           height: 100vh;
           min-height: 0;
           padding: 8px;
         }}
         .chart-header {{
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 11px 14px;
+          display: grid;
+          grid-template-columns: minmax(240px, 1fr) auto auto;
+          align-items: stretch;
+          gap: 8px;
+          padding: 8px;
           border: 1px solid var(--border);
           border-bottom: 0;
           border-radius: 14px 14px 0 0;
-          background: #ffffff;
+          background: linear-gradient(135deg, #f7fafc 0%, #eef6f8 100%);
         }}
-        .chart-title {{ min-width: 0; }}
+        .chart-title {{
+          min-width: 0;
+          padding: 9px 12px;
+          border: 1px solid #cfe0e8;
+          border-radius: 10px;
+          background: linear-gradient(135deg, #ffffff 0%, #edf8f9 100%);
+          box-shadow: 0 2px 8px rgba(16, 36, 62, 0.05);
+        }}
+        .chart-title.valuation-favorable {{
+          border-color: #78c68f;
+          background: linear-gradient(135deg, #f5fff7 0%, #dcf7e4 100%);
+          box-shadow: 0 2px 10px rgba(21, 128, 61, 0.10);
+        }}
+        .chart-title.valuation-unfavorable {{
+          border-color: #df9999;
+          background: linear-gradient(135deg, #fffafa 0%, #ffe5e5 100%);
+          box-shadow: 0 2px 10px rgba(185, 28, 28, 0.09);
+        }}
         .chart-title__row {{ display: flex; align-items: center; gap: 8px; min-width: 0; }}
         .chart-title strong {{
           display: block;
@@ -524,6 +677,67 @@ def interactive_stock_chart_html(
           white-space: nowrap;
         }}
         .chart-title span {{ color: var(--muted); font-size: 11px; }}
+        .chart-title .chart-pe-badge {{
+          display: inline-flex;
+          align-items: center;
+          min-height: 24px;
+          padding: 3px 8px;
+          border: 1px solid #86c99a;
+          border-radius: 999px;
+          background: #e8f8ed;
+          color: #15703a;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1;
+          white-space: nowrap;
+        }}
+        .chart-valuation-status {{
+          display: inline-flex;
+          align-items: center;
+          min-height: 22px;
+          padding: 3px 7px;
+          border-radius: 999px;
+          font-size: 8px !important;
+          font-weight: 800;
+          line-height: 1;
+          white-space: nowrap;
+        }}
+        .valuation-favorable .chart-valuation-status {{
+          background: #15803d;
+          color: #ffffff;
+        }}
+        .valuation-unfavorable .chart-valuation-status {{
+          background: #b91c1c;
+          color: #ffffff;
+        }}
+        .chart-subtitle {{
+          display: block;
+          margin-top: 4px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }}
+        .chart-control-section {{
+          display: flex;
+          min-width: 0;
+          padding: 7px 9px;
+          border: 1px solid #d7e2e9;
+          border-radius: 10px;
+          background: rgba(255, 255, 255, 0.94);
+          box-shadow: 0 2px 8px rgba(16, 36, 62, 0.045);
+          flex-direction: column;
+          justify-content: center;
+          gap: 5px;
+        }}
+        .chart-section-label {{
+          color: #6a7e90;
+          font-size: 8px;
+          font-weight: 850;
+          letter-spacing: 0.08em;
+          line-height: 1;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }}
         .chart-match-navigation {{
           display: inline-flex;
           align-items: center;
@@ -548,6 +762,24 @@ def interactive_stock_chart_html(
         }}
         .chart-match-nav:hover:not(:disabled) {{ background: #d6eef2; border-color: #4f91a3; }}
         .chart-match-nav:disabled {{ cursor: not-allowed; opacity: 0.32; }}
+        .chart-close {{
+          display: grid;
+          place-items: center;
+          width: 28px;
+          height: 28px;
+          margin-left: 2px;
+          padding: 0;
+          border: 1px solid #d9a4a4;
+          border-radius: 8px;
+          background: #fff5f5;
+          color: #a72f2f;
+          cursor: pointer;
+          font-size: 19px;
+          font-weight: 800;
+          line-height: 1;
+          touch-action: manipulation;
+        }}
+        .chart-close:hover {{ border-color: #c96f6f; background: #ffe8e8; color: #8f2020; }}
         .chart-match-counter {{
           min-width: 39px;
           color: #52667a !important;
@@ -556,7 +788,23 @@ def interactive_stock_chart_html(
           text-align: center;
           white-space: nowrap;
         }}
-        .chart-actions {{ display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }}
+        .chart-control-divider {{
+          width: 1px;
+          height: 22px;
+          margin: 0 2px;
+          background: #d9e3e9;
+        }}
+        .chart-toolbar {{
+          display: flex;
+          align-items: stretch;
+          gap: 8px;
+        }}
+        .chart-actions {{
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          justify-content: flex-end;
+        }}
         .chart-action {{
           min-width: 31px;
           height: 29px;
@@ -629,22 +877,129 @@ def interactive_stock_chart_html(
           font-size: 10px;
         }}
         .chart-footer a {{ color: var(--brand); font-weight: 700; text-decoration: none; }}
+        .growth-snapshot {{
+          padding: 10px 0 0;
+          background: var(--surface-soft);
+        }}
+        .growth-snapshot__heading {{
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 10px;
+          margin-bottom: 7px;
+          padding: 0 2px;
+        }}
+        .growth-snapshot__eyebrow {{
+          color: #15803d;
+          font-size: 8px;
+          font-weight: 850;
+          letter-spacing: 0.09em;
+          text-transform: uppercase;
+        }}
+        .growth-snapshot h2 {{
+          margin: 1px 0 0;
+          color: #17334c;
+          font-size: 13px;
+          letter-spacing: -0.01em;
+        }}
+        .growth-snapshot__source {{
+          color: #718397;
+          font-size: 8px;
+          white-space: nowrap;
+        }}
+        .growth-grid {{
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 7px;
+        }}
+        .growth-card {{
+          position: relative;
+          min-width: 0;
+          padding: 9px 10px;
+          overflow: hidden;
+          border: 1px solid #d9e4ea;
+          border-radius: 10px;
+          background: #ffffff;
+          box-shadow: 0 2px 8px rgba(16, 36, 62, 0.045);
+        }}
+        .growth-card::before {{
+          position: absolute;
+          inset: 0 auto 0 0;
+          width: 3px;
+          background: #16a34a;
+          content: "";
+        }}
+        .growth-card--profit::before {{ background: #0891b2; }}
+        .growth-card--price::before {{ background: #ea8a1f; }}
+        .growth-card--roe::before {{ background: #7c3aed; }}
+        .growth-card--median-pe::before {{ background: #dc2626; }}
+        .growth-card--median-sales::before {{ background: #2563eb; }}
+        .growth-card h3 {{
+          margin: 0 0 6px;
+          overflow: hidden;
+          color: #17334c;
+          font-size: 10px;
+          font-weight: 800;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }}
+        .growth-metric-row {{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          min-height: 18px;
+          color: #64748b;
+          font-size: 9px;
+          font-variant-numeric: tabular-nums;
+        }}
+        .growth-metric-row strong {{
+          color: #10243e;
+          font-size: 10px;
+        }}
+        @media (max-width: 980px) {{
+          .chart-header {{
+            grid-template-columns: minmax(220px, 1fr) auto;
+          }}
+          .chart-toolbar {{
+            grid-column: 1 / -1;
+          }}
+          .chart-toolbar .chart-control-section {{
+            flex: 1 1 0;
+          }}
+        }}
         @media (max-width: 640px) {{
           .chart-shell {{
             grid-template-rows: auto auto minmax(280px, 1fr) auto;
             padding: 4px;
           }}
           .chart-header {{
-            align-items: stretch;
-            flex-direction: column;
-            padding: 8px;
+            grid-template-columns: 1fr;
+            gap: 6px;
+            padding: 6px;
           }}
+          .chart-title {{ padding: 8px 9px; }}
           .chart-title strong {{ font-size: 15px; }}
-          .chart-actions {{
+          .chart-navigation-section {{ grid-column: 1; }}
+          .chart-match-navigation {{ width: 100%; }}
+          .chart-match-counter {{ flex: 1 1 auto; }}
+          .chart-toolbar {{
+            display: grid;
+            grid-column: 1;
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+            gap: 6px;
+          }}
+          .chart-control-section {{ padding: 7px; }}
+          .chart-range-actions {{
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             width: 100%;
             max-width: none;
+          }}
+          .chart-view-actions {{
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            width: 100%;
           }}
           .chart-action {{
             width: 100%;
@@ -664,33 +1019,50 @@ def interactive_stock_chart_html(
             padding: 6px 8px;
             font-size: 9px;
           }}
+          .growth-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+          .growth-snapshot {{ padding-top: 7px; }}
+          .growth-card {{ padding: 8px 9px; }}
         }}
       </style>
     </head>
     <body>
       <main class="chart-shell">
         <header class="chart-header">
-          <div class="chart-title">
+          <div class="chart-title{valuation_state_class}">
+            <span class="chart-section-label">Selected stock</span>
             <div class="chart-title__row">
               <strong>{safe_symbol}</strong>
-              {match_navigation_html}
+              {pe_badge_html}
+              {valuation_state_html}
             </div>
-            <span>{pe_label}Daily interactive candlestick chart · {payload["pointCount"]:,} candles</span>
+            <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles</span>
           </div>
-          <div class="chart-actions" aria-label="Chart controls">
-            <button class="chart-action" type="button" data-range="126">6M</button>
-            <button class="chart-action" type="button" data-range="252">1Y</button>
-            <button class="chart-action" type="button" data-range="756">3Y</button>
-            <button class="chart-action" type="button" data-range="all">All</button>
-            <button class="chart-action" type="button" id="zoom-out" aria-label="Zoom out">−</button>
-            <button class="chart-action" type="button" id="zoom-in" aria-label="Zoom in">+</button>
-            <button class="chart-action primary" type="button" id="reset-chart">Reset</button>
+          {match_navigation_html}
+          <div class="chart-toolbar" aria-label="Chart controls">
+            <section class="chart-control-section">
+              <span class="chart-section-label">Time range</span>
+              <div class="chart-actions chart-range-actions">
+                <button class="chart-action" type="button" data-range="126">6M</button>
+                <button class="chart-action" type="button" data-range="252">1Y</button>
+                <button class="chart-action" type="button" data-range="756">3Y</button>
+                <button class="chart-action" type="button" data-range="all">All</button>
+              </div>
+            </section>
+            <section class="chart-control-section">
+              <span class="chart-section-label">Chart view</span>
+              <div class="chart-actions chart-view-actions">
+                <button class="chart-action" type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+                <button class="chart-action" type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+                <button class="chart-action primary" type="button" id="reset-chart">Reset</button>
+              </div>
+            </section>
           </div>
         </header>
         <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC and MA values.</div>
         <section id="chart" aria-label="{safe_symbol} interactive stock chart">
           <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
         </section>
+        {growth_cards_html}
         <footer class="chart-footer">
           <span>Scroll or pinch to zoom · drag to pan · tap and hold on mobile to inspect values</span>
           <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">Charts by TradingView</a>
@@ -703,30 +1075,40 @@ def interactive_stock_chart_html(
           const container = document.getElementById("chart");
           const loading = document.getElementById("chart-loading");
           const legend = document.getElementById("chart-legend");
-          if (!window.LightweightCharts) {{
-            loading.textContent = "Interactive chart library could not load. Check the internet connection and retry.";
-            return;
-          }}
 
-          function requestMatchedStock(direction) {{
-            if (window.parent && window.parent.parent) {{
-              window.parent.parent.postMessage({{
-                source: "nse-interactive-chart",
-                action: direction
-              }}, "*");
+          function postChartMessage(message) {{
+            if (window.parent) {{
+              try {{
+                window.parent.postMessage(message, "*");
+              }} catch (error) {{}}
             }}
+            if (window.parent && window.parent.parent && window.parent.parent !== window.parent) {{
+              try {{
+                window.parent.parent.postMessage(message, "*");
+              }} catch (error) {{}}
+            }}
+            if (window.top && window.top !== window.parent && window.top !== window.parent.parent) {{
+              try {{
+                window.top.postMessage(message, "*");
+              }} catch (error) {{}}
+            }}
+          }}
+          function requestMatchedStock(direction) {{
+            postChartMessage({{
+              source: "nse-interactive-chart",
+              action: direction
+            }});
           }}
           function rememberChartRange(range) {{
-            if (window.parent && window.parent.parent) {{
-              window.parent.parent.postMessage({{
-                source: "nse-interactive-chart",
-                action: "range-change",
-                range: String(range)
-              }}, "*");
-            }}
+            postChartMessage({{
+              source: "nse-interactive-chart",
+              action: "range-change",
+              range: String(range)
+            }});
           }}
           const matchedPrevious = document.getElementById("matched-prev");
           const matchedNext = document.getElementById("matched-next");
+          const chartClose = document.getElementById("chart-close");
           if (matchedPrevious) {{
             matchedPrevious.addEventListener("click", function() {{
               requestMatchedStock("previous");
@@ -736,6 +1118,15 @@ def interactive_stock_chart_html(
             matchedNext.addEventListener("click", function() {{
               requestMatchedStock("next");
             }});
+          }}
+          if (chartClose) {{
+            chartClose.addEventListener("click", function() {{
+              requestMatchedStock("close");
+            }});
+          }}
+          if (!window.LightweightCharts) {{
+            loading.textContent = "Interactive chart library could not load. Check the internet connection and retry.";
+            return;
           }}
 
           const colors = ["#2563eb", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5", "#15803d"];
@@ -899,6 +1290,8 @@ def render_interactive_stock_chart(
     has_previous=False,
     has_next=False,
     initial_range="252",
+    growth_metrics=None,
+    valuation_medians=None,
     height=760,
 ):
     components.html(
@@ -912,6 +1305,8 @@ def render_interactive_stock_chart(
             has_previous=has_previous,
             has_next=has_next,
             initial_range=initial_range,
+            growth_metrics=growth_metrics,
+            valuation_medians=valuation_medians,
         ),
         height=height,
         scrolling=False,
@@ -919,7 +1314,19 @@ def render_interactive_stock_chart(
 
 
 def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):
-    visible_df = df.drop(columns=["ChartPath", "ChartSource"], errors="ignore")
+    visible_df = df.drop(
+        columns=[
+            "ChartPath",
+            "ChartSource",
+            "GrowthMetrics",
+            "ValuationMedians",
+            "Sales CAGR 3Y",
+            "Profit CAGR 3Y",
+            "Price CAGR 3Y",
+            "ROE 3Y",
+        ],
+        errors="ignore",
+    )
     chart_paths = df.get("ChartPath")
 
     styles = """
@@ -1041,7 +1448,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         gap: 4px;
         white-space: nowrap;
       }
-      .stock-hover {
+      .stock-hover,
+      .stock-symbol-label {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -1051,8 +1459,21 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         background: var(--brand-soft);
         color: var(--brand-dark);
         font-weight: 800;
-        cursor: pointer;
         transition: transform 0.14s ease, box-shadow 0.14s ease;
+      }
+      .stock-hover { cursor: pointer; }
+      .stock-symbol-label { cursor: default; }
+      .stock-hover.valuation-favorable,
+      .stock-symbol-label.valuation-favorable {
+        border-color: #78c68f;
+        background: #e4f7e9;
+        color: #126736;
+      }
+      .stock-hover.valuation-unfavorable,
+      .stock-symbol-label.valuation-unfavorable {
+        border-color: #dfa0a0;
+        background: #ffebeb;
+        color: #962d2d;
       }
       .stock-hover::after {
         content: "↗";
@@ -1105,6 +1526,16 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         border-color: var(--brand) !important;
         background: #d9f1f3 !important;
         box-shadow: 0 0 0 3px rgba(23, 107, 135, 0.10);
+      }
+      .stock-hover-active.valuation-favorable {
+        border-color: #2d9852 !important;
+        background: #d3f1dc !important;
+        box-shadow: 0 0 0 3px rgba(21, 128, 61, 0.12);
+      }
+      .stock-hover-active.valuation-unfavorable {
+        border-color: #c75c5c !important;
+        background: #ffdcdc !important;
+        box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.11);
       }
 
       /* ---- Fixed chart panel below table (all screen sizes) ---- */
@@ -1238,32 +1669,10 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         letter-spacing: 0.04em;
         text-transform: uppercase;
       }
-      .interactive-panel-actions {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex: 0 0 auto;
-      }
-      .interactive-panel-close {
-        display: grid;
-        place-items: center;
-        width: 28px;
-        height: 28px;
-        flex: 0 0 28px;
-        padding: 0;
-        border: 1px solid #d6e0e7;
-        border-radius: 8px;
-        background: #f7fafc;
-        color: #52667a;
-        cursor: pointer;
-        font-size: 18px;
-        line-height: 1;
-      }
-      .interactive-panel-close:hover { background: #e8eef3; color: #10243e; }
       .interactive-chart-embed {
         display: block;
         width: 100%;
-        height: 660px;
+        height: 860px;
         border: 1px solid #e0e8ee;
         border-radius: 10px;
         background: #f5f8fb;
@@ -1292,7 +1701,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .chart-panel.interactive-mode { padding: 5px; }
         .interactive-panel-header { padding: 1px 2px 5px; }
         .interactive-chart-embed {
-          height: 650px;
+          height: 900px;
           border-radius: 8px;
         }
         .interactive-panel-help { font-size: 9px; }
@@ -1450,23 +1859,11 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                 '<span>' + escapedSymbol + '</span>' +
                 '<span class="interactive-mode-badge">Interactive</span>' +
               '</div>' +
-              '<div class="interactive-panel-actions">' +
-                '<button type="button" class="interactive-panel-close" data-interactive-close aria-label="Close interactive chart">&times;</button>' +
-              '</div>' +
             '</div>' +
             '<iframe class="interactive-chart-embed" src="' + escapeHtml(embeddedSrc) + '" ' +
               'title="' + escapedSymbol + ' interactive chart" loading="eager"></iframe>' +
             '<div class="interactive-panel-help">Pinch or scroll to zoom · drag to pan · use the chart controls for 6M, 1Y, 3Y or all data.</div>';
 
-          var closeButton = panel.querySelector('[data-interactive-close]');
-          if (closeButton) {
-            closeButton.addEventListener('click', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              setActiveInteractiveButton(null);
-              clearPanel();
-            });
-          }
           var embeddedFrame = panel.querySelector('.interactive-chart-embed');
           requestAnimationFrame(function() {
             revealInteractiveHeader(panel, 'smooth');
@@ -1560,6 +1957,9 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
               if (['126', '252', '756', 'all'].indexOf(requestedRange) >= 0) {
                 activeInteractiveRange = requestedRange;
               }
+            } else if (message.action === 'close') {
+              setActiveInteractiveButton(null);
+              clearPanel();
             }
           });
 
@@ -1634,12 +2034,18 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     )
     rows = []
     chart_sources = df.get("ChartSource")
+    valuation_medians_series = df.get("ValuationMedians")
     interactive_periods = normalize_interactive_ma_periods(interactive_ma_periods)
     interactive_ma_query = ",".join(str(period) for period in interactive_periods)
     for row_index, row in visible_df.iterrows():
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
         chart_source = chart_sources.loc[row_index] if chart_sources is not None else None
+        valuation_medians = (
+            valuation_medians_series.loc[row_index]
+            if valuation_medians_series is not None
+            else None
+        )
         chart_html = ""
         data_uri = ""
         if chart_path and _row_chart_matches_symbol(row.get("Symbol"), chart_path, chart_source):
@@ -1657,12 +2063,37 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
             if column == "Symbol":
-                symbol_html = escaped_value
+                valuation_state = historical_pe_valuation_state(
+                    row.get("PE Ratio"),
+                    valuation_medians,
+                )
+                valuation_class = (
+                    f" valuation-{valuation_state}" if valuation_state else ""
+                )
+                valuation_title = ""
+                if valuation_state == "favorable":
+                    valuation_title = (
+                        "Current PE is below at least two of the 3Y, 5Y, and 10Y medians"
+                    )
+                elif valuation_state == "unfavorable":
+                    valuation_title = (
+                        "Current PE is not below at least two of the 3Y, 5Y, and 10Y medians"
+                    )
+                title_attribute = (
+                    f' title="{html.escape(valuation_title, quote=True)}"'
+                    if valuation_title
+                    else ""
+                )
+                symbol_html = (
+                    f'<span class="stock-symbol-label{valuation_class}"'
+                    f"{title_attribute}>{escaped_value}</span>"
+                )
                 if chart_html and data_uri:
                     symbol_html = (
-                        f'<span class="stock-hover" '
+                        f'<span class="stock-hover{valuation_class}" '
                         f'data-symbol="{html.escape(value, quote=True)}" '
-                        f'data-chart-src="{html.escape(data_uri, quote=True)}">'
+                        f'data-chart-src="{html.escape(data_uri, quote=True)}"'
+                        f"{title_attribute}>"
                         f'{escaped_value}{chart_html}'
                         f'</span>'
                     )

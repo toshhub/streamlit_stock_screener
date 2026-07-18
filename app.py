@@ -35,7 +35,11 @@ from downloader import (
     normalize_market,
     timeframe_config,
 )
-from emailer import send_results_email
+from fundamentals import (
+    enrich_result_with_growth_metrics,
+    get_cached_company_growth_metrics,
+    get_cached_company_valuation_medians,
+)
 from pattern import evaluate_pattern_filters, validate_expression
 from screener import (
     DEFAULT_FILTER_SET,
@@ -202,6 +206,8 @@ def run_interactive_chart_view():
     has_previous = str(query_param_value("has_previous", "") or "").lower() in {"1", "true", "yes"}
     has_next = str(query_param_value("has_next", "") or "").lower() in {"1", "true", "yes"}
     chart_range = str(query_param_value("range", "252") or "252").lower()
+    growth_metrics = get_cached_company_growth_metrics(symbol, market)
+    valuation_medians = get_cached_company_valuation_medians(symbol, market)
     st.markdown(
         """
         <style>
@@ -227,7 +233,9 @@ def run_interactive_chart_view():
             has_previous=has_previous,
             has_next=has_next,
             initial_range=chart_range,
-            height=620 if embedded else 820,
+            growth_metrics=growth_metrics,
+            valuation_medians=valuation_medians,
+            height=820 if embedded else 920,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")
@@ -970,6 +978,9 @@ def screen_stock_file_worker(
             pattern_expressions,
             pe_ratio=result.get("PE Ratio"),
         )
+
+    if pattern_passed:
+        enrich_result_with_growth_metrics(result, stock_file.stem, market)
 
     if pattern_passed and create_charts:
         with CHART_CREATION_LOCK:
@@ -3256,8 +3267,12 @@ with tab4:
 
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 
+        table_df = display_df.copy()
+        if "ValuationMedians" in df.columns:
+            table_df["ValuationMedians"] = df["ValuationMedians"]
+
         if "ChartPath" in df.columns:
-            chart_df = display_df.copy()
+            chart_df = table_df.copy()
             chart_df["ChartPath"] = df["ChartPath"]
             if "ChartSource" in df.columns:
                 chart_df["ChartSource"] = df["ChartSource"]
@@ -3268,69 +3283,11 @@ with tab4:
             )
         else:
             sortable_results_table(
-                display_df,
+                table_df,
                 interactive_market=result_market,
                 interactive_ma_periods=required_ma_periods(repair_filter_set),
             )
 
-        st.download_button(
-            "📥 Download Results CSV",
-            display_df.to_csv(index=False),
-            "results.csv",
-            "text/csv",
-        )
-
-        st.divider()
-        st.subheader("📧 Email Results")
-        st.caption("Use a Gmail App Password. Your password is used only for this send and is not saved.")
-
-        gmail_id = st.text_input(
-            "📧 Gmail ID",
-            value=settings.get("gmail_id", ""),
-            placeholder="yourname@gmail.com",
-        )
-        gmail_app_password = st.text_input(
-            "🔑 Gmail App Password",
-            type="password",
-            placeholder="16-digit app password",
-        )
-        recipient_email = st.text_input(
-            "📩 Recipient Email",
-            value=settings.get("recipient_email", ""),
-            placeholder="recipient@example.com",
-        )
-        email_subject = st.text_input(
-            "📋 Subject",
-            value=settings.get("email_subject", "NSE Stock Screener Results"),
-        )
-        email_body = st.text_area(
-            "📝 Message",
-            value=settings.get("email_body", "Attached are the latest filtered stock screener results."),
-        )
-
-        update_settings({
-            "gmail_id": gmail_id,
-            "recipient_email": recipient_email,
-            "email_subject": email_subject,
-            "email_body": email_body,
-        })
-
-        if st.button("✉️ Send Results Email"):
-            if not gmail_id or not gmail_app_password or not recipient_email:
-                st.error("❌ Enter Gmail ID, Gmail App Password, and recipient email.")
-            else:
-                try:
-                    send_results_email(
-                        gmail_id,
-                        gmail_app_password,
-                        recipient_email,
-                        email_subject,
-                        email_body,
-                        display_df.to_csv(index=False),
-                    )
-                    st.success("✅ Email sent successfully.")
-                except Exception as exc:
-                    st.error(f"❌ Email failed: {exc}")
     else:
         if live_screener_job and live_screener_job.get("running"):
             st.info("Waiting for the first matching stock. Results will appear here automatically.")
