@@ -1,0 +1,39 @@
+name: Apply mobile chart layout fix
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-mobile-chart-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update mobile chart layout
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("charting.py")
+          text = path.read_text()
+
+          old = '''        @media (max-width: 640px) {{
+          .chart-shell {{
+            grid-template-rows: auto auto minmax(280px, 1fr) auto;
+            padding: 4px;
+          }}'''
+
+          new = '''        @media (max-width: 640px) {{
+          html, body {{
+            height: auto;
+            min-height: 100%;
+            overflow-x: hidden;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+          }}
+          .chart-shell {{
