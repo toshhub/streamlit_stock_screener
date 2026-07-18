@@ -164,21 +164,23 @@ class ScreenerFundamentalsTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
 
-    def test_fundamentals_completeness_accepts_two_available_median_periods(self):
+    def test_fundamentals_completeness_requires_all_three_median_periods(self):
         metrics = parse_screener_growth_html(SAMPLE_HTML)
         incomplete = {
             "Median PE": {"10 Years": 12.9},
             "Median Market Cap to Sales": {"10 Years": 0.8},
         }
+        two_periods = {
+            "Median PE": {"3 Years": 22.0, "5 Years": 12.8},
+            "Median Market Cap to Sales": {"3 Years": 0.7, "5 Years": 0.7},
+        }
         complete = _merge_valuation_medians(
             incomplete,
-            {
-                "Median PE": {"3 Years": 22.0, "5 Years": 12.8},
-                "Median Market Cap to Sales": {"3 Years": 0.7, "5 Years": 0.7},
-            },
+            two_periods,
         )
 
         self.assertFalse(has_complete_company_fundamentals(metrics, incomplete))
+        self.assertFalse(has_complete_company_fundamentals(metrics, two_periods))
         self.assertTrue(has_complete_company_fundamentals(metrics, complete))
 
     def test_manual_refresh_bypasses_cached_values_and_saves_new_data(self):

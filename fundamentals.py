@@ -341,7 +341,7 @@ def has_complete_company_fundamentals(metrics, valuation_medians):
     sales_periods = _numeric_value_count(
         valuation_medians.get("Median Market Cap to Sales", {})
     )
-    return growth_available and pe_periods >= 2 and sales_periods >= 2
+    return growth_available and pe_periods >= 3 and sales_periods >= 3
 
 
 def get_company_fundamentals(symbol, market=MARKET_INDIA):

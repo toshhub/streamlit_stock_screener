@@ -237,10 +237,15 @@ class InteractiveChartTests(unittest.TestCase):
                         "Return on Equity": {"3 Years": 8},
                     },
                     "ValuationMedians": {
-                        "Median PE": {"3 Years": 24, "5 Years": 26},
+                        "Median PE": {
+                            "3 Years": 24,
+                            "5 Years": 26,
+                            "10 Years": 22,
+                        },
                         "Median Market Cap to Sales": {
                             "3 Years": 3.1,
                             "5 Years": 3.4,
+                            "10 Years": 2.8,
                         },
                     },
                     "ChartSource": "COMPLETE",
