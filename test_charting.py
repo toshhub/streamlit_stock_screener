@@ -236,6 +236,13 @@ class InteractiveChartTests(unittest.TestCase):
         )
 
         self.assertIn('<button class="interactive-chart-link"', result)
+        self.assertIn('class="fundamentals-retry-link"', result)
+        self.assertIn("retry_fundamentals=360ONE", result)
+        self.assertIn('target="_top"', result)
+        self.assertLess(
+            result.index('class="interactive-chart-link"'),
+            result.index('class="fundamentals-retry-link"'),
+        )
         self.assertIn("interactive_chart=360ONE", result)
         self.assertIn("market=INDIA", result)
         self.assertIn("ma=50%2C200", result)
@@ -265,6 +272,13 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("embeddedFrame.addEventListener('load'", result)
         self.assertNotIn('target="_blank"', result)
 
+        us_result = results_hover_table_html(
+            df,
+            interactive_market="US",
+            interactive_ma_periods=[50, 200],
+        )
+        self.assertNotIn('class="fundamentals-retry-link"', us_result)
+
 
 class InteractiveChartRouteTests(unittest.TestCase):
     def test_embedded_interactive_chart_route_renders_without_exception(self):
@@ -279,6 +293,18 @@ class InteractiveChartRouteTests(unittest.TestCase):
                 "market": "INDIA",
                 "embedded": "1",
                 "ma": "50,200",
+            }
+        )
+        app.run(timeout=30)
+
+        self.assertEqual(list(app.exception), [])
+
+    def test_missing_fundamentals_retry_route_returns_without_exception(self):
+        app = AppTest.from_file("app.py")
+        app.query_params.update(
+            {
+                "retry_fundamentals": "NOT-IN-SAVED-RESULTS",
+                "market": "INDIA",
             }
         )
         app.run(timeout=30)

@@ -1489,6 +1489,36 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         height: 13px;
         pointer-events: none;
       }
+      .fundamentals-retry-link {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
+        padding: 0;
+        border: 1px solid #84c99a;
+        border-radius: 6px;
+        background: #eefaf1;
+        color: #17713b;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      .fundamentals-retry-link:hover,
+      .fundamentals-retry-link:focus {
+        transform: translateY(-1px);
+        border-color: #3c9a5c;
+        background: #ddf5e4;
+        box-shadow: 0 3px 8px rgba(23, 113, 59, 0.16);
+        outline: none;
+      }
+      .fundamentals-retry-link svg {
+        width: 13px;
+        height: 13px;
+        pointer-events: none;
+      }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
       .stock-hover-active {
@@ -2095,7 +2125,35 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                         'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
                         '</svg></button>'
                     )
-                escaped_value = f'<span class="stock-symbol-cell">{symbol_html}{interactive_link}</span>'
+                fundamentals_retry_link = ""
+                if (
+                    str(interactive_market or "").strip().upper() == "INDIA"
+                    and value
+                ):
+                    retry_href = "?" + urlencode(
+                        {
+                            "retry_fundamentals": value,
+                            "market": "INDIA",
+                        }
+                    )
+                    fundamentals_retry_link = (
+                        f'<a class="fundamentals-retry-link" '
+                        f'href="{html.escape(retry_href, quote=True)}" target="_top" '
+                        f'title="Retry Screener.in CAGR and median data for '
+                        f'{html.escape(value, quote=True)}" '
+                        f'aria-label="Retry Screener.in fundamentals for '
+                        f'{html.escape(value, quote=True)}">'
+                        '<svg viewBox="0 0 16 16" aria-hidden="true">'
+                        '<path d="M12.8 5.7A5.3 5.3 0 0 0 3.1 4.5M3.1 4.5V1.8M3.1 4.5h2.7'
+                        'M3.2 10.3a5.3 5.3 0 0 0 9.7 1.2M12.9 11.5v2.7M12.9 11.5h-2.7" '
+                        'fill="none" stroke="currentColor" stroke-width="1.45" '
+                        'stroke-linecap="round" stroke-linejoin="round"/>'
+                        '</svg></a>'
+                    )
+                escaped_value = (
+                    f'<span class="stock-symbol-cell">'
+                    f"{symbol_html}{interactive_link}{fundamentals_retry_link}</span>"
+                )
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 

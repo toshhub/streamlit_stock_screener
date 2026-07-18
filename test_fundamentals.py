@@ -1,4 +1,6 @@
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from fundamentals import (
     get_company_fundamentals,
@@ -6,6 +8,7 @@ from fundamentals import (
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
+    refresh_company_fundamentals,
 )
 from downloader import MARKET_US
 
@@ -122,6 +125,38 @@ class ScreenerFundamentalsTests(unittest.TestCase):
 
     def test_us_market_skips_screener_fundamentals(self):
         self.assertEqual(get_company_fundamentals("AAPL", MARKET_US), ({}, {}))
+
+    def test_manual_refresh_bypasses_cached_values_and_saves_new_data(self):
+        cache = {
+            "INDIA:TEST": {
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "metrics": {"Old metric": {"3 Years": 1}},
+                "valuation_fetched_at": datetime.now(timezone.utc).isoformat(),
+                "valuation_medians": {"Median PE": {"3 Years": 99}},
+            }
+        }
+        refreshed_medians = {
+            "Median PE": {"3 Years": 24.5},
+            "Median Market Cap to Sales": {"3 Years": 4.2},
+        }
+
+        with (
+            patch("fundamentals.load_fundamentals", return_value=cache),
+            patch("fundamentals.save_fundamentals") as save_fundamentals,
+            patch("fundamentals._fetch_screener_page", return_value=SAMPLE_HTML) as fetch_page,
+            patch(
+                "fundamentals._fetch_valuation_medians",
+                return_value=refreshed_medians,
+            ),
+        ):
+            metrics, medians = refresh_company_fundamentals("TEST")
+
+        fetch_page.assert_called_once_with("TEST")
+        self.assertEqual(metrics["Compounded Sales Growth"]["3 Years"], 7.0)
+        self.assertEqual(medians, refreshed_medians)
+        saved_entry = save_fundamentals.call_args.args[0]["INDIA:TEST"]
+        self.assertEqual(saved_entry["metrics"], metrics)
+        self.assertEqual(saved_entry["valuation_medians"], refreshed_medians)
 
 
 if __name__ == "__main__":

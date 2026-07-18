@@ -326,6 +326,55 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
     return metrics, valuation_medians
 
 
+def refresh_company_fundamentals(symbol, market=MARKET_INDIA):
+    """Fetch Screener.in growth and valuation data without using the TTL cache."""
+    market = normalize_market(market)
+    if market != MARKET_INDIA:
+        return {}, {}
+
+    with _CACHE_LOCK:
+        existing_entry = load_fundamentals().get(_cache_key(symbol, market), {})
+    if not isinstance(existing_entry, dict):
+        existing_entry = {}
+    existing_metrics = existing_entry.get("metrics", {})
+    existing_valuations = existing_entry.get("valuation_medians", {})
+    metrics = existing_metrics if isinstance(existing_metrics, dict) else {}
+    valuation_medians = (
+        existing_valuations if isinstance(existing_valuations, dict) else {}
+    )
+
+    fetched = False
+    try:
+        with _FETCH_LIMIT:
+            page_html = _fetch_screener_page(symbol)
+            refreshed_metrics = parse_screener_growth_html(page_html)
+            refreshed_valuations = _fetch_valuation_medians(page_html, symbol)
+        metrics = refreshed_metrics or metrics
+        valuation_medians = refreshed_valuations or valuation_medians
+        fetched = True
+    except Exception as exc:
+        print(f"Screener.in fundamentals refresh unavailable for {symbol}: {exc}")
+
+    if fetched:
+        with _CACHE_LOCK:
+            cache = load_fundamentals()
+            entry = cache.get(_cache_key(symbol, market), {})
+            if not isinstance(entry, dict):
+                entry = {}
+            now = datetime.now(timezone.utc).isoformat()
+            entry.update(
+                {
+                    "fetched_at": now,
+                    "metrics": metrics,
+                    "valuation_fetched_at": now,
+                    "valuation_medians": valuation_medians,
+                }
+            )
+            cache[_cache_key(symbol, market)] = entry
+            save_fundamentals(cache)
+    return metrics, valuation_medians
+
+
 def get_company_growth_metrics(symbol, market=MARKET_INDIA):
     metrics, _ = get_company_fundamentals(symbol, market)
     return metrics
@@ -351,6 +400,14 @@ def growth_summary_fields(metrics):
 
 def enrich_result_with_growth_metrics(result, symbol, market=MARKET_INDIA):
     metrics, valuation_medians = get_company_fundamentals(symbol, market)
+    result["GrowthMetrics"] = metrics
+    result["ValuationMedians"] = valuation_medians
+    result.update(growth_summary_fields(metrics))
+    return result
+
+
+def refresh_result_with_growth_metrics(result, symbol, market=MARKET_INDIA):
+    metrics, valuation_medians = refresh_company_fundamentals(symbol, market)
     result["GrowthMetrics"] = metrics
     result["ValuationMedians"] = valuation_medians
     result.update(growth_summary_fields(metrics))
