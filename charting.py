@@ -986,7 +986,7 @@ def interactive_stock_chart_html(
           .chart-toolbar {{
             display: grid;
             grid-column: 1;
-            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+            grid-template-columns: minmax(0, 1fr);
             gap: 6px;
           }}
           .chart-control-section {{ padding: 7px; }}
@@ -995,11 +995,6 @@ def interactive_stock_chart_html(
             grid-template-columns: repeat(4, minmax(0, 1fr));
             width: 100%;
             max-width: none;
-          }}
-          .chart-view-actions {{
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            width: 100%;
           }}
           .chart-action {{
             width: 100%;
@@ -1046,14 +1041,6 @@ def interactive_stock_chart_html(
                 <button class="chart-action" type="button" data-range="252">1Y</button>
                 <button class="chart-action" type="button" data-range="756">3Y</button>
                 <button class="chart-action" type="button" data-range="all">All</button>
-              </div>
-            </section>
-            <section class="chart-control-section">
-              <span class="chart-section-label">Chart view</span>
-              <div class="chart-actions chart-view-actions">
-                <button class="chart-action" type="button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
-                <button class="chart-action" type="button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
-                <button class="chart-action primary" type="button" id="reset-chart">Reset</button>
               </div>
             </section>
           </div>
@@ -1239,28 +1226,11 @@ def interactive_stock_chart_html(
             }});
           }}
 
-          function zoom(factor) {{
-            document.querySelectorAll("[data-range]").forEach(function(button) {{
-              button.classList.remove("active");
-            }});
-            const range = chart.timeScale().getVisibleLogicalRange();
-            if (!range) return;
-            const center = (range.from + range.to) / 2;
-            const half = Math.max(10, ((range.to - range.from) * factor) / 2);
-            chart.timeScale().setVisibleLogicalRange({{ from: center - half, to: center + half }});
-          }}
-
           document.querySelectorAll("[data-range]").forEach(function(button) {{
             button.addEventListener("click", function() {{
               showBars(button.dataset.range);
               rememberChartRange(button.dataset.range);
             }});
-          }});
-          document.getElementById("zoom-in").addEventListener("click", function() {{ zoom(0.72); }});
-          document.getElementById("zoom-out").addEventListener("click", function() {{ zoom(1.38); }});
-          document.getElementById("reset-chart").addEventListener("click", function() {{
-            showBars(252);
-            rememberChartRange(252);
           }});
 
           const resizeObserver = new ResizeObserver(function(entries) {{
