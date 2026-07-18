@@ -176,6 +176,7 @@ if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true
 def run_interactive_chart_view():
     symbol = str(query_param_value("interactive_chart", "") or "").strip()
     market = normalize_market(query_param_value("market", settings.get("last_results_market", MARKET_INDIA)))
+    embedded = str(query_param_value("embedded", "") or "").lower() in {"1", "true", "yes"}
     if not symbol or Path(symbol).name != symbol:
         st.error("Invalid stock symbol.")
         st.stop()
@@ -191,6 +192,16 @@ def run_interactive_chart_view():
         for token in str(query_param_value("ma", "") or "").split(",")
         if token.strip()
     ]
+    pe_ratio = query_param_value("pe", None)
+    try:
+        match_position = int(query_param_value("position", 0) or 0)
+        match_total = int(query_param_value("total", 0) or 0)
+    except (TypeError, ValueError):
+        match_position = 0
+        match_total = 0
+    has_previous = str(query_param_value("has_previous", "") or "").lower() in {"1", "true", "yes"}
+    has_next = str(query_param_value("has_next", "") or "").lower() in {"1", "true", "yes"}
+    chart_range = str(query_param_value("range", "252") or "252").lower()
     st.markdown(
         """
         <style>
@@ -210,7 +221,13 @@ def run_interactive_chart_view():
             symbol,
             stock_file,
             ma_periods=requested_periods,
-            height=820,
+            pe_ratio=pe_ratio,
+            match_position=match_position,
+            match_total=match_total,
+            has_previous=has_previous,
+            has_next=has_next,
+            initial_range=chart_range,
+            height=620 if embedded else 820,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")

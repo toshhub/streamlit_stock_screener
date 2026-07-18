@@ -434,10 +434,43 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
     }
 
 
-def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
+def interactive_stock_chart_html(
+    symbol,
+    json_path,
+    ma_periods=None,
+    pe_ratio=None,
+    match_position=None,
+    match_total=None,
+    has_previous=False,
+    has_next=False,
+    initial_range="252",
+):
     payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
+    pe_label = ""
+    try:
+        numeric_pe = float(pe_ratio)
+        if pd.notna(numeric_pe):
+            pe_label = f"PE {numeric_pe:,.2f} · "
+    except (TypeError, ValueError):
+        pass
+    selected_range = str(initial_range or "252").lower()
+    if selected_range not in {"126", "252", "756", "all"}:
+        selected_range = "252"
+    match_navigation_html = ""
+    if match_position and match_total:
+        previous_disabled = "" if has_previous else "disabled"
+        next_disabled = "" if has_next else "disabled"
+        match_navigation_html = (
+            '<div class="chart-match-navigation" aria-label="Matched stock navigation">'
+            f'<button type="button" class="chart-match-nav" id="matched-prev" '
+            f'aria-label="Previous matched stock" {previous_disabled}>&lsaquo;</button>'
+            f'<span class="chart-match-counter">{int(match_position)} / {int(match_total)}</span>'
+            f'<button type="button" class="chart-match-nav" id="matched-next" '
+            f'aria-label="Next matched stock" {next_disabled}>&rsaquo;</button>'
+            "</div>"
+        )
 
     return f"""
     <!doctype html>
@@ -464,9 +497,10 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
         }}
         .chart-shell {{
           display: grid;
-          grid-template-rows: auto auto minmax(420px, 1fr) auto;
-          min-height: 100vh;
-          padding: 12px;
+          grid-template-rows: auto auto minmax(300px, 1fr) auto;
+          height: 100vh;
+          min-height: 0;
+          padding: 8px;
         }}
         .chart-header {{
           display: flex;
@@ -480,8 +514,48 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
           background: #ffffff;
         }}
         .chart-title {{ min-width: 0; }}
-        .chart-title strong {{ display: block; font-size: 17px; letter-spacing: -0.02em; }}
+        .chart-title__row {{ display: flex; align-items: center; gap: 8px; min-width: 0; }}
+        .chart-title strong {{
+          display: block;
+          overflow: hidden;
+          font-size: 17px;
+          letter-spacing: -0.02em;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }}
         .chart-title span {{ color: var(--muted); font-size: 11px; }}
+        .chart-match-navigation {{
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          flex: 0 0 auto;
+        }}
+        .chart-match-nav {{
+          display: grid;
+          place-items: center;
+          width: 28px;
+          height: 28px;
+          padding: 0;
+          border: 1px solid #78a9b9;
+          border-radius: 8px;
+          background: #e9f6f8;
+          color: #10536a;
+          cursor: pointer;
+          font-size: 20px;
+          font-weight: 850;
+          line-height: 1;
+          touch-action: manipulation;
+        }}
+        .chart-match-nav:hover:not(:disabled) {{ background: #d6eef2; border-color: #4f91a3; }}
+        .chart-match-nav:disabled {{ cursor: not-allowed; opacity: 0.32; }}
+        .chart-match-counter {{
+          min-width: 39px;
+          color: #52667a !important;
+          font-size: 10px !important;
+          font-weight: 750;
+          text-align: center;
+          white-space: nowrap;
+        }}
         .chart-actions {{ display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }}
         .chart-action {{
           min-width: 31px;
@@ -524,7 +598,10 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
         .legend-ma {{ font-weight: 750; }}
         #chart {{
           position: relative;
-          min-height: 420px;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
+          min-height: 300px;
           border: 1px solid var(--border);
           background: var(--surface);
         }}
@@ -553,13 +630,40 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
         }}
         .chart-footer a {{ color: var(--brand); font-weight: 700; text-decoration: none; }}
         @media (max-width: 640px) {{
-          .chart-shell {{ padding: 6px; }}
-          .chart-header {{ align-items: flex-start; padding: 9px 10px; }}
+          .chart-shell {{
+            grid-template-rows: auto auto minmax(280px, 1fr) auto;
+            padding: 4px;
+          }}
+          .chart-header {{
+            align-items: stretch;
+            flex-direction: column;
+            padding: 8px;
+          }}
           .chart-title strong {{ font-size: 15px; }}
-          .chart-actions {{ max-width: 190px; }}
-          .chart-action {{ height: 31px; }}
-          .chart-legend {{ padding-inline: 10px; }}
-          .chart-footer {{ align-items: flex-start; flex-direction: column; gap: 3px; }}
+          .chart-actions {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            width: 100%;
+            max-width: none;
+          }}
+          .chart-action {{
+            width: 100%;
+            height: 30px;
+            padding-inline: 4px;
+          }}
+          .chart-legend {{
+            min-height: 34px;
+            padding: 6px 8px;
+            font-size: 10px;
+          }}
+          #chart {{ min-height: 280px; }}
+          .chart-footer {{
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 2px;
+            padding: 6px 8px;
+            font-size: 9px;
+          }}
         }}
       </style>
     </head>
@@ -567,12 +671,15 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
       <main class="chart-shell">
         <header class="chart-header">
           <div class="chart-title">
-            <strong>{safe_symbol}</strong>
-            <span>Daily interactive candlestick chart · {payload["pointCount"]:,} candles</span>
+            <div class="chart-title__row">
+              <strong>{safe_symbol}</strong>
+              {match_navigation_html}
+            </div>
+            <span>{pe_label}Daily interactive candlestick chart · {payload["pointCount"]:,} candles</span>
           </div>
           <div class="chart-actions" aria-label="Chart controls">
             <button class="chart-action" type="button" data-range="126">6M</button>
-            <button class="chart-action active" type="button" data-range="252">1Y</button>
+            <button class="chart-action" type="button" data-range="252">1Y</button>
             <button class="chart-action" type="button" data-range="756">3Y</button>
             <button class="chart-action" type="button" data-range="all">All</button>
             <button class="chart-action" type="button" id="zoom-out" aria-label="Zoom out">−</button>
@@ -601,10 +708,40 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
             return;
           }}
 
+          function requestMatchedStock(direction) {{
+            if (window.parent && window.parent.parent) {{
+              window.parent.parent.postMessage({{
+                source: "nse-interactive-chart",
+                action: direction
+              }}, "*");
+            }}
+          }}
+          function rememberChartRange(range) {{
+            if (window.parent && window.parent.parent) {{
+              window.parent.parent.postMessage({{
+                source: "nse-interactive-chart",
+                action: "range-change",
+                range: String(range)
+              }}, "*");
+            }}
+          }}
+          const matchedPrevious = document.getElementById("matched-prev");
+          const matchedNext = document.getElementById("matched-next");
+          if (matchedPrevious) {{
+            matchedPrevious.addEventListener("click", function() {{
+              requestMatchedStock("previous");
+            }});
+          }}
+          if (matchedNext) {{
+            matchedNext.addEventListener("click", function() {{
+              requestMatchedStock("next");
+            }});
+          }}
+
           const colors = ["#2563eb", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5", "#15803d"];
           const chart = LightweightCharts.createChart(container, {{
-            width: Math.max(320, container.clientWidth),
-            height: Math.max(420, container.clientHeight),
+            width: Math.max(240, container.clientWidth),
+            height: Math.max(280, container.clientHeight),
             layout: {{
               background: {{ type: LightweightCharts.ColorType.Solid, color: "#ffffff" }},
               textColor: "#52667a",
@@ -615,7 +752,7 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
               horzLines: {{ color: "#e7eef3" }},
             }},
             crosshair: {{
-              mode: LightweightCharts.CrosshairMode.Magnet,
+              mode: LightweightCharts.CrosshairMode.Normal,
               vertLine: {{ color: "#6b879a", width: 1, labelBackgroundColor: "#176b87" }},
               horzLine: {{ color: "#6b879a", width: 1, labelBackgroundColor: "#176b87" }},
             }},
@@ -723,24 +860,28 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
           }}
 
           document.querySelectorAll("[data-range]").forEach(function(button) {{
-            button.addEventListener("click", function() {{ showBars(button.dataset.range); }});
+            button.addEventListener("click", function() {{
+              showBars(button.dataset.range);
+              rememberChartRange(button.dataset.range);
+            }});
           }});
           document.getElementById("zoom-in").addEventListener("click", function() {{ zoom(0.72); }});
           document.getElementById("zoom-out").addEventListener("click", function() {{ zoom(1.38); }});
           document.getElementById("reset-chart").addEventListener("click", function() {{
             showBars(252);
+            rememberChartRange(252);
           }});
 
           const resizeObserver = new ResizeObserver(function(entries) {{
             const rect = entries[0].contentRect;
             chart.applyOptions({{
-              width: Math.max(320, Math.floor(rect.width)),
-              height: Math.max(420, Math.floor(rect.height)),
+              width: Math.max(240, Math.floor(rect.width)),
+              height: Math.max(280, Math.floor(rect.height)),
             }});
           }});
           resizeObserver.observe(container);
           loading.remove();
-          showBars(252);
+          showBars({json.dumps(selected_range)});
         }})();
       </script>
     </body>
@@ -748,9 +889,30 @@ def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
     """
 
 
-def render_interactive_stock_chart(symbol, json_path, ma_periods=None, height=760):
+def render_interactive_stock_chart(
+    symbol,
+    json_path,
+    ma_periods=None,
+    pe_ratio=None,
+    match_position=None,
+    match_total=None,
+    has_previous=False,
+    has_next=False,
+    initial_range="252",
+    height=760,
+):
     components.html(
-        interactive_stock_chart_html(symbol, json_path, ma_periods=ma_periods),
+        interactive_stock_chart_html(
+            symbol,
+            json_path,
+            ma_periods=ma_periods,
+            pe_ratio=pe_ratio,
+            match_position=match_position,
+            match_total=match_total,
+            has_previous=has_previous,
+            has_next=has_next,
+            initial_range=initial_range,
+        ),
         height=height,
         scrolling=False,
     )
@@ -926,6 +1088,12 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         box-shadow: 0 3px 8px rgba(182, 93, 24, 0.18);
         outline: none;
       }
+      .interactive-chart-link.active {
+        border-color: #df7a2c;
+        background: #fbd9ad;
+        color: #91420f;
+        box-shadow: 0 0 0 3px rgba(223, 122, 44, 0.13);
+      }
       .interactive-chart-link svg {
         width: 13px;
         height: 13px;
@@ -954,6 +1122,14 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         box-shadow: 0 8px 24px rgba(16, 36, 62, 0.08);
+      }
+      .chart-panel.interactive-mode {
+        position: relative;
+        max-height: none;
+        overflow: visible;
+        padding: 8px;
+        scroll-margin-top: 8px;
+        overflow-anchor: none;
       }
       .chart-panel img { width: 100%; height: auto; display: block; max-height: 50vh; object-fit: contain; }
       .chart-panel .panel-placeholder {
@@ -1022,6 +1198,83 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       .chart-nav-next { right: 6px; }
       .chart-image-wrap { padding: 0 46px; }
       .chart-help-text { color: #64748b; font-size: 12px; margin-top: 5px; text-align: center; }
+      .interactive-panel-header {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: -2px -2px 0;
+        padding: 5px 5px 8px;
+        border-bottom: 1px solid #e2eaf0;
+        border-radius: 8px 8px 0 0;
+        background: rgba(255, 255, 255, 0.97);
+        box-shadow: 0 4px 10px rgba(16, 36, 62, 0.05);
+        backdrop-filter: blur(8px);
+      }
+      .interactive-panel-title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 800;
+      }
+      .interactive-panel-title span:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .interactive-mode-badge {
+        flex: 0 0 auto;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: #fff0dc;
+        color: #a95214;
+        font-size: 9px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .interactive-panel-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 0 0 auto;
+      }
+      .interactive-panel-close {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        flex: 0 0 28px;
+        padding: 0;
+        border: 1px solid #d6e0e7;
+        border-radius: 8px;
+        background: #f7fafc;
+        color: #52667a;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+      .interactive-panel-close:hover { background: #e8eef3; color: #10243e; }
+      .interactive-chart-embed {
+        display: block;
+        width: 100%;
+        height: 660px;
+        border: 1px solid #e0e8ee;
+        border-radius: 10px;
+        background: #f5f8fb;
+        overflow-anchor: none;
+      }
+      .interactive-panel-help {
+        padding: 6px 4px 1px;
+        color: #64748b;
+        font-size: 10px;
+        text-align: center;
+      }
 
       /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
@@ -1036,6 +1289,13 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .chart-nav-next { right: 2px; }
         .chart-image-wrap { padding: 0 34px; }
         .chart-help-text { font-size: 11px; }
+        .chart-panel.interactive-mode { padding: 5px; }
+        .interactive-panel-header { padding: 1px 2px 5px; }
+        .interactive-chart-embed {
+          height: 650px;
+          border-radius: 8px;
+        }
+        .interactive-panel-help { font-size: 9px; }
       }
       /* Mobile landscape */
       @media screen and (max-width: 600px) and (orientation: landscape) {
@@ -1046,12 +1306,18 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     <script>
       (function() {
         var activeRow = null;
+        var activeInteractiveButton = null;
         var activeIndex = -1;
+        var activeInteractiveRange = '252';
         var touchStartX = 0;
         var touchStartY = 0;
 
         function getChartItems() {
           return Array.from(document.querySelectorAll('.stock-hover'));
+        }
+
+        function getInteractiveItems() {
+          return Array.from(document.querySelectorAll('.interactive-chart-link'));
         }
 
         function escapeHtml(value) {
@@ -1072,6 +1338,16 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           }
           activeRow = el;
           activeIndex = el ? getChartItems().indexOf(el) : -1;
+        }
+
+        function setActiveInteractiveButton(el) {
+          if (activeInteractiveButton && activeInteractiveButton !== el) {
+            activeInteractiveButton.classList.remove('active');
+          }
+          if (el) {
+            el.classList.add('active');
+          }
+          activeInteractiveButton = el;
         }
 
         function bindSwipeNavigation(frame) {
@@ -1101,6 +1377,17 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           }, { passive: false });
         }
 
+        function revealInteractiveHeader(panel, behavior) {
+          if (!panel) return;
+          var header = panel.querySelector('.interactive-panel-header');
+          if (!header) return;
+          header.scrollIntoView({
+            behavior: behavior || 'auto',
+            block: 'start',
+            inline: 'nearest'
+          });
+        }
+
         function renderPanel(el) {
           var src = el.getAttribute('data-chart-src');
           var symbol = el.getAttribute('data-symbol') || el.textContent.trim() || 'Chart';
@@ -1113,6 +1400,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           var nextDisabled = index >= items.length - 1 ? 'disabled' : '';
           var escapedSymbol = escapeHtml(symbol);
 
+          panel.classList.remove('interactive-mode');
+          setActiveInteractiveButton(null);
           panel.innerHTML = '' +
             '<div class="chart-frame">' +
               '<div class="chart-title-row">' +
@@ -1137,6 +1426,60 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           panel.scrollIntoView({behavior: 'smooth', block: 'nearest'});
         }
 
+        function renderInteractivePanel(button) {
+          var src = button.getAttribute('data-interactive-src');
+          var symbol = button.getAttribute('data-symbol') || 'Chart';
+          var panel = document.getElementById('chart-panel');
+          if (!panel || !src) return;
+
+          var items = getInteractiveItems();
+          var index = items.indexOf(button);
+          if (index < 0) return;
+          var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
+            'embedded=1' +
+            '&position=' + encodeURIComponent(index + 1) +
+            '&total=' + encodeURIComponent(items.length) +
+            '&has_previous=' + (index > 0 ? '1' : '0') +
+            '&has_next=' + (index < items.length - 1 ? '1' : '0') +
+            '&range=' + encodeURIComponent(activeInteractiveRange);
+          var escapedSymbol = escapeHtml(symbol);
+          panel.classList.add('interactive-mode');
+          panel.innerHTML = '' +
+            '<div class="interactive-panel-header">' +
+              '<div class="interactive-panel-title">' +
+                '<span>' + escapedSymbol + '</span>' +
+                '<span class="interactive-mode-badge">Interactive</span>' +
+              '</div>' +
+              '<div class="interactive-panel-actions">' +
+                '<button type="button" class="interactive-panel-close" data-interactive-close aria-label="Close interactive chart">&times;</button>' +
+              '</div>' +
+            '</div>' +
+            '<iframe class="interactive-chart-embed" src="' + escapeHtml(embeddedSrc) + '" ' +
+              'title="' + escapedSymbol + ' interactive chart" loading="eager"></iframe>' +
+            '<div class="interactive-panel-help">Pinch or scroll to zoom · drag to pan · use the chart controls for 6M, 1Y, 3Y or all data.</div>';
+
+          var closeButton = panel.querySelector('[data-interactive-close]');
+          if (closeButton) {
+            closeButton.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              setActiveInteractiveButton(null);
+              clearPanel();
+            });
+          }
+          var embeddedFrame = panel.querySelector('.interactive-chart-embed');
+          requestAnimationFrame(function() {
+            revealInteractiveHeader(panel, 'smooth');
+          });
+          if (embeddedFrame) {
+            embeddedFrame.addEventListener('load', function() {
+              requestAnimationFrame(function() {
+                revealInteractiveHeader(panel, 'auto');
+              });
+            }, { once: true });
+          }
+        }
+
         // ---- Panel-based chart display (all screen sizes) ----
         function showChart(el, forceOpen) {
           if (activeRow === el && !forceOpen) {
@@ -1145,8 +1488,30 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             setActiveRow(null);
             return;
           }
+          setActiveInteractiveButton(null);
           setActiveRow(el);
           renderPanel(el);
+        }
+
+        function showInteractiveChart(button) {
+          if (activeInteractiveButton === button) {
+            setActiveInteractiveButton(null);
+            clearPanel();
+            return;
+          }
+          setActiveRow(null);
+          setActiveInteractiveButton(button);
+          renderInteractivePanel(button);
+        }
+
+        function showInteractiveByOffset(offset) {
+          var items = getInteractiveItems();
+          if (!items.length || !activeInteractiveButton) return;
+          var currentIndex = items.indexOf(activeInteractiveButton);
+          var nextIndex = Math.max(0, Math.min(items.length - 1, currentIndex + offset));
+          if (nextIndex === currentIndex) return;
+          setActiveInteractiveButton(items[nextIndex]);
+          renderInteractivePanel(items[nextIndex]);
         }
 
         function showChartByOffset(offset) {
@@ -1161,7 +1526,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         function clearPanel() {
           var panel = document.getElementById('chart-panel');
           if (panel) {
-            panel.innerHTML = '<div class="panel-placeholder">📈 Tap a stock symbol to view its chart</div>';
+            panel.classList.remove('interactive-mode');
+            panel.innerHTML = '<div class="panel-placeholder">📈 Select a stock for the fast chart or use its candle icon for the interactive chart</div>';
           }
         }
 
@@ -1174,6 +1540,29 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             });
           });
 
+          document.querySelectorAll('.interactive-chart-link').forEach(function(button) {
+            button.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              showInteractiveChart(button);
+            });
+          });
+
+          window.addEventListener('message', function(event) {
+            var message = event && event.data;
+            if (!message || message.source !== 'nse-interactive-chart') return;
+            if (message.action === 'previous') {
+              showInteractiveByOffset(-1);
+            } else if (message.action === 'next') {
+              showInteractiveByOffset(1);
+            } else if (message.action === 'range-change') {
+              var requestedRange = String(message.range || '').toLowerCase();
+              if (['126', '252', '756', 'all'].indexOf(requestedRange) >= 0) {
+                activeInteractiveRange = requestedRange;
+              }
+            }
+          });
+
           var panel = document.getElementById('chart-panel');
           if (panel) {
             panel.addEventListener('click', function(e) {
@@ -1182,26 +1571,32 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           }
 
           document.addEventListener('keydown', function(e) {
-            if (!activeRow) return;
-            if (e.key === 'ArrowLeft') {
+            if (!activeRow && !activeInteractiveButton) return;
+            if (activeInteractiveButton && e.key === 'ArrowLeft') {
+              e.preventDefault();
+              showInteractiveByOffset(-1);
+            } else if (activeInteractiveButton && e.key === 'ArrowRight') {
+              e.preventDefault();
+              showInteractiveByOffset(1);
+            } else if (activeRow && e.key === 'ArrowLeft') {
               e.preventDefault();
               showChartByOffset(-1);
-            } else if (e.key === 'ArrowRight') {
+            } else if (activeRow && e.key === 'ArrowRight') {
               e.preventDefault();
               showChartByOffset(1);
             } else if (e.key === 'Escape') {
-              activeRow.classList.remove('stock-hover-active');
-              clearPanel();
+              setActiveInteractiveButton(null);
               setActiveRow(null);
+              clearPanel();
             }
           });
 
           // Click anywhere else deselects
           document.addEventListener('click', function() {
-            if (activeRow) {
-              activeRow.classList.remove('stock-hover-active');
-              clearPanel();
+            if (activeRow || activeInteractiveButton) {
+              setActiveInteractiveButton(null);
               setActiveRow(null);
+              clearPanel();
             }
           });
         }
@@ -1275,21 +1670,25 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                 interactive_link = ""
                 source_symbol = chart_source if chart_source and not pd.isna(chart_source) else value
                 if interactive_market and source_symbol:
-                    interactive_href = "?" + urlencode({
+                    interactive_params = {
                         "interactive_chart": str(source_symbol),
                         "market": str(interactive_market),
                         "ma": interactive_ma_query,
-                    })
+                    }
+                    pe_ratio = row.get("PE Ratio")
+                    if pe_ratio is not None and not pd.isna(pe_ratio):
+                        interactive_params["pe"] = str(pe_ratio)
+                    interactive_href = "?" + urlencode(interactive_params)
                     interactive_link = (
-                        f'<a class="interactive-chart-link" '
-                        f'href="{html.escape(interactive_href, quote=True)}" '
-                        f'target="_blank" rel="noopener" '
-                        f'title="Open {html.escape(value, quote=True)} interactive chart" '
-                        f'aria-label="Open {html.escape(value, quote=True)} interactive chart">'
+                        f'<button class="interactive-chart-link" type="button" '
+                        f'data-interactive-src="{html.escape(interactive_href, quote=True)}" '
+                        f'data-symbol="{html.escape(value, quote=True)}" '
+                        f'title="Show {html.escape(value, quote=True)} interactive chart" '
+                        f'aria-label="Show {html.escape(value, quote=True)} interactive chart">'
                         '<svg viewBox="0 0 16 16" aria-hidden="true">'
                         '<path d="M3 2v4M3 9v5M1.5 6h3v3h-3zM8 1v3M8 8v5M6.5 4h3v4h-3zM13 3v5M13 11v3M11.5 8h3v3h-3z" '
                         'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
-                        '</svg></a>'
+                        '</svg></button>'
                     )
                 escaped_value = f'<span class="stock-symbol-cell">{symbol_html}{interactive_link}</span>'
             cells.append(f"<td>{escaped_value}</td>")
@@ -1351,7 +1750,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"</div></div>"
         f"<div class='chart-panel' id='chart-panel'>"
-        f"<div class='panel-placeholder'>📈 Select a stock symbol to view its chart</div></div>"
+        f"<div class='panel-placeholder'>📈 Select a stock for the fast chart or use its candle icon for the interactive chart</div></div>"
     )
     return f"{styles}{script}{table_html}"
 
