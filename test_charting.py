@@ -114,6 +114,8 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("showBars(\"756\")", result)
         self.assertIn("CrosshairMode.Normal", result)
         self.assertNotIn("CrosshairMode.Magnet", result)
+        self.assertNotIn("title: label", result)
+        self.assertIn("item.label + ' ' + formatPrice(value)", result)
         self.assertIn("@media (max-width: 640px)", result)
         self.assertIn("grid-template-rows: auto auto minmax(280px, 1fr) auto", result)
         self.assertIn("padding: 0;", result)

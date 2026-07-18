@@ -1167,7 +1167,6 @@ def interactive_stock_chart_html(
               priceLineVisible: false,
               lastValueVisible: true,
               crosshairMarkerVisible: false,
-              title: label,
             }});
             series.setData(payload.movingAverages[label] || []);
             maSeries.push({{ label: label, color: color, series: series }});
