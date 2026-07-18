@@ -2,6 +2,7 @@ import base64
 import hashlib
 import html
 import json
+import math
 import re
 from pathlib import Path
 from urllib.parse import urlencode
@@ -436,13 +437,6 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
 
 
 def historical_pe_valuation_state(current_pe, valuation_medians):
-    try:
-        numeric_pe = float(current_pe)
-        if not pd.notna(numeric_pe):
-            return ""
-    except (TypeError, ValueError):
-        return ""
-
     pe_medians = (
         valuation_medians.get("Median PE", {})
         if isinstance(valuation_medians, dict)
@@ -459,11 +453,25 @@ def historical_pe_valuation_state(current_pe, valuation_medians):
                 pass
     if len(historical_values) != 3:
         return ""
+    try:
+        numeric_pe = float(current_pe)
+        if not math.isfinite(numeric_pe) or numeric_pe <= 0:
+            return "unfavorable"
+    except (TypeError, ValueError):
+        return "unfavorable"
     return (
         "favorable"
         if sum(numeric_pe < median for median in historical_values) >= 2
         else "unfavorable"
     )
+
+
+def has_positive_current_pe(current_pe):
+    try:
+        numeric_pe = float(current_pe)
+        return math.isfinite(numeric_pe) and numeric_pe > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def interactive_stock_chart_html(
@@ -505,8 +513,13 @@ def interactive_stock_chart_html(
             '<span class="chart-valuation-status">Below historical median</span>'
         )
     elif valuation_state == "unfavorable":
+        valuation_label = (
+            "Above historical median"
+            if has_positive_current_pe(pe_ratio)
+            else "Current P/E unavailable"
+        )
         valuation_state_html = (
-            '<span class="chart-valuation-status">Above historical median</span>'
+            f'<span class="chart-valuation-status">{valuation_label}</span>'
         )
     growth_cards_html = ""
     cards = []
@@ -2111,6 +2124,11 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                 elif valuation_state == "unfavorable":
                     valuation_title = (
                         "Current PE is not below at least two of the 3Y, 5Y, and 10Y medians"
+                        if has_positive_current_pe(row.get("PE Ratio"))
+                        else (
+                            "Current PE is unavailable or non-positive; "
+                            "historical median PE data is available"
+                        )
                     )
                 title_attribute = (
                     f' title="{html.escape(valuation_title, quote=True)}"'

@@ -189,6 +189,26 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("valuation-unfavorable", result)
         self.assertIn("Above historical median", result)
 
+    def test_stock_box_is_red_when_current_pe_is_unavailable_but_medians_exist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(300)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                pe_ratio=None,
+                valuation_medians={
+                    "Median PE": {
+                        "10 Years": 12.1,
+                        "5 Years": 16.9,
+                        "3 Years": 66.4,
+                    }
+                },
+            )
+
+        self.assertIn("valuation-unfavorable", result)
+        self.assertIn("Current P/E unavailable", result)
+
     def test_results_table_has_tiny_in_panel_interactive_button(self):
         df = pd.DataFrame(
             [
@@ -250,6 +270,29 @@ class InteractiveChartTests(unittest.TestCase):
                     },
                     "ChartSource": "COMPLETE",
                 },
+                {
+                    "Symbol": "LOSSMAKING",
+                    "PE Ratio": "",
+                    "GrowthMetrics": {
+                        "Compounded Sales Growth": {"3 Years": 5},
+                        "Compounded Profit Growth": {"TTM": 6},
+                        "Stock Price CAGR": {"3 Years": 7},
+                        "Return on Equity": {"3 Years": -2},
+                    },
+                    "ValuationMedians": {
+                        "Median PE": {
+                            "3 Years": 66.4,
+                            "5 Years": 16.9,
+                            "10 Years": 12.1,
+                        },
+                        "Median Market Cap to Sales": {
+                            "3 Years": 1.2,
+                            "5 Years": 1.3,
+                            "10 Years": 1.3,
+                        },
+                    },
+                    "ChartSource": "LOSSMAKING",
+                },
             ]
         )
 
@@ -269,6 +312,16 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("<th>FundamentalsRefreshToken</th>", result)
         self.assertNotIn(
             'aria-label="Retry Screener.in fundamentals for COMPLETE"',
+            result,
+        )
+        self.assertIn(
+            'class="stock-symbol-label valuation-unfavorable" '
+            'title="Current PE is unavailable or non-positive; '
+            'historical median PE data is available">LOSSMAKING</span>',
+            result,
+        )
+        self.assertNotIn(
+            'aria-label="Retry Screener.in fundamentals for LOSSMAKING"',
             result,
         )
         self.assertLess(
