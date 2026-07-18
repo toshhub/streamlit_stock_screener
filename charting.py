@@ -5,7 +5,7 @@ import json
 import math
 import re
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from matplotlib.figure import Figure
 import pandas as pd
@@ -1297,17 +1297,6 @@ def render_interactive_stock_chart(
 
 
 def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):
-    refresh_token_series = df.get("FundamentalsRefreshToken")
-    refresh_version = (
-        "|".join(
-            ""
-            if value is None or (isinstance(value, float) and pd.isna(value))
-            else str(value)
-            for value in refresh_token_series.tolist()
-        )
-        if refresh_token_series is not None
-        else ""
-    )
     visible_df = df.drop(
         columns=[
             "ChartPath",
@@ -1318,7 +1307,6 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             "Profit CAGR 3Y",
             "Price CAGR 3Y",
             "ROE 3Y",
-            "FundamentalsRefreshToken",
         ],
         errors="ignore",
     )
@@ -1515,9 +1503,10 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         height: 13px;
         pointer-events: none;
       }
-      .fundamentals-retry-link {
+      .screener-company-link {
         display: inline-grid;
         place-items: center;
+        position: relative;
         width: 22px;
         height: 22px;
         flex: 0 0 22px;
@@ -1527,33 +1516,29 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         background: #eefaf1;
         color: #17713b;
         cursor: pointer;
+        font-size: 11px;
+        font-weight: 900;
         text-decoration: none;
         transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
       }
-      .fundamentals-retry-link:hover,
-      .fundamentals-retry-link:focus {
+      .screener-company-link:hover,
+      .screener-company-link:focus {
         transform: translateY(-1px);
         border-color: #3c9a5c;
         background: #ddf5e4;
         box-shadow: 0 3px 8px rgba(23, 113, 59, 0.16);
         outline: none;
       }
-      .fundamentals-retry-link svg {
-        width: 13px;
-        height: 13px;
+      .screener-company-link::after {
+        position: absolute;
+        top: 1px;
+        right: 2px;
+        content: "↗";
+        font-size: 7px;
+        line-height: 1;
         pointer-events: none;
-      }
-      .fundamentals-retry-link.loading {
-        cursor: wait;
-        opacity: 0.72;
-      }
-      .fundamentals-retry-link.loading svg {
-        animation: fundamentals-retry-spin 0.75s linear infinite;
-      }
-      @keyframes fundamentals-retry-spin {
-        to { transform: rotate(360deg); }
       }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
@@ -2172,7 +2157,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                         'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
                         '</svg></button>'
                     )
-                fundamentals_retry_link = ""
+                screener_company_link = ""
                 if (
                     str(interactive_market or "").strip().upper() == "INDIA"
                     and value
@@ -2181,30 +2166,21 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                         valuation_medians,
                     )
                 ):
-                    retry_href = "?" + urlencode(
-                        {
-                            "retry_fundamentals": value,
-                            "market": "INDIA",
-                        }
+                    screener_href = (
+                        "https://www.screener.in/company/"
+                        f"{quote(str(value).upper(), safe='')}/consolidated/"
                     )
-                    fundamentals_retry_link = (
-                        f'<button class="fundamentals-retry-link" type="button" '
-                        f'data-fundamentals-retry-src="'
-                        f'{html.escape(retry_href, quote=True)}" '
-                        f'title="Retry Screener.in CAGR and median data for '
-                        f'{html.escape(value, quote=True)}" '
-                        f'aria-label="Retry Screener.in fundamentals for '
-                        f'{html.escape(value, quote=True)}">'
-                        '<svg viewBox="0 0 16 16" aria-hidden="true">'
-                        '<path d="M12.8 5.7A5.3 5.3 0 0 0 3.1 4.5M3.1 4.5V1.8M3.1 4.5h2.7'
-                        'M3.2 10.3a5.3 5.3 0 0 0 9.7 1.2M12.9 11.5v2.7M12.9 11.5h-2.7" '
-                        'fill="none" stroke="currentColor" stroke-width="1.45" '
-                        'stroke-linecap="round" stroke-linejoin="round"/>'
-                        '</svg></button>'
+                    screener_company_link = (
+                        f'<a class="screener-company-link" '
+                        f'href="{html.escape(screener_href, quote=True)}" '
+                        f'target="_blank" rel="noopener noreferrer" '
+                        f'title="Open {html.escape(value, quote=True)} on Screener.in" '
+                        f'aria-label="Open {html.escape(value, quote=True)} on Screener.in">'
+                        '<span aria-hidden="true">S</span></a>'
                     )
                 escaped_value = (
                     f'<span class="stock-symbol-cell">'
-                    f"{symbol_html}{interactive_link}{fundamentals_retry_link}</span>"
+                    f"{symbol_html}{interactive_link}{screener_company_link}</span>"
                 )
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
@@ -2223,22 +2199,6 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         const parsed = parseFloat(cleaned);
         return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
       }
-
-      document.addEventListener("DOMContentLoaded", function() {
-        document.querySelectorAll("[data-fundamentals-retry-src]").forEach(function(button) {
-          button.addEventListener("click", function() {
-            if (button.classList.contains("loading")) return;
-            button.classList.add("loading");
-            button.setAttribute("aria-busy", "true");
-            button.disabled = true;
-            const retryUrl = new URL(
-              button.dataset.fundamentalsRetrySrc,
-              window.top.location.href
-            );
-            window.top.location.assign(retryUrl.href);
-          });
-        });
-      });
 
       function sortNumericColumn(columnIndex) {
         const table = document.querySelector(".hover-results-table");
@@ -2269,8 +2229,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
     result_count = len(visible_df)
     table_html = (
-        f"<div class='results-table-shell' data-fundamentals-refresh-version="
-        f"'{html.escape(refresh_version, quote=True)}'>"
+        f"<div class='results-table-shell'>"
         f"<div class='results-table-toolbar'>"
         f"<div class='results-table-toolbar__title'>Screening Results"
         f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"

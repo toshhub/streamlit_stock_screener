@@ -39,7 +39,6 @@ from fundamentals import (
     enrich_result_with_growth_metrics,
     get_cached_company_growth_metrics,
     get_cached_company_valuation_medians,
-    refresh_result_with_growth_metrics,
 )
 from pattern import evaluate_pattern_filters, validate_expression
 from screener import (
@@ -258,70 +257,6 @@ def run_interactive_chart_view():
 
 if query_param_value("interactive_chart", ""):
     run_interactive_chart_view()
-
-
-def run_fundamentals_retry():
-    requested_symbol = str(query_param_value("retry_fundamentals", "") or "").strip()
-    if not requested_symbol:
-        return
-
-    result_market = normalize_market(
-        settings.get("last_results_market", MARKET_INDIA)
-    )
-    rows = load_results()
-    matching_row = next(
-        (
-            row
-            for row in rows
-            if str(row.get("Symbol", "")).strip().upper() == requested_symbol.upper()
-        ),
-        None,
-    )
-
-    if result_market != MARKET_INDIA:
-        notice = ("warning", "Screener.in fundamentals are available only for Indian stocks.")
-    elif matching_row is None:
-        notice = ("warning", f"{requested_symbol} is not present in the saved screening results.")
-    else:
-        with st.spinner(f"Retrying Screener.in fundamentals for {requested_symbol}…"):
-            refresh_succeeded = refresh_result_with_growth_metrics(
-                matching_row,
-                requested_symbol,
-                result_market,
-            )
-        matching_row["FundamentalsRefreshToken"] = uuid.uuid4().hex
-        save_results(rows)
-        st.session_state["results"] = rows
-        has_fundamentals = bool(
-            matching_row.get("GrowthMetrics") or matching_row.get("ValuationMedians")
-        )
-        notice = (
-            (
-                "success",
-                f"Refreshed Screener.in fundamentals for {requested_symbol}.",
-            )
-            if refresh_succeeded and has_fundamentals
-            else (
-                "warning",
-                (
-                    f"Screener.in data is still unavailable for {requested_symbol}. "
-                    "You can retry later."
-                    if refresh_succeeded
-                    else (
-                        f"The Screener.in request for {requested_symbol} did not complete. "
-                        "Existing saved data was left unchanged."
-                    )
-                ),
-            )
-        )
-
-    st.session_state["_fundamentals_retry_notice"] = notice
-    st.session_state["switch_to_results_tab"] = True
-    st.query_params.clear()
-    st.rerun()
-
-
-run_fundamentals_retry()
 
 # ---- Inject custom CSS ----
 st.markdown(
@@ -3265,17 +3200,6 @@ with tab3:
 with tab4:
     st.header("📊 Results")
 
-    fundamentals_retry_notice = st.session_state.pop(
-        "_fundamentals_retry_notice",
-        None,
-    )
-    if fundamentals_retry_notice:
-        notice_type, notice_message = fundamentals_retry_notice
-        if notice_type == "success":
-            st.success(notice_message)
-        else:
-            st.warning(notice_message)
-
     live_screener_job = drain_live_screener_events()
 
     # Load persisted results if session state is empty
@@ -3361,8 +3285,6 @@ with tab4:
             table_df["GrowthMetrics"] = df["GrowthMetrics"]
         if "ValuationMedians" in df.columns:
             table_df["ValuationMedians"] = df["ValuationMedians"]
-        if "FundamentalsRefreshToken" in df.columns:
-            table_df["FundamentalsRefreshToken"] = df["FundamentalsRefreshToken"]
 
         if "ChartPath" in df.columns:
             chart_df = table_df.copy()

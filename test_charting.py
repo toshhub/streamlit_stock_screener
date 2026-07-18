@@ -227,7 +227,6 @@ class InteractiveChartTests(unittest.TestCase):
                         }
                     },
                     "ChartSource": "360ONE",
-                    "FundamentalsRefreshToken": "completed-1",
                 },
                 {
                     "Symbol": "REDTEST",
@@ -303,15 +302,14 @@ class InteractiveChartTests(unittest.TestCase):
         )
 
         self.assertIn('<button class="interactive-chart-link"', result)
-        self.assertIn('<button class="fundamentals-retry-link"', result)
-        self.assertIn("retry_fundamentals=360ONE", result)
-        self.assertNotIn('target="_top"', result)
-        self.assertIn("fundamentals-retry-spin", result)
-        self.assertIn("window.top.location.assign", result)
-        self.assertIn("data-fundamentals-refresh-version='completed-1", result)
-        self.assertNotIn("<th>FundamentalsRefreshToken</th>", result)
+        self.assertIn('<a class="screener-company-link"', result)
+        self.assertIn(
+            'href="https://www.screener.in/company/360ONE/consolidated/"',
+            result,
+        )
+        self.assertIn('target="_blank" rel="noopener noreferrer"', result)
         self.assertNotIn(
-            'aria-label="Retry Screener.in fundamentals for COMPLETE"',
+            'aria-label="Open COMPLETE on Screener.in"',
             result,
         )
         self.assertIn(
@@ -321,12 +319,12 @@ class InteractiveChartTests(unittest.TestCase):
             result,
         )
         self.assertNotIn(
-            'aria-label="Retry Screener.in fundamentals for LOSSMAKING"',
+            'aria-label="Open LOSSMAKING on Screener.in"',
             result,
         )
         self.assertLess(
             result.index('class="interactive-chart-link"'),
-            result.index('class="fundamentals-retry-link"'),
+            result.index('class="screener-company-link"'),
         )
         self.assertIn("interactive_chart=360ONE", result)
         self.assertIn("market=INDIA", result)
@@ -355,14 +353,13 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("border-width: 0", result)
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
-        self.assertNotIn('target="_blank"', result)
 
         us_result = results_hover_table_html(
             df,
             interactive_market="US",
             interactive_ma_periods=[50, 200],
         )
-        self.assertNotIn('class="fundamentals-retry-link"', us_result)
+        self.assertNotIn('class="screener-company-link"', us_result)
 
 
 class InteractiveChartRouteTests(unittest.TestCase):
@@ -383,19 +380,6 @@ class InteractiveChartRouteTests(unittest.TestCase):
         app.run(timeout=30)
 
         self.assertEqual(list(app.exception), [])
-
-    def test_missing_fundamentals_retry_route_returns_without_exception(self):
-        app = AppTest.from_file("app.py")
-        app.query_params.update(
-            {
-                "retry_fundamentals": "NOT-IN-SAVED-RESULTS",
-                "market": "INDIA",
-            }
-        )
-        app.run(timeout=30)
-
-        self.assertEqual(list(app.exception), [])
-
 
 if __name__ == "__main__":
     unittest.main()

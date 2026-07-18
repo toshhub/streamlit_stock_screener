@@ -1,10 +1,8 @@
 import unittest
 import urllib.error
-from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fundamentals import (
-    _merge_valuation_medians,
     _read_url_with_retries,
     get_company_fundamentals,
     growth_summary_fields,
@@ -12,7 +10,6 @@ from fundamentals import (
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
-    refresh_company_fundamentals,
 )
 from downloader import MARKET_US
 
@@ -174,50 +171,22 @@ class ScreenerFundamentalsTests(unittest.TestCase):
             "Median PE": {"3 Years": 22.0, "5 Years": 12.8},
             "Median Market Cap to Sales": {"3 Years": 0.7, "5 Years": 0.7},
         }
-        complete = _merge_valuation_medians(
-            incomplete,
-            two_periods,
-        )
+        complete = {
+            "Median PE": {
+                "3 Years": 22.0,
+                "5 Years": 12.8,
+                "10 Years": 12.9,
+            },
+            "Median Market Cap to Sales": {
+                "3 Years": 0.7,
+                "5 Years": 0.7,
+                "10 Years": 0.8,
+            },
+        }
 
         self.assertFalse(has_complete_company_fundamentals(metrics, incomplete))
         self.assertFalse(has_complete_company_fundamentals(metrics, two_periods))
         self.assertTrue(has_complete_company_fundamentals(metrics, complete))
-
-    def test_manual_refresh_bypasses_cached_values_and_saves_new_data(self):
-        cache = {
-            "INDIA:TEST": {
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "metrics": {"Old metric": {"3 Years": 1}},
-                "valuation_fetched_at": datetime.now(timezone.utc).isoformat(),
-                "valuation_medians": {"Median PE": {"3 Years": 99}},
-            }
-        }
-        refreshed_medians = {
-            "Median PE": {"3 Years": 24.5},
-            "Median Market Cap to Sales": {"3 Years": 4.2},
-        }
-
-        with (
-            patch("fundamentals.load_fundamentals", return_value=cache),
-            patch("fundamentals.save_fundamentals") as save_fundamentals,
-            patch("fundamentals._fetch_screener_page", return_value=SAMPLE_HTML) as fetch_page,
-            patch(
-                "fundamentals._fetch_valuation_medians",
-                return_value=refreshed_medians,
-            ),
-        ):
-            metrics, medians, refreshed = refresh_company_fundamentals(
-                "TEST",
-                include_status=True,
-            )
-
-        fetch_page.assert_called_once_with("TEST")
-        self.assertEqual(metrics["Compounded Sales Growth"]["3 Years"], 7.0)
-        self.assertEqual(medians, refreshed_medians)
-        self.assertTrue(refreshed)
-        saved_entry = save_fundamentals.call_args.args[0]["INDIA:TEST"]
-        self.assertEqual(saved_entry["metrics"], metrics)
-        self.assertEqual(saved_entry["valuation_medians"], refreshed_medians)
 
 
 if __name__ == "__main__":
