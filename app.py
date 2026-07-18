@@ -228,9 +228,9 @@ def run_interactive_chart_view():
         f"""
         <style>
         {embedded_layout_css}
-        header[data-testid="stHeader"] {
+        header[data-testid="stHeader"] {{
             display: none;
-        }
+        }}
         </style>
         """,
         unsafe_allow_html=True,

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from streamlit.testing.v1 import AppTest
 
 from charting import (
     interactive_chart_payload,
@@ -258,6 +259,26 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
         self.assertNotIn('target="_blank"', result)
+
+
+class InteractiveChartRouteTests(unittest.TestCase):
+    def test_embedded_interactive_chart_route_renders_without_exception(self):
+        stock_files = sorted(Path("data/daily").glob("*.json"))
+        if not stock_files:
+            self.skipTest("No daily stock fixture is available.")
+
+        app = AppTest.from_file("app.py")
+        app.query_params.update(
+            {
+                "interactive_chart": stock_files[0].stem,
+                "market": "INDIA",
+                "embedded": "1",
+                "ma": "50,200",
+            }
+        )
+        app.run(timeout=30)
+
+        self.assertEqual(list(app.exception), [])
 
 
 if __name__ == "__main__":
