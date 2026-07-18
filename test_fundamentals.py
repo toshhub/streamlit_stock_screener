@@ -149,11 +149,15 @@ class ScreenerFundamentalsTests(unittest.TestCase):
                 return_value=refreshed_medians,
             ),
         ):
-            metrics, medians = refresh_company_fundamentals("TEST")
+            metrics, medians, refreshed = refresh_company_fundamentals(
+                "TEST",
+                include_status=True,
+            )
 
         fetch_page.assert_called_once_with("TEST")
         self.assertEqual(metrics["Compounded Sales Growth"]["3 Years"], 7.0)
         self.assertEqual(medians, refreshed_medians)
+        self.assertTrue(refreshed)
         saved_entry = save_fundamentals.call_args.args[0]["INDIA:TEST"]
         self.assertEqual(saved_entry["metrics"], metrics)
         self.assertEqual(saved_entry["valuation_medians"], refreshed_medians)

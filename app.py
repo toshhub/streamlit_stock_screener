@@ -284,11 +284,12 @@ def run_fundamentals_retry():
         notice = ("warning", f"{requested_symbol} is not present in the saved screening results.")
     else:
         with st.spinner(f"Retrying Screener.in fundamentals for {requested_symbol}…"):
-            refresh_result_with_growth_metrics(
+            refresh_succeeded = refresh_result_with_growth_metrics(
                 matching_row,
                 requested_symbol,
                 result_market,
             )
+        matching_row["FundamentalsRefreshToken"] = uuid.uuid4().hex
         save_results(rows)
         st.session_state["results"] = rows
         has_fundamentals = bool(
@@ -299,10 +300,18 @@ def run_fundamentals_retry():
                 "success",
                 f"Refreshed Screener.in fundamentals for {requested_symbol}.",
             )
-            if has_fundamentals
+            if refresh_succeeded and has_fundamentals
             else (
                 "warning",
-                f"Screener.in data is still unavailable for {requested_symbol}. You can retry later.",
+                (
+                    f"Screener.in data is still unavailable for {requested_symbol}. "
+                    "You can retry later."
+                    if refresh_succeeded
+                    else (
+                        f"The Screener.in request for {requested_symbol} did not complete. "
+                        "Existing saved data was left unchanged."
+                    )
+                ),
             )
         )
 
@@ -3350,6 +3359,8 @@ with tab4:
         table_df = display_df.copy()
         if "ValuationMedians" in df.columns:
             table_df["ValuationMedians"] = df["ValuationMedians"]
+        if "FundamentalsRefreshToken" in df.columns:
+            table_df["FundamentalsRefreshToken"] = df["FundamentalsRefreshToken"]
 
         if "ChartPath" in df.columns:
             chart_df = table_df.copy()

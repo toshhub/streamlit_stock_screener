@@ -326,11 +326,15 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
     return metrics, valuation_medians
 
 
-def refresh_company_fundamentals(symbol, market=MARKET_INDIA):
+def refresh_company_fundamentals(
+    symbol,
+    market=MARKET_INDIA,
+    include_status=False,
+):
     """Fetch Screener.in growth and valuation data without using the TTL cache."""
     market = normalize_market(market)
     if market != MARKET_INDIA:
-        return {}, {}
+        return ({}, {}, False) if include_status else ({}, {})
 
     with _CACHE_LOCK:
         existing_entry = load_fundamentals().get(_cache_key(symbol, market), {})
@@ -372,6 +376,8 @@ def refresh_company_fundamentals(symbol, market=MARKET_INDIA):
             )
             cache[_cache_key(symbol, market)] = entry
             save_fundamentals(cache)
+    if include_status:
+        return metrics, valuation_medians, fetched
     return metrics, valuation_medians
 
 
@@ -407,8 +413,12 @@ def enrich_result_with_growth_metrics(result, symbol, market=MARKET_INDIA):
 
 
 def refresh_result_with_growth_metrics(result, symbol, market=MARKET_INDIA):
-    metrics, valuation_medians = refresh_company_fundamentals(symbol, market)
+    metrics, valuation_medians, refreshed = refresh_company_fundamentals(
+        symbol,
+        market,
+        include_status=True,
+    )
     result["GrowthMetrics"] = metrics
     result["ValuationMedians"] = valuation_medians
     result.update(growth_summary_fields(metrics))
-    return result
+    return refreshed

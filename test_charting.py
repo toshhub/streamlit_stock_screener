@@ -207,6 +207,7 @@ class InteractiveChartTests(unittest.TestCase):
                         }
                     },
                     "ChartSource": "360ONE",
+                    "FundamentalsRefreshToken": "completed-1",
                 },
                 {
                     "Symbol": "REDTEST",
@@ -236,9 +237,13 @@ class InteractiveChartTests(unittest.TestCase):
         )
 
         self.assertIn('<button class="interactive-chart-link"', result)
-        self.assertIn('class="fundamentals-retry-link"', result)
+        self.assertIn('<button class="fundamentals-retry-link"', result)
         self.assertIn("retry_fundamentals=360ONE", result)
-        self.assertIn('target="_top"', result)
+        self.assertNotIn('target="_top"', result)
+        self.assertIn("fundamentals-retry-spin", result)
+        self.assertIn("window.top.location.assign", result)
+        self.assertIn("data-fundamentals-refresh-version='completed-1", result)
+        self.assertNotIn("<th>FundamentalsRefreshToken</th>", result)
         self.assertLess(
             result.index('class="interactive-chart-link"'),
             result.index('class="fundamentals-retry-link"'),

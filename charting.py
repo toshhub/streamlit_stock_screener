@@ -1283,6 +1283,17 @@ def render_interactive_stock_chart(
 
 
 def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):
+    refresh_token_series = df.get("FundamentalsRefreshToken")
+    refresh_version = (
+        "|".join(
+            ""
+            if value is None or (isinstance(value, float) and pd.isna(value))
+            else str(value)
+            for value in refresh_token_series.tolist()
+        )
+        if refresh_token_series is not None
+        else ""
+    )
     visible_df = df.drop(
         columns=[
             "ChartPath",
@@ -1293,6 +1304,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             "Profit CAGR 3Y",
             "Price CAGR 3Y",
             "ROE 3Y",
+            "FundamentalsRefreshToken",
         ],
         errors="ignore",
     )
@@ -1518,6 +1530,16 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         width: 13px;
         height: 13px;
         pointer-events: none;
+      }
+      .fundamentals-retry-link.loading {
+        cursor: wait;
+        opacity: 0.72;
+      }
+      .fundamentals-retry-link.loading svg {
+        animation: fundamentals-retry-spin 0.75s linear infinite;
+      }
+      @keyframes fundamentals-retry-spin {
+        to { transform: rotate(360deg); }
       }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
@@ -2137,8 +2159,9 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                         }
                     )
                     fundamentals_retry_link = (
-                        f'<a class="fundamentals-retry-link" '
-                        f'href="{html.escape(retry_href, quote=True)}" target="_top" '
+                        f'<button class="fundamentals-retry-link" type="button" '
+                        f'data-fundamentals-retry-src="'
+                        f'{html.escape(retry_href, quote=True)}" '
                         f'title="Retry Screener.in CAGR and median data for '
                         f'{html.escape(value, quote=True)}" '
                         f'aria-label="Retry Screener.in fundamentals for '
@@ -2148,7 +2171,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                         'M3.2 10.3a5.3 5.3 0 0 0 9.7 1.2M12.9 11.5v2.7M12.9 11.5h-2.7" '
                         'fill="none" stroke="currentColor" stroke-width="1.45" '
                         'stroke-linecap="round" stroke-linejoin="round"/>'
-                        '</svg></a>'
+                        '</svg></button>'
                     )
                 escaped_value = (
                     f'<span class="stock-symbol-cell">'
@@ -2171,6 +2194,22 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         const parsed = parseFloat(cleaned);
         return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
       }
+
+      document.addEventListener("DOMContentLoaded", function() {
+        document.querySelectorAll("[data-fundamentals-retry-src]").forEach(function(button) {
+          button.addEventListener("click", function() {
+            if (button.classList.contains("loading")) return;
+            button.classList.add("loading");
+            button.setAttribute("aria-busy", "true");
+            button.disabled = true;
+            const retryUrl = new URL(
+              button.dataset.fundamentalsRetrySrc,
+              window.top.location.href
+            );
+            window.top.location.assign(retryUrl.href);
+          });
+        });
+      });
 
       function sortNumericColumn(columnIndex) {
         const table = document.querySelector(".hover-results-table");
@@ -2201,7 +2240,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
     result_count = len(visible_df)
     table_html = (
-        f"<div class='results-table-shell'>"
+        f"<div class='results-table-shell' data-fundamentals-refresh-version="
+        f"'{html.escape(refresh_version, quote=True)}'>"
         f"<div class='results-table-toolbar'>"
         f"<div class='results-table-toolbar__title'>Screening Results"
         f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"
