@@ -3,6 +3,7 @@ import urllib.error
 from unittest.mock import patch
 
 from fundamentals import (
+    _fetch_screener_page,
     _read_url_with_retries,
     _valuation_medians_complete,
     apply_fundamentals_to_result,
@@ -163,6 +164,51 @@ class ScreenerFundamentalsTests(unittest.TestCase):
         self.assertEqual(body, b"recovered")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once()
+
+    def test_standalone_company_page_is_preferred(self):
+        company_html = (
+            '<div data-company-id="42" data-consolidated="false" '
+            'id="company-info"></div>'
+        ).encode()
+        with patch(
+            "fundamentals._read_url_with_retries",
+            return_value=company_html,
+        ) as read_url:
+            page_html = _fetch_screener_page("GULPOLY")
+
+        self.assertIn('data-company-id="42"', page_html)
+        request = read_url.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://www.screener.in/company/GULPOLY/",
+        )
+
+    def test_consolidated_company_page_is_used_as_fallback(self):
+        not_found = urllib.error.HTTPError(
+            "https://www.screener.in/company/ONLYCONS/",
+            404,
+            "Not Found",
+            {},
+            None,
+        )
+        company_html = (
+            '<div data-company-id="84" data-consolidated="true" '
+            'id="company-info"></div>'
+        ).encode()
+        with patch(
+            "fundamentals._read_url_with_retries",
+            side_effect=[not_found, company_html],
+        ) as read_url:
+            page_html = _fetch_screener_page("ONLYCONS")
+
+        self.assertIn('data-consolidated="true"', page_html)
+        self.assertEqual(
+            [call.args[0].full_url for call in read_url.call_args_list],
+            [
+                "https://www.screener.in/company/ONLYCONS/",
+                "https://www.screener.in/company/ONLYCONS/consolidated/",
+            ],
+        )
 
     def test_cached_fundamentals_hydrate_an_existing_result(self):
         row = {"Symbol": "IGPL", "GrowthMetrics": {}, "ValuationMedians": {}}

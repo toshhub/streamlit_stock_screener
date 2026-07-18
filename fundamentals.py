@@ -41,6 +41,7 @@ _MIN_REQUEST_INTERVAL_SECONDS = 0.35
 _SUCCESS_TTL = timedelta(days=7)
 _EMPTY_TTL = timedelta(minutes=15)
 _RETRIABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+_SOURCE_POLICY = "standalone-first-v1"
 
 
 def _plain_text(fragment):
@@ -110,6 +111,15 @@ def parse_screener_growth_html(page_html):
 
 def _cache_key(symbol, market):
     return f"{normalize_market(market)}:{str(symbol).upper()}"
+
+
+def _fundamentals_cache_uses_current_source(symbol, market):
+    with _CACHE_LOCK:
+        entry = load_fundamentals().get(_cache_key(symbol, market), {})
+    return (
+        isinstance(entry, dict)
+        and entry.get("source_policy") == _SOURCE_POLICY
+    )
 
 
 def _cached_field(
@@ -223,8 +233,8 @@ def _read_url_with_retries(request, timeout=15, attempts=3):
 def _fetch_screener_page(symbol):
     encoded_symbol = urllib.parse.quote(str(symbol).upper(), safe="")
     urls = (
-        f"https://www.screener.in/company/{encoded_symbol}/consolidated/",
         f"https://www.screener.in/company/{encoded_symbol}/",
+        f"https://www.screener.in/company/{encoded_symbol}/consolidated/",
     )
     last_error = None
     for url in urls:
@@ -236,7 +246,10 @@ def _fetch_screener_page(symbol):
             },
         )
         try:
-            return _read_url_with_retries(request).decode("utf-8", errors="ignore")
+            page_html = _read_url_with_retries(request).decode("utf-8", errors="ignore")
+            if parse_screener_company_chart_context(page_html):
+                return page_html
+            last_error = ValueError(f"Screener.in company data is unavailable at {url}")
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code not in {404, 410}:
@@ -355,20 +368,24 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
     if market != MARKET_INDIA:
         return {}, {}
 
-    cached_growth = _cached_field(
-        symbol,
-        market,
-        "metrics",
-        "fetched_at",
-        completeness_check=_growth_metrics_complete,
-    )
-    cached_valuations = _cached_field(
-        symbol,
-        market,
-        "valuation_medians",
-        "valuation_fetched_at",
-        completeness_check=_valuation_medians_complete,
-    )
+    source_policy_is_current = _fundamentals_cache_uses_current_source(symbol, market)
+    cached_growth = None
+    cached_valuations = None
+    if source_policy_is_current:
+        cached_growth = _cached_field(
+            symbol,
+            market,
+            "metrics",
+            "fetched_at",
+            completeness_check=_growth_metrics_complete,
+        )
+        cached_valuations = _cached_field(
+            symbol,
+            market,
+            "valuation_medians",
+            "valuation_fetched_at",
+            completeness_check=_valuation_medians_complete,
+        )
     if cached_growth is not None and cached_valuations is not None:
         return cached_growth, cached_valuations
 
@@ -396,6 +413,7 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
         if cached_valuations is None:
             entry["valuation_fetched_at"] = now
             entry["valuation_medians"] = valuation_medians
+        entry["source_policy"] = _SOURCE_POLICY
         cache[_cache_key(symbol, market)] = entry
         save_fundamentals(cache)
     return metrics, valuation_medians
@@ -464,7 +482,10 @@ def repair_result_fundamentals(results, market=MARKET_INDIA):
             get_cached_company_growth_metrics(symbol, market),
             get_cached_company_valuation_medians(symbol, market),
         ) or changed
-        if _result_needs_fundamentals(result):
+        if _result_needs_fundamentals(result) or not _fundamentals_cache_uses_current_source(
+            symbol,
+            market,
+        ):
             pending.append((result, symbol))
 
     if not pending:

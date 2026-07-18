@@ -2148,7 +2148,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                 ):
                     screener_href = (
                         "https://www.screener.in/company/"
-                        f"{quote(str(value).upper(), safe='')}/consolidated/"
+                        f"{quote(str(value).upper(), safe='')}/"
                     )
                     screener_company_link = (
                         f'<a class="screener-company-link" '

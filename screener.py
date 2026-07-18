@@ -85,27 +85,37 @@ def get_quote_api_pe_ratio(yahoo_symbol):
 
 def get_screener_in_pe_ratio(symbol):
     screener_symbol = urllib.parse.quote(symbol, safe="")
-    url = f"https://www.screener.in/company/{screener_symbol}/consolidated/"
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"},
+    urls = (
+        f"https://www.screener.in/company/{screener_symbol}/",
+        f"https://www.screener.in/company/{screener_symbol}/consolidated/",
     )
+    for url in urls:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                html = response.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as exc:
+            if exc.code in {404, 410}:
+                continue
+            raise
 
-    with urllib.request.urlopen(request, timeout=15) as response:
-        html = response.read().decode("utf-8", errors="ignore")
-
-    match = re.search(
-        r"Stock P/E\s*</span>\s*<span[^>]*class=\"[^\"]*number[^\"]*\"[^>]*>\s*([0-9,.]+)",
-        html,
-        re.IGNORECASE,
-    )
-    if not match:
-        match = re.search(r"Stock P/E\s+([0-9,.]+)", re.sub(r"<[^>]+>", " ", html), re.IGNORECASE)
-
-    if not match:
-        return ""
-
-    return clean_pe_ratio(match.group(1).replace(",", ""))
+        match = re.search(
+            r"Stock P/E\s*</span>\s*<span[^>]*class=\"[^\"]*number[^\"]*\"[^>]*>\s*([0-9,.]+)",
+            html,
+            re.IGNORECASE,
+        )
+        if not match:
+            match = re.search(
+                r"Stock P/E\s+([0-9,.]+)",
+                re.sub(r"<[^>]+>", " ", html),
+                re.IGNORECASE,
+            )
+        if match:
+            return clean_pe_ratio(match.group(1).replace(",", ""))
+    return ""
 
 @lru_cache(maxsize=2048)
 def get_pe_ratio(symbol, market=MARKET_INDIA):

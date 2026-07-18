@@ -310,7 +310,7 @@ class InteractiveChartTests(unittest.TestCase):
             len(df),
         )
         self.assertIn(
-            'href="https://www.screener.in/company/360ONE/consolidated/"',
+            'href="https://www.screener.in/company/360ONE/"',
             result,
         )
         self.assertIn('target="_blank" rel="noopener noreferrer"', result)
