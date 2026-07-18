@@ -971,7 +971,7 @@ def interactive_stock_chart_html(
         @media (max-width: 640px) {{
           .chart-shell {{
             grid-template-rows: auto auto minmax(280px, 1fr) auto;
-            padding: 4px;
+            padding: 0;
           }}
           .chart-header {{
             grid-template-columns: 1fr;
@@ -1672,7 +1672,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       .interactive-chart-embed {
         display: block;
         width: 100%;
-        height: 860px;
+        height: 1100px;
         border: 1px solid #e0e8ee;
         border-radius: 10px;
         background: #f5f8fb;
@@ -1698,11 +1698,16 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .chart-nav-next { right: 2px; }
         .chart-image-wrap { padding: 0 34px; }
         .chart-help-text { font-size: 11px; }
-        .chart-panel.interactive-mode { padding: 5px; }
-        .interactive-panel-header { padding: 1px 2px 5px; }
+        .chart-panel.interactive-mode {
+          max-height: none;
+          overflow: visible;
+          padding: 0;
+        }
+        .interactive-panel-header { padding: 3px 4px 6px; }
         .interactive-chart-embed {
-          height: 900px;
-          border-radius: 8px;
+          height: 1100px;
+          border-width: 0;
+          border-radius: 0;
         }
         .interactive-panel-help { font-size: 9px; }
       }

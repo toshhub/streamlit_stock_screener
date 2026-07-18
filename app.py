@@ -208,13 +208,26 @@ def run_interactive_chart_view():
     chart_range = str(query_param_value("range", "252") or "252").lower()
     growth_metrics = get_cached_company_growth_metrics(symbol, market)
     valuation_medians = get_cached_company_valuation_medians(symbol, market)
-    st.markdown(
+    embedded_layout_css = (
         """
-        <style>
+        .stMainBlockContainer {
+            max-width: none;
+            padding: 0 !important;
+        }
+        """
+        if embedded
+        else
+        """
         .stMainBlockContainer {
             max-width: 1600px;
             padding: 0.35rem 0.5rem 0.5rem;
         }
+        """
+    )
+    st.markdown(
+        f"""
+        <style>
+        {embedded_layout_css}
         header[data-testid="stHeader"] {
             display: none;
         }
@@ -235,7 +248,7 @@ def run_interactive_chart_view():
             initial_range=chart_range,
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
-            height=820 if embedded else 920,
+            height=1060 if embedded else 920,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")
