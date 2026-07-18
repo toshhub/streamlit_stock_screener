@@ -4,6 +4,7 @@ import html
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlencode
 
 from matplotlib.figure import Figure
 import pandas as pd
@@ -22,6 +23,8 @@ MA_COLORS = [
     "#0891b2",
     "#be123c",
 ]
+
+INTERACTIVE_CHART_DEFAULT_MAS = [50, 200]
 
 
 def load_price_data(path):
@@ -348,7 +351,412 @@ def image_to_data_uri(path):
     return f"data:image/png;base64,{encoded}"
 
 
-def results_hover_table_html(df):
+def normalize_interactive_ma_periods(periods):
+    normalized = []
+    for period in periods or []:
+        try:
+            value = int(float(period))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= value <= 1000 and value not in normalized:
+            normalized.append(value)
+    return sorted(normalized)[:7] or list(INTERACTIVE_CHART_DEFAULT_MAS)
+
+
+def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
+    json_path = Path(json_path)
+    df = pd.DataFrame(json.loads(json_path.read_text(encoding="utf-8")))
+    required_columns = ["Date", "Open", "High", "Low", "Close"]
+    missing_columns = [column for column in required_columns if column not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing chart data: {', '.join(missing_columns)}")
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    for column in ["Open", "High", "Low", "Close", "Volume"]:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna(subset=required_columns).sort_values("Date").reset_index(drop=True)
+    if df.empty:
+        raise ValueError("No valid candle data is available for this stock.")
+
+    ma_periods = normalize_interactive_ma_periods(ma_periods)
+    for period in ma_periods:
+        df[f"SMA{period}"] = df["Close"].rolling(period).mean()
+
+    if max_points is None:
+        chart_df = df.copy()
+    else:
+        chart_df = df.tail(max(100, int(max_points))).copy()
+    candles = [
+        {
+            "time": row.Date.strftime("%Y-%m-%d"),
+            "open": round(float(row.Open), 4),
+            "high": round(float(row.High), 4),
+            "low": round(float(row.Low), 4),
+            "close": round(float(row.Close), 4),
+        }
+        for row in chart_df.itertuples()
+    ]
+
+    moving_averages = {}
+    for period in ma_periods:
+        column = f"SMA{period}"
+        moving_averages[column] = [
+            {
+                "time": row.Date.strftime("%Y-%m-%d"),
+                "value": round(float(getattr(row, column)), 4),
+            }
+            for row in chart_df.itertuples()
+            if pd.notna(getattr(row, column))
+        ]
+
+    volume = []
+    if "Volume" in chart_df.columns:
+        volume = [
+            {
+                "time": row.Date.strftime("%Y-%m-%d"),
+                "value": max(0, int(row.Volume)) if pd.notna(row.Volume) else 0,
+                "color": "rgba(22, 163, 74, 0.32)"
+                if float(row.Close) >= float(row.Open)
+                else "rgba(220, 38, 38, 0.30)",
+            }
+            for row in chart_df.itertuples()
+        ]
+
+    return {
+        "candles": candles,
+        "movingAverages": moving_averages,
+        "volume": volume,
+        "maPeriods": ma_periods,
+        "pointCount": len(candles),
+        "firstDate": candles[0]["time"],
+        "lastDate": candles[-1]["time"],
+    }
+
+
+def interactive_stock_chart_html(symbol, json_path, ma_periods=None):
+    payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
+    payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+    safe_symbol = html.escape(str(symbol))
+
+    return f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+      <style>
+        :root {{
+          --ink: #10243e;
+          --muted: #64748b;
+          --brand: #176b87;
+          --border: #dce6ee;
+          --surface: #ffffff;
+          --surface-soft: #f5f8fb;
+        }}
+        * {{ box-sizing: border-box; }}
+        html, body {{ height: 100%; }}
+        body {{
+          margin: 0;
+          background: var(--surface-soft);
+          color: var(--ink);
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        .chart-shell {{
+          display: grid;
+          grid-template-rows: auto auto minmax(420px, 1fr) auto;
+          min-height: 100vh;
+          padding: 12px;
+        }}
+        .chart-header {{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 11px 14px;
+          border: 1px solid var(--border);
+          border-bottom: 0;
+          border-radius: 14px 14px 0 0;
+          background: #ffffff;
+        }}
+        .chart-title {{ min-width: 0; }}
+        .chart-title strong {{ display: block; font-size: 17px; letter-spacing: -0.02em; }}
+        .chart-title span {{ color: var(--muted); font-size: 11px; }}
+        .chart-actions {{ display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }}
+        .chart-action {{
+          min-width: 31px;
+          height: 29px;
+          padding: 0 8px;
+          border: 1px solid #cad8e2;
+          border-radius: 7px;
+          background: #ffffff;
+          color: #27445d;
+          cursor: pointer;
+          font-size: 11px;
+          font-weight: 750;
+          touch-action: manipulation;
+        }}
+        .chart-action:hover {{ border-color: #70a8b7; background: #edf7f9; color: #10536a; }}
+        .chart-action.active {{
+          border-color: #78a9b9;
+          background: #e9f6f8;
+          color: #10536a;
+          box-shadow: inset 0 0 0 1px rgba(23, 107, 135, 0.08);
+        }}
+        .chart-action.primary {{ border-color: var(--brand); background: var(--brand); color: #ffffff; }}
+        .chart-legend {{
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-height: 36px;
+          padding: 7px 14px;
+          overflow-x: auto;
+          border: 1px solid var(--border);
+          border-bottom: 0;
+          background: #f9fbfc;
+          color: #334a63;
+          font-size: 11px;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
+        }}
+        .legend-date {{ color: var(--muted); font-weight: 750; }}
+        .legend-ohlc b {{ margin-left: 4px; color: var(--ink); }}
+        .legend-ma {{ font-weight: 750; }}
+        #chart {{
+          position: relative;
+          min-height: 420px;
+          border: 1px solid var(--border);
+          background: var(--surface);
+        }}
+        .chart-loading {{
+          position: absolute;
+          inset: 0;
+          z-index: 2;
+          display: grid;
+          place-items: center;
+          background: #ffffff;
+          color: var(--muted);
+          font-size: 13px;
+        }}
+        .chart-footer {{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 8px 12px;
+          border: 1px solid var(--border);
+          border-top: 0;
+          border-radius: 0 0 14px 14px;
+          background: #ffffff;
+          color: var(--muted);
+          font-size: 10px;
+        }}
+        .chart-footer a {{ color: var(--brand); font-weight: 700; text-decoration: none; }}
+        @media (max-width: 640px) {{
+          .chart-shell {{ padding: 6px; }}
+          .chart-header {{ align-items: flex-start; padding: 9px 10px; }}
+          .chart-title strong {{ font-size: 15px; }}
+          .chart-actions {{ max-width: 190px; }}
+          .chart-action {{ height: 31px; }}
+          .chart-legend {{ padding-inline: 10px; }}
+          .chart-footer {{ align-items: flex-start; flex-direction: column; gap: 3px; }}
+        }}
+      </style>
+    </head>
+    <body>
+      <main class="chart-shell">
+        <header class="chart-header">
+          <div class="chart-title">
+            <strong>{safe_symbol}</strong>
+            <span>Daily interactive candlestick chart · {payload["pointCount"]:,} candles</span>
+          </div>
+          <div class="chart-actions" aria-label="Chart controls">
+            <button class="chart-action" type="button" data-range="126">6M</button>
+            <button class="chart-action active" type="button" data-range="252">1Y</button>
+            <button class="chart-action" type="button" data-range="756">3Y</button>
+            <button class="chart-action" type="button" data-range="all">All</button>
+            <button class="chart-action" type="button" id="zoom-out" aria-label="Zoom out">−</button>
+            <button class="chart-action" type="button" id="zoom-in" aria-label="Zoom in">+</button>
+            <button class="chart-action primary" type="button" id="reset-chart">Reset</button>
+          </div>
+        </header>
+        <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC and MA values.</div>
+        <section id="chart" aria-label="{safe_symbol} interactive stock chart">
+          <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
+        </section>
+        <footer class="chart-footer">
+          <span>Scroll or pinch to zoom · drag to pan · tap and hold on mobile to inspect values</span>
+          <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">Charts by TradingView</a>
+        </footer>
+      </main>
+      <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+      <script>
+        (function() {{
+          const payload = {payload_json};
+          const container = document.getElementById("chart");
+          const loading = document.getElementById("chart-loading");
+          const legend = document.getElementById("chart-legend");
+          if (!window.LightweightCharts) {{
+            loading.textContent = "Interactive chart library could not load. Check the internet connection and retry.";
+            return;
+          }}
+
+          const colors = ["#2563eb", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5", "#15803d"];
+          const chart = LightweightCharts.createChart(container, {{
+            width: Math.max(320, container.clientWidth),
+            height: Math.max(420, container.clientHeight),
+            layout: {{
+              background: {{ type: LightweightCharts.ColorType.Solid, color: "#ffffff" }},
+              textColor: "#52667a",
+              fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+            }},
+            grid: {{
+              vertLines: {{ color: "#eef3f6" }},
+              horzLines: {{ color: "#e7eef3" }},
+            }},
+            crosshair: {{
+              mode: LightweightCharts.CrosshairMode.Magnet,
+              vertLine: {{ color: "#6b879a", width: 1, labelBackgroundColor: "#176b87" }},
+              horzLine: {{ color: "#6b879a", width: 1, labelBackgroundColor: "#176b87" }},
+            }},
+            rightPriceScale: {{ borderColor: "#dce6ee", scaleMargins: {{ top: 0.08, bottom: 0.24 }} }},
+            timeScale: {{
+              borderColor: "#dce6ee",
+              timeVisible: false,
+              rightOffset: 6,
+              barSpacing: 7,
+              minBarSpacing: 1.2,
+            }},
+            handleScroll: {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }},
+            handleScale: {{ axisPressedMouseMove: true, mouseWheel: true, pinch: true }},
+          }});
+
+          const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {{
+            upColor: "#16a34a",
+            downColor: "#dc2626",
+            borderUpColor: "#15803d",
+            borderDownColor: "#b91c1c",
+            wickUpColor: "#15803d",
+            wickDownColor: "#b91c1c",
+            priceLineColor: "#176b87",
+          }});
+          candleSeries.setData(payload.candles);
+
+          const maSeries = [];
+          payload.maPeriods.forEach(function(period, index) {{
+            const label = "SMA" + period;
+            const color = colors[index % colors.length];
+            const series = chart.addSeries(LightweightCharts.LineSeries, {{
+              color: color,
+              lineWidth: 2,
+              priceLineVisible: false,
+              lastValueVisible: true,
+              crosshairMarkerVisible: false,
+              title: label,
+            }});
+            series.setData(payload.movingAverages[label] || []);
+            maSeries.push({{ label: label, color: color, series: series }});
+          }});
+
+          if (payload.volume.length) {{
+            const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {{
+              priceFormat: {{ type: "volume" }},
+              priceScaleId: "",
+              priceLineVisible: false,
+              lastValueVisible: false,
+            }});
+            volumeSeries.priceScale().applyOptions({{ scaleMargins: {{ top: 0.82, bottom: 0 }} }});
+            volumeSeries.setData(payload.volume);
+          }}
+
+          function formatPrice(value) {{
+            return Number.isFinite(Number(value))
+              ? Number(value).toLocaleString(undefined, {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }})
+              : "—";
+          }}
+
+          function renderLegend(time, candle, param) {{
+            if (!candle) return;
+            let content = '<span class="legend-date">' + String(time || "") + '</span>' +
+              '<span class="legend-ohlc">O <b>' + formatPrice(candle.open) + '</b></span>' +
+              '<span class="legend-ohlc">H <b>' + formatPrice(candle.high) + '</b></span>' +
+              '<span class="legend-ohlc">L <b>' + formatPrice(candle.low) + '</b></span>' +
+              '<span class="legend-ohlc">C <b>' + formatPrice(candle.close) + '</b></span>';
+            maSeries.forEach(function(item) {{
+              const point = param ? param.seriesData.get(item.series) : null;
+              const value = point && point.value;
+              content += '<span class="legend-ma" style="color:' + item.color + '">' +
+                item.label + ' ' + formatPrice(value) + '</span>';
+            }});
+            legend.innerHTML = content;
+          }}
+
+          chart.subscribeCrosshairMove(function(param) {{
+            if (!param || !param.time || !param.seriesData) return;
+            renderLegend(param.time, param.seriesData.get(candleSeries), param);
+          }});
+
+          function showBars(count) {{
+            document.querySelectorAll("[data-range]").forEach(function(button) {{
+              button.classList.toggle("active", String(button.dataset.range) === String(count));
+            }});
+            if (count === "all") {{
+              chart.timeScale().fitContent();
+              return;
+            }}
+            const total = payload.candles.length;
+            chart.timeScale().setVisibleLogicalRange({{
+              from: Math.max(0, total - Number(count)),
+              to: total + 4,
+            }});
+          }}
+
+          function zoom(factor) {{
+            document.querySelectorAll("[data-range]").forEach(function(button) {{
+              button.classList.remove("active");
+            }});
+            const range = chart.timeScale().getVisibleLogicalRange();
+            if (!range) return;
+            const center = (range.from + range.to) / 2;
+            const half = Math.max(10, ((range.to - range.from) * factor) / 2);
+            chart.timeScale().setVisibleLogicalRange({{ from: center - half, to: center + half }});
+          }}
+
+          document.querySelectorAll("[data-range]").forEach(function(button) {{
+            button.addEventListener("click", function() {{ showBars(button.dataset.range); }});
+          }});
+          document.getElementById("zoom-in").addEventListener("click", function() {{ zoom(0.72); }});
+          document.getElementById("zoom-out").addEventListener("click", function() {{ zoom(1.38); }});
+          document.getElementById("reset-chart").addEventListener("click", function() {{
+            showBars(252);
+          }});
+
+          const resizeObserver = new ResizeObserver(function(entries) {{
+            const rect = entries[0].contentRect;
+            chart.applyOptions({{
+              width: Math.max(320, Math.floor(rect.width)),
+              height: Math.max(420, Math.floor(rect.height)),
+            }});
+          }});
+          resizeObserver.observe(container);
+          loading.remove();
+          showBars(252);
+        }})();
+      </script>
+    </body>
+    </html>
+    """
+
+
+def render_interactive_stock_chart(symbol, json_path, ma_periods=None, height=760):
+    components.html(
+        interactive_stock_chart_html(symbol, json_path, ma_periods=ma_periods),
+        height=height,
+        scrolling=False,
+    )
+
+
+def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):
     visible_df = df.drop(columns=["ChartPath", "ChartSource"], errors="ignore")
     chart_paths = df.get("ChartPath")
 
@@ -465,6 +873,12 @@ def results_hover_table_html(df):
       }
       .hover-results-table tbody tr:last-child td { border-bottom: none; }
       .hover-results-table td:first-child { font-weight: 750; }
+      .stock-symbol-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+      }
       .stock-hover {
         display: inline-flex;
         align-items: center;
@@ -486,6 +900,36 @@ def results_hover_table_html(df):
       .stock-hover:hover {
         transform: translateY(-1px);
         box-shadow: 0 4px 10px rgba(23, 107, 135, 0.14);
+      }
+      .interactive-chart-link {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
+        padding: 0;
+        border: 1px solid #f0b15f;
+        border-radius: 6px;
+        background: #fff7e8;
+        color: #b65d18;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      .interactive-chart-link:hover,
+      .interactive-chart-link:focus {
+        transform: translateY(-1px);
+        border-color: #df7a2c;
+        background: #ffedd2;
+        box-shadow: 0 3px 8px rgba(182, 93, 24, 0.18);
+        outline: none;
+      }
+      .interactive-chart-link svg {
+        width: 13px;
+        height: 13px;
+        pointer-events: none;
       }
       .stock-hover .chart-tooltip { display: none; }
       .chart-tooltip img { width: 100%; height: auto; display: block; object-fit: contain; }
@@ -795,6 +1239,8 @@ def results_hover_table_html(df):
     )
     rows = []
     chart_sources = df.get("ChartSource")
+    interactive_periods = normalize_interactive_ma_periods(interactive_ma_periods)
+    interactive_ma_query = ",".join(str(period) for period in interactive_periods)
     for row_index, row in visible_df.iterrows():
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
@@ -815,14 +1261,37 @@ def results_hover_table_html(df):
         for column in visible_df.columns:
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
-            if column == "Symbol" and chart_html and data_uri:
-                escaped_value = (
-                    f'<span class="stock-hover" '
-                    f'data-symbol="{html.escape(value, quote=True)}" '
-                    f'data-chart-src="{html.escape(data_uri, quote=True)}">'
-                    f'{escaped_value}{chart_html}'
-                    f'</span>'
-                )
+            if column == "Symbol":
+                symbol_html = escaped_value
+                if chart_html and data_uri:
+                    symbol_html = (
+                        f'<span class="stock-hover" '
+                        f'data-symbol="{html.escape(value, quote=True)}" '
+                        f'data-chart-src="{html.escape(data_uri, quote=True)}">'
+                        f'{escaped_value}{chart_html}'
+                        f'</span>'
+                    )
+
+                interactive_link = ""
+                source_symbol = chart_source if chart_source and not pd.isna(chart_source) else value
+                if interactive_market and source_symbol:
+                    interactive_href = "?" + urlencode({
+                        "interactive_chart": str(source_symbol),
+                        "market": str(interactive_market),
+                        "ma": interactive_ma_query,
+                    })
+                    interactive_link = (
+                        f'<a class="interactive-chart-link" '
+                        f'href="{html.escape(interactive_href, quote=True)}" '
+                        f'target="_blank" rel="noopener" '
+                        f'title="Open {html.escape(value, quote=True)} interactive chart" '
+                        f'aria-label="Open {html.escape(value, quote=True)} interactive chart">'
+                        '<svg viewBox="0 0 16 16" aria-hidden="true">'
+                        '<path d="M3 2v4M3 9v5M1.5 6h3v3h-3zM8 1v3M8 8v5M6.5 4h3v4h-3zM13 3v5M13 11v3M11.5 8h3v3h-3z" '
+                        'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
+                        '</svg></a>'
+                    )
+                escaped_value = f'<span class="stock-symbol-cell">{symbol_html}{interactive_link}</span>'
             cells.append(f"<td>{escaped_value}</td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
@@ -874,7 +1343,8 @@ def results_hover_table_html(df):
         f"<div class='results-table-toolbar'>"
         f"<div class='results-table-toolbar__title'>Screening Results"
         f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"
-        f"<div class='results-table-toolbar__meta'>Click a metric to sort · Select a symbol to view its chart</div>"
+        f"<div class='results-table-toolbar__meta'>Sort metrics · Select a symbol for the fast chart · "
+        f"Use the candle icon for interactive view</div>"
         f"</div>"
         f"<div class='results-table-wrapper'>"
         f"<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead>"
@@ -886,5 +1356,18 @@ def results_hover_table_html(df):
     return f"{styles}{script}{table_html}"
 
 
-def sortable_results_table(df, height=700):
-    components.html(results_hover_table_html(df), height=height, scrolling=True)
+def sortable_results_table(
+    df,
+    height=700,
+    interactive_market=None,
+    interactive_ma_periods=None,
+):
+    components.html(
+        results_hover_table_html(
+            df,
+            interactive_market=interactive_market,
+            interactive_ma_periods=interactive_ma_periods,
+        ),
+        height=height,
+        scrolling=True,
+    )

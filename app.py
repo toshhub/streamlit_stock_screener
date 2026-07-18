@@ -17,7 +17,12 @@ import streamlit.components.v1 as components
 
 from backtest import get_backtest_calendar_dates, run_backtest, split_favorite_filter
 from config import *
-from charting import create_stock_chart, image_to_data_uri, sortable_results_table
+from charting import (
+    create_stock_chart,
+    image_to_data_uri,
+    render_interactive_stock_chart,
+    sortable_results_table,
+)
 from downloader import (
     MARKET_INDIA,
     MARKET_US,
@@ -37,6 +42,7 @@ from screener import (
     FILTER_TYPE_DEFAULTS,
     FILTER_TYPE_LABELS,
     normalize_filter_set,
+    required_ma_periods,
     screen_json_file,
 )
 from storage import (
@@ -165,6 +171,54 @@ def run_scheduled_download():
 
 if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true", "yes"} or str(query_param_value("ping", "") or "").lower() in {"1", "true", "yes"}:
     run_scheduled_download()
+
+
+def run_interactive_chart_view():
+    symbol = str(query_param_value("interactive_chart", "") or "").strip()
+    market = normalize_market(query_param_value("market", settings.get("last_results_market", MARKET_INDIA)))
+    if not symbol or Path(symbol).name != symbol:
+        st.error("Invalid stock symbol.")
+        st.stop()
+
+    target_dir = timeframe_config("DAY", market)["target_dir"].resolve()
+    stock_file = (target_dir / f"{symbol}.json").resolve()
+    if stock_file.parent != target_dir or not stock_file.exists():
+        st.error(f"Daily chart data is unavailable for {symbol}.")
+        st.stop()
+
+    requested_periods = [
+        token.strip()
+        for token in str(query_param_value("ma", "") or "").split(",")
+        if token.strip()
+    ]
+    st.markdown(
+        """
+        <style>
+        .stMainBlockContainer {
+            max-width: 1600px;
+            padding: 0.35rem 0.5rem 0.5rem;
+        }
+        header[data-testid="stHeader"] {
+            display: none;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        render_interactive_stock_chart(
+            symbol,
+            stock_file,
+            ma_periods=requested_periods,
+            height=820,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        st.error(f"Unable to prepare the interactive chart: {exc}")
+    st.stop()
+
+
+if query_param_value("interactive_chart", ""):
+    run_interactive_chart_view()
 
 # ---- Inject custom CSS ----
 st.markdown(
@@ -3190,9 +3244,17 @@ with tab4:
             chart_df["ChartPath"] = df["ChartPath"]
             if "ChartSource" in df.columns:
                 chart_df["ChartSource"] = df["ChartSource"]
-            sortable_results_table(chart_df)
+            sortable_results_table(
+                chart_df,
+                interactive_market=result_market,
+                interactive_ma_periods=required_ma_periods(repair_filter_set),
+            )
         else:
-            sortable_results_table(display_df)
+            sortable_results_table(
+                display_df,
+                interactive_market=result_market,
+                interactive_ma_periods=required_ma_periods(repair_filter_set),
+            )
 
         st.download_button(
             "📥 Download Results CSV",
