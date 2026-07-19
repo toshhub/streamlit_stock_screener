@@ -1129,9 +1129,18 @@ def interactive_stock_chart_html(
             return;
           }}
 
+          function minimumBarSpacingForWidth(width) {{
+            const usableWidth = Math.max(120, Number(width) - 64);
+            const candleCount = Math.max(1, payload.candles.length);
+            // Permit every candle to fit on screen, including long histories
+            // on portrait mobile, while retaining a practical lower bound.
+            return Math.max(0.01, Math.min(0.5, usableWidth / (candleCount + 12)));
+          }}
+
+          const initialChartWidth = Math.max(240, container.clientWidth);
           const colors = ["#2563eb", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5", "#15803d"];
           const chart = LightweightCharts.createChart(container, {{
-            width: Math.max(240, container.clientWidth),
+            width: initialChartWidth,
             height: Math.max(280, container.clientHeight),
             layout: {{
               background: {{ type: LightweightCharts.ColorType.Solid, color: "#ffffff" }},
@@ -1153,7 +1162,7 @@ def interactive_stock_chart_html(
               timeVisible: false,
               rightOffset: 6,
               barSpacing: 7,
-              minBarSpacing: 1.2,
+              minBarSpacing: minimumBarSpacingForWidth(initialChartWidth),
             }},
             handleScroll: {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }},
             handleScale: {{ axisPressedMouseMove: true, mouseWheel: true, pinch: true }},
@@ -1247,9 +1256,13 @@ def interactive_stock_chart_html(
 
           const resizeObserver = new ResizeObserver(function(entries) {{
             const rect = entries[0].contentRect;
+            const chartWidth = Math.max(240, Math.floor(rect.width));
             chart.applyOptions({{
-              width: Math.max(240, Math.floor(rect.width)),
+              width: chartWidth,
               height: Math.max(280, Math.floor(rect.height)),
+              timeScale: {{
+                minBarSpacing: minimumBarSpacingForWidth(chartWidth),
+              }},
             }});
           }});
           resizeObserver.observe(container);
