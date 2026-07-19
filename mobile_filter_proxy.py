@@ -51,13 +51,11 @@ def _inject_mobile_filter_styles():
                 max-width: calc(50% - 0.2rem) !important;
             }
 
-            div[class*="st-key-filter_card_"] button,
             div[class*="st-key-favorite_filter_card_"] button {
                 min-height: 54px !important;
                 padding: 0.5rem 0.35rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button p,
             div[class*="st-key-favorite_filter_card_"] button p {
                 font-size: 0.72rem !important;
                 line-height: 1.14 !important;

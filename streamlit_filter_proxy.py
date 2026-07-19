@@ -1,3 +1,4 @@
+import html
 import re
 from contextlib import AbstractContextManager
 
@@ -65,11 +66,14 @@ def _inject_styles(force=False):
         key = _card_key(label)
         card_rules.append(
             f"""
-            div[class*="st-key-{key}"] button {{
+            div[class*="st-key-{key}"] {{
+                position: relative;
+            }}
+            div[class*="st-key-{key}"] .filter-card-label {{
+                display: flex;
+                align-items: center;
                 min-height: 58px !important;
-                width: 100% !important;
-                justify-content: flex-start !important;
-                padding: 0.7rem 0.85rem !important;
+                padding: 0.7rem 3.1rem 0.7rem 0.85rem;
                 border: 1px solid {border} !important;
                 border-left: 4px solid {accent} !important;
                 border-radius: 11px !important;
@@ -81,16 +85,34 @@ def _inject_styles(force=False):
                 box-shadow: 0 2px 7px rgba(15, 23, 42, 0.045) !important;
                 transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease !important;
             }}
-            div[class*="st-key-{key}"] button:hover {{
+            div[class*="st-key-{key}"]:has(button:hover) .filter-card-label {{
                 border-color: {accent} !important;
                 color: {accent} !important;
-                transform: translateY(-1px);
                 box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08) !important;
             }}
-            div[class*="st-key-{key}"] button p {{
-                color: inherit !important;
-                white-space: normal !important;
-                text-align: left !important;
+            div[class*="st-key-{key}"] [data-testid="stButton"] {{
+                width: 2rem !important;
+            }}
+            div[class*="st-key-{key}"] [data-testid="stButton"] button {{
+                display: grid !important;
+                place-items: center !important;
+                min-height: 2rem !important;
+                width: 2rem !important;
+                height: 2rem !important;
+                padding: 0 !important;
+                border: 1px solid {border} !important;
+                border-radius: 9px !important;
+                background: #ffffff !important;
+                color: {accent} !important;
+                font-size: 1.15rem !important;
+                font-weight: 900 !important;
+                line-height: 1 !important;
+                box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08) !important;
+            }}
+            div[class*="st-key-{key}"] [data-testid="stButton"] button:hover {{
+                border-color: {accent} !important;
+                background: {background} !important;
+                transform: scale(1.04);
             }}
             """
         )
@@ -198,13 +220,63 @@ def _inject_styles(force=False):
          * Streamlit wraps buttons in tooltip elements whose intrinsic width
          * otherwise shrinks the colored surface to the label text.
          */
-        div[class*="st-key-filter_card_"] .stButton,
-        div[class*="st-key-filter_card_"] [data-testid="stTooltipIcon"],
-        div[class*="st-key-filter_card_"] [data-testid="stTooltipHoverTarget"],
         div[class*="st-key-favorite_filter_card_"] .stButton,
         div[class*="st-key-favorite_filter_card_"] [data-testid="stTooltipIcon"],
         div[class*="st-key-favorite_filter_card_"] [data-testid="stTooltipHoverTarget"] {
             width: 100% !important;
+        }
+
+        div[class*="st-key-current_filter_card_"] {
+            position: relative;
+        }
+
+        div[class*="st-key-filter_add_action_"] {
+            position: absolute !important;
+            top: 50%;
+            right: 0.6rem;
+            z-index: 6;
+            width: 2rem !important;
+            transform: translateY(-50%);
+        }
+
+        div[class*="st-key-current_filter_card_"] [data-testid="stExpander"] summary {
+            padding-right: 4.25rem !important;
+        }
+
+        div[class*="st-key-current_filter_remove_"] {
+            position: absolute !important;
+            top: 0.55rem;
+            right: 2.35rem;
+            z-index: 6;
+            width: 1.9rem !important;
+        }
+
+        div[class*="st-key-current_filter_remove_"] [data-testid="stButton"],
+        div[class*="st-key-current_filter_remove_"] [data-testid="stTooltipIcon"],
+        div[class*="st-key-current_filter_remove_"] [data-testid="stTooltipHoverTarget"] {
+            width: 1.9rem !important;
+        }
+
+        div[class*="st-key-current_filter_remove_"] button {
+            display: grid !important;
+            place-items: center !important;
+            min-height: 1.9rem !important;
+            width: 1.9rem !important;
+            height: 1.9rem !important;
+            padding: 0 !important;
+            border: 1px solid #fecaca !important;
+            border-radius: 9px !important;
+            background: #fff7f7 !important;
+            color: #dc2626 !important;
+            font-size: 1.15rem !important;
+            font-weight: 900 !important;
+            line-height: 1 !important;
+            box-shadow: 0 2px 6px rgba(127, 29, 29, 0.08) !important;
+        }
+
+        div[class*="st-key-current_filter_remove_"] button:hover {
+            border-color: #ef4444 !important;
+            background: #fee2e2 !important;
         }
 
         /* Keep filter rows in a two-column grid. */
@@ -256,7 +328,6 @@ def _inject_styles(force=False):
                 gap: 0.45rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button,
             div[class*="st-key-favorite_filter_card_"] button {
                 min-height: 54px !important;
                 padding: 0.58rem 0.52rem !important;
@@ -265,10 +336,28 @@ def _inject_styles(force=False):
                 font-size: 0.78rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button p,
             div[class*="st-key-favorite_filter_card_"] button p {
                 font-size: 0.78rem !important;
                 line-height: 1.18 !important;
+            }
+
+            div[class*="st-key-filter_card_"] .filter-card-label {
+                min-height: 58px !important;
+                padding: 0.56rem 2.55rem 0.56rem 0.58rem;
+                font-size: 0.72rem;
+                line-height: 1.14;
+                overflow-wrap: anywhere;
+            }
+
+            div[class*="st-key-filter_add_action_"] {
+                right: 0.4rem;
+                width: 1.8rem !important;
+            }
+
+            div[class*="st-key-filter_card_"] [data-testid="stButton"] button {
+                min-height: 1.8rem !important;
+                width: 1.8rem !important;
+                height: 1.8rem !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
@@ -412,12 +501,16 @@ class StreamlitFilterProxy:
             for column_index, option in enumerate(row_options):
                 display_label = str(format_func(option))
                 with columns[column_index]:
-                    clicked = _st.button(
-                        f"＋  {display_label}",
-                        key=_card_key(display_label),
-                        use_container_width=True,
-                        help=f"Add {display_label} to the current filter set.",
-                    )
+                    with _st.container(key=_card_key(display_label)):
+                        _st.markdown(
+                            f'<div class="filter-card-label">{html.escape(display_label)}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        clicked = _st.button(
+                            "＋",
+                            key=f"filter_add_action_{row_start + column_index}_{_slug(display_label)}",
+                            help=f"Add {display_label} to the current filter set.",
+                        )
                 if clicked:
                     selected = option
                     _st.session_state["_filter_card_selected"] = option

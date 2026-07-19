@@ -2645,20 +2645,26 @@ with tab2:
         expander_label = f"{index}. {filter_label}"
 
         with filter_grid_columns[(index - 1) % 2]:
+            current_filter_card = st.container(
+                key=f"current_filter_card_{filter_id}_v{widget_key_version}"
+            )
+
+        with current_filter_card:
             filter_expander = st.expander(expander_label, expanded=False)
+            remove_filter = st.button(
+                "−",
+                key=f"current_filter_remove_{filter_id}_v{widget_key_version}",
+                help=f"Remove {filter_label} from the current filter set.",
+            )
+
+        if remove_filter:
+            mark_current_filter_custom()
+            st.session_state["current_filter_set"] = [
+                item for item in current_filter_set if item["id"] != filter_id
+            ]
+            st.rerun()
 
         with filter_expander:
-            remove_filter = st.button(
-                "❌ Remove Filter",
-                key=f"{filter_widget_prefix}_remove_filter_{filter_id}_v{widget_key_version}",
-            )
-            if remove_filter:
-                mark_current_filter_custom()
-                st.session_state["current_filter_set"] = [
-                    item for item in current_filter_set if item["id"] != filter_id
-                ]
-                st.rerun()
-
             if filter_type == "ma_rising":
                 params["ma"] = int(st.number_input(
                     "MA",
