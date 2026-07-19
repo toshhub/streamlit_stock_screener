@@ -33,6 +33,7 @@ _ORIGINAL_BUTTON = st.button
 _ORIGINAL_EXPANDER = st.expander
 _ORIGINAL_MARKDOWN = st.markdown
 _ORIGINAL_CONTAINER = st.container
+_STYLES_INJECTED = False
 
 
 def _slug(value):
@@ -40,6 +41,10 @@ def _slug(value):
 
 
 def _inject_filter_styles():
+    global _STYLES_INJECTED
+    if _STYLES_INJECTED:
+        return
+
     card_rules = []
     expander_rules = []
     for label, tone in _FILTER_LABEL_TONES.items():
@@ -107,6 +112,7 @@ def _inject_filter_styles():
         + "</style>",
         unsafe_allow_html=True,
     )
+    _STYLES_INJECTED = True
 
 
 def _keyed_container(key):
@@ -117,6 +123,7 @@ def _keyed_container(key):
 
 
 def _filter_card_selectbox(label, options, *args, **kwargs):
+    _inject_filter_styles()
     options = list(options)
     if not options:
         return None
@@ -183,13 +190,13 @@ def _patched_expander(label, *args, **kwargs):
     tone = _FILTER_LABEL_TONES.get(match.group(1))
     if tone is None:
         return delegate
+    _inject_filter_styles()
     return _ColoredExpander(delegate, tone)
 
 
 def install_filter_card_ui():
     if getattr(st, "_colored_filter_cards_installed", False):
         return
-    _inject_filter_styles()
     st.selectbox = _patched_selectbox
     st.button = _patched_button
     st.expander = _patched_expander
