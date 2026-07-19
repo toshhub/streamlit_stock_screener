@@ -240,15 +240,26 @@ def _inject_styles(force=False):
         }
 
         div[class*="st-key-current_filter_card_"] [data-testid="stExpander"] summary {
-            padding-right: 4.25rem !important;
+            min-height: 3.65rem !important;
+            padding-right: 3.15rem !important;
+        }
+
+        div[class*="st-key-current_filter_card_"] [data-testid="stExpander"] summary p {
+            box-sizing: border-box;
+            width: 100%;
+            max-width: 100%;
+            padding-right: 0.2rem;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
         }
 
         div[class*="st-key-current_filter_remove_"] {
             position: absolute !important;
-            top: 0.55rem;
-            right: 2.35rem;
+            top: 50%;
+            right: 0.55rem;
             z-index: 6;
             width: 1.9rem !important;
+            transform: translateY(-50%);
         }
 
         div[class*="st-key-current_filter_remove_"] [data-testid="stButton"],
@@ -362,15 +373,19 @@ def _inject_styles(force=False):
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
                 > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] summary {
-                min-height: 3rem !important;
+                min-height: 4.1rem !important;
                 padding-left: 0.45rem !important;
-                padding-right: 0.45rem !important;
+                padding-right: 3rem !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
                 > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] summary p {
-                font-size: 0.76rem !important;
+                font-size: 0.72rem !important;
                 line-height: 1.15 !important;
+            }
+
+            div[class*="st-key-current_filter_remove_"] {
+                right: 0.42rem;
             }
 
             .data-panel-heading {
