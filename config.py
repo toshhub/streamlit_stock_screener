@@ -1,5 +1,7 @@
-
 from pathlib import Path
+
+from filter_ui import install_filter_card_ui
+
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -19,3 +21,5 @@ for d in [
     META_DIR,
 ]:
     d.mkdir(parents=True, exist_ok=True)
+
+install_filter_card_ui()
