@@ -31,20 +31,34 @@ def _inject_mobile_filter_styles():
                 overflow: hidden !important;
             }
 
+            div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"]) {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                gap: 0.4rem !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                overflow: hidden !important;
+            }
+
             div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"])
-                > div[data-testid="column"] {
+                > div:is([data-testid="column"], [data-testid="stColumn"]),
+            div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"])
+                > div:is([data-testid="column"], [data-testid="stColumn"]) {
                 flex: 0 0 calc(50% - 0.2rem) !important;
                 width: calc(50% - 0.2rem) !important;
                 min-width: 0 !important;
                 max-width: calc(50% - 0.2rem) !important;
             }
 
-            div[class*="st-key-filter_card_"] button {
-                min-height: 70px !important;
+            div[class*="st-key-filter_card_"] button,
+            div[class*="st-key-favorite_filter_card_"] button {
+                min-height: 54px !important;
                 padding: 0.5rem 0.35rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button p {
+            div[class*="st-key-filter_card_"] button p,
+            div[class*="st-key-favorite_filter_card_"] button p {
                 font-size: 0.72rem !important;
                 line-height: 1.14 !important;
                 overflow-wrap: anywhere !important;
@@ -52,23 +66,24 @@ def _inject_mobile_filter_styles():
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
                 display: flex !important;
-                flex-direction: column !important;
+                flex-direction: row !important;
                 flex-wrap: nowrap !important;
-                gap: 0.55rem !important;
+                gap: 0.4rem !important;
                 width: 100% !important;
                 max-width: 100% !important;
+                overflow: hidden !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div[data-testid="column"] {
-                flex: 0 0 100% !important;
-                width: 100% !important;
+                > div:is([data-testid="column"], [data-testid="stColumn"]) {
+                flex: 0 0 calc(50% - 0.2rem) !important;
+                width: calc(50% - 0.2rem) !important;
                 min-width: 0 !important;
-                max-width: 100% !important;
+                max-width: calc(50% - 0.2rem) !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div[data-testid="column"] [data-testid="stExpander"] {
+                > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] {
                 width: 100% !important;
                 max-width: 100% !important;
                 margin: 0 !important;

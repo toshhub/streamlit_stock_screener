@@ -39,6 +39,11 @@ def _card_key(label):
     return f"filter_card_{_slug(label)}"
 
 
+def _favorite_card_key(label, tone, selected, index):
+    state = "selected" if selected else "idle"
+    return f"favorite_filter_card_tone_{tone}_{state}_{index}_{_slug(label)}"
+
+
 def _is_screener_top_layout(spec):
     if not isinstance(spec, (list, tuple)) or len(spec) != 2:
         return False
@@ -48,9 +53,9 @@ def _is_screener_top_layout(spec):
         return False
 
 
-def _inject_styles():
+def _inject_styles(force=False):
     global _STYLES_INJECTED
-    if _STYLES_INJECTED:
+    if _STYLES_INJECTED and not force:
         return
 
     card_rules = []
@@ -61,24 +66,26 @@ def _inject_styles():
         card_rules.append(
             f"""
             div[class*="st-key-{key}"] button {{
-                min-height: 76px !important;
+                min-height: 58px !important;
                 width: 100% !important;
                 justify-content: flex-start !important;
-                padding: 0.8rem 0.9rem !important;
+                padding: 0.7rem 0.85rem !important;
                 border: 1px solid {border} !important;
-                border-left: 6px solid {accent} !important;
-                border-radius: 14px !important;
-                background: {background} !important;
+                border-left: 4px solid {accent} !important;
+                border-radius: 11px !important;
+                background: linear-gradient(135deg, {background}, #ffffff 88%) !important;
                 color: #172033 !important;
-                font-weight: 750 !important;
-                line-height: 1.25 !important;
+                font-weight: 700 !important;
+                line-height: 1.2 !important;
                 text-align: left !important;
-                box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05) !important;
+                box-shadow: 0 2px 7px rgba(15, 23, 42, 0.045) !important;
+                transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease !important;
             }}
             div[class*="st-key-{key}"] button:hover {{
                 border-color: {accent} !important;
                 color: {accent} !important;
                 transform: translateY(-1px);
+                box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08) !important;
             }}
             div[class*="st-key-{key}"] button p {{
                 color: inherit !important;
@@ -103,13 +110,106 @@ def _inject_styles():
             """
         )
 
+    favorite_card_rules = []
+    for tone, (accent, background, border) in enumerate(_FILTER_COLORS):
+        favorite_card_rules.append(
+            f"""
+            div[class*="st-key-favorite_filter_card_tone_{tone}_"] button {{
+                min-height: 54px !important;
+                width: 100% !important;
+                justify-content: flex-start !important;
+                padding: 0.65rem 0.8rem !important;
+                border: 1px solid {border} !important;
+                border-left: 4px solid {accent} !important;
+                border-radius: 11px !important;
+                background: linear-gradient(135deg, {background}, #ffffff 90%) !important;
+                color: #172033 !important;
+                font-weight: 700 !important;
+                line-height: 1.15 !important;
+                text-align: left !important;
+                box-shadow: 0 2px 7px rgba(15, 23, 42, 0.045) !important;
+                transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease !important;
+            }}
+            div[class*="st-key-favorite_filter_card_tone_{tone}_"] button:hover {{
+                border-color: {accent} !important;
+                color: {accent} !important;
+                transform: translateY(-1px);
+                box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08) !important;
+            }}
+            div[class*="st-key-favorite_filter_card_tone_{tone}_"] button p {{
+                color: inherit !important;
+                white-space: normal !important;
+                text-align: left !important;
+                overflow-wrap: anywhere !important;
+            }}
+            div[class*="st-key-favorite_filter_card_tone_{tone}_selected_"] button {{
+                border-color: {accent} !important;
+                background: {background} !important;
+                color: {accent} !important;
+                box-shadow: 0 0 0 2px {border}, 0 5px 13px rgba(15, 23, 42, 0.08) !important;
+            }}
+            """
+        )
+
     _st.markdown(
         """
         <style>
         .filter-tone-marker { display: none !important; }
 
+        .quick-run-section-label {
+            margin: 0.85rem 0 0.42rem;
+            color: #263b50;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.065em;
+            text-transform: uppercase;
+        }
+
+        .quick-run-section-label span {
+            margin-left: 0.35rem;
+            color: #7b8b9b;
+            font-size: 0.74rem;
+            font-weight: 500;
+            letter-spacing: 0;
+            text-transform: none;
+        }
+
+        div[class*="st-key-quick_run_options"] {
+            padding: 0.7rem 0.8rem 0.35rem;
+            border: 1px solid #e1e9ef;
+            border-radius: 12px;
+            background: #f8fafc;
+        }
+
+        div[class*="st-key-quick_run_action"] {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #e5ebf0;
+        }
+
+        div[class*="st-key-quick_run_action"] button {
+            min-height: 48px !important;
+            border-radius: 11px !important;
+            font-weight: 800 !important;
+            box-shadow: 0 6px 16px rgba(31, 102, 125, 0.18) !important;
+        }
+
+        /*
+         * Streamlit wraps buttons in tooltip elements whose intrinsic width
+         * otherwise shrinks the colored surface to the label text.
+         */
+        div[class*="st-key-filter_card_"] .stButton,
+        div[class*="st-key-filter_card_"] [data-testid="stTooltipIcon"],
+        div[class*="st-key-filter_card_"] [data-testid="stTooltipHoverTarget"],
+        div[class*="st-key-favorite_filter_card_"] .stButton,
+        div[class*="st-key-favorite_filter_card_"] [data-testid="stTooltipIcon"],
+        div[class*="st-key-favorite_filter_card_"] [data-testid="stTooltipHoverTarget"] {
+            width: 100% !important;
+        }
+
         /* Keep filter rows in a two-column grid. */
         div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"]),
+        div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"]),
         div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
             display: flex !important;
             flex-direction: row !important;
@@ -120,9 +220,11 @@ def _inject_styles():
         }
 
         div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"])
-            > div[data-testid="column"],
+            > div:is([data-testid="column"], [data-testid="stColumn"]),
+        div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"])
+            > div:is([data-testid="column"], [data-testid="stColumn"]),
         div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-            > div[data-testid="column"] {
+            > div:is([data-testid="column"], [data-testid="stColumn"]) {
             flex: 1 1 0 !important;
             width: 0 !important;
             min-width: 0 !important;
@@ -130,9 +232,11 @@ def _inject_styles():
         }
 
         div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"])
-            > div[data-testid="column"] .stButton,
+            > div:is([data-testid="column"], [data-testid="stColumn"]) .stButton,
+        div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"])
+            > div:is([data-testid="column"], [data-testid="stColumn"]) .stButton,
         div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-            > div[data-testid="column"] [data-testid="stExpander"] {
+            > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] {
             width: 100% !important;
         }
 
@@ -147,32 +251,35 @@ def _inject_styles():
             }
 
             div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"]),
+            div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"]),
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
                 gap: 0.45rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button {
-                min-height: 66px !important;
-                padding: 0.6rem 0.55rem !important;
+            div[class*="st-key-filter_card_"] button,
+            div[class*="st-key-favorite_filter_card_"] button {
+                min-height: 54px !important;
+                padding: 0.58rem 0.52rem !important;
                 border-left-width: 4px !important;
-                border-radius: 11px !important;
+                border-radius: 10px !important;
                 font-size: 0.78rem !important;
             }
 
-            div[class*="st-key-filter_card_"] button p {
+            div[class*="st-key-filter_card_"] button p,
+            div[class*="st-key-favorite_filter_card_"] button p {
                 font-size: 0.78rem !important;
                 line-height: 1.18 !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div[data-testid="column"] [data-testid="stExpander"] summary {
+                > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] summary {
                 min-height: 3rem !important;
                 padding-left: 0.45rem !important;
                 padding-right: 0.45rem !important;
             }
 
             div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div[data-testid="column"] [data-testid="stExpander"] summary p {
+                > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] summary p {
                 font-size: 0.76rem !important;
                 line-height: 1.15 !important;
             }
@@ -185,9 +292,15 @@ def _inject_styles():
                 font-size: 0.82rem !important;
                 line-height: 1.35 !important;
             }
+
+            .quick-run-section-label span {
+                display: block;
+                margin: 0.12rem 0 0;
+            }
         }
         """
         + "".join(card_rules)
+        + "".join(favorite_card_rules)
         + "".join(expander_rules)
         + "</style>",
         unsafe_allow_html=True,
@@ -218,13 +331,68 @@ class StreamlitFilterProxy:
 
     def columns(self, spec, *args, **kwargs):
         if _is_screener_top_layout(spec):
-            _inject_styles()
+            # Streamlit removes prior markdown elements on a rerun while module
+            # globals remain alive, so emit the stylesheet once on every run.
+            _inject_styles(force=True)
             # Return two full-width containers. app.py renders Quick Run into the
             # first and Add a Filter into the second, placing them vertically.
             return _st.container(), _st.container()
         return _st.columns(spec, *args, **kwargs)
 
     def selectbox(self, label, options, *args, **kwargs):
+        if "Filter Set To Run" in str(label):
+            _inject_styles()
+            options = list(options)
+            if not options:
+                return None
+
+            widget_key = kwargs.get("key", "_favorite_filter_card_selected")
+            selected = _st.session_state.get(widget_key)
+            if selected not in options:
+                # A custom working set intentionally has no favorite selected.
+                selected = None
+
+            callback = kwargs.get("on_change")
+            callback_args = kwargs.get("args") or ()
+            callback_kwargs = kwargs.get("kwargs") or {}
+
+            def select_favorite(option):
+                # Button callbacks run before Streamlit renders the page again,
+                # so the newly selected card and loaded filters appear on the
+                # first click instead of one rerun later.
+                _st.session_state[widget_key] = option
+                if callback:
+                    callback(*callback_args, **callback_kwargs)
+
+            for row_start in range(0, len(options), 2):
+                row_options = options[row_start:row_start + 2]
+                columns = _st.columns(2, gap="small")
+                for column_index, option in enumerate(row_options):
+                    tone = (row_start + column_index) % len(_FILTER_COLORS)
+                    is_selected = option == selected
+                    prefix = "✓  " if is_selected else "☆  "
+                    button_kwargs = {}
+                    if not is_selected:
+                        button_kwargs = {
+                            "on_click": select_favorite,
+                            "args": (option,),
+                        }
+                    with columns[column_index]:
+                        _st.button(
+                            f"{prefix}{option}",
+                            key=_favorite_card_key(
+                                option,
+                                tone,
+                                is_selected,
+                                row_start + column_index,
+                            ),
+                            use_container_width=True,
+                            help=f"Load and run the {option} filter set.",
+                            **button_kwargs,
+                        )
+
+            return selected
+
         if label != "Filter Category":
             return _st.selectbox(label, options, *args, **kwargs)
 
