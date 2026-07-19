@@ -1,7 +1,6 @@
 from pathlib import Path
 
-from filter_ui import install_filter_card_ui
-from force_filter_grid import install_force_filter_grid
+from streamlit_filter_proxy import st
 
 
 BASE_DIR = Path(__file__).parent
@@ -22,6 +21,3 @@ for d in [
     META_DIR,
 ]:
     d.mkdir(parents=True, exist_ok=True)
-
-install_filter_card_ui()
-install_force_filter_grid()
