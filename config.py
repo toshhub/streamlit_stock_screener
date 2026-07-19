@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from streamlit_filter_proxy import st
+from mobile_filter_proxy import st
 
 
 BASE_DIR = Path(__file__).parent
