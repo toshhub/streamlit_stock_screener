@@ -39,6 +39,15 @@ def _card_key(label):
     return f"filter_card_{_slug(label)}"
 
 
+def _is_screener_top_layout(spec):
+    if not isinstance(spec, (list, tuple)) or len(spec) != 2:
+        return False
+    try:
+        return abs(float(spec[0]) - 1.35) < 0.001 and abs(float(spec[1]) - 1.0) < 0.001
+    except (TypeError, ValueError):
+        return False
+
+
 def _inject_styles():
     global _STYLES_INJECTED
     if _STYLES_INJECTED:
@@ -99,7 +108,7 @@ def _inject_styles():
         <style>
         .filter-tone-marker { display: none !important; }
 
-        /* Keep the add-filter and active-filter Streamlit columns side by side. */
+        /* Keep filter rows in a two-column grid. */
         div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"]),
         div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
             display: flex !important;
@@ -125,6 +134,57 @@ def _inject_styles():
         div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
             > div[data-testid="column"] [data-testid="stExpander"] {
             width: 100% !important;
+        }
+
+        @media (max-width: 768px) {
+            .stMainBlockContainer {
+                padding-left: 0.65rem !important;
+                padding-right: 0.65rem !important;
+            }
+
+            div[data-testid="stVerticalBlockBorderWrapper"] {
+                border-radius: 14px !important;
+            }
+
+            div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"]),
+            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
+                gap: 0.45rem !important;
+            }
+
+            div[class*="st-key-filter_card_"] button {
+                min-height: 66px !important;
+                padding: 0.6rem 0.55rem !important;
+                border-left-width: 4px !important;
+                border-radius: 11px !important;
+                font-size: 0.78rem !important;
+            }
+
+            div[class*="st-key-filter_card_"] button p {
+                font-size: 0.78rem !important;
+                line-height: 1.18 !important;
+            }
+
+            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
+                > div[data-testid="column"] [data-testid="stExpander"] summary {
+                min-height: 3rem !important;
+                padding-left: 0.45rem !important;
+                padding-right: 0.45rem !important;
+            }
+
+            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
+                > div[data-testid="column"] [data-testid="stExpander"] summary p {
+                font-size: 0.76rem !important;
+                line-height: 1.15 !important;
+            }
+
+            .data-panel-heading {
+                font-size: 1rem !important;
+            }
+
+            .data-panel-subtitle {
+                font-size: 0.82rem !important;
+                line-height: 1.35 !important;
+            }
         }
         """
         + "".join(card_rules)
@@ -156,6 +216,14 @@ class StreamlitFilterProxy:
     def __getattr__(self, name):
         return getattr(_st, name)
 
+    def columns(self, spec, *args, **kwargs):
+        if _is_screener_top_layout(spec):
+            _inject_styles()
+            # Return two full-width containers. app.py renders Quick Run into the
+            # first and Add a Filter into the second, placing them vertically.
+            return _st.container(), _st.container()
+        return _st.columns(spec, *args, **kwargs)
+
     def selectbox(self, label, options, *args, **kwargs):
         if label != "Filter Category":
             return _st.selectbox(label, options, *args, **kwargs)
@@ -170,8 +238,6 @@ class StreamlitFilterProxy:
         if selected not in options:
             selected = options[0]
 
-        # Create one Streamlit row per pair. This gives true row-major ordering:
-        # 1,2 on row one; 3,4 on row two; and so on.
         for row_start in range(0, len(options), 2):
             row_options = options[row_start:row_start + 2]
             columns = _st.columns(2, gap="small")
