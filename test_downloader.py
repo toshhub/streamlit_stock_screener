@@ -6,10 +6,37 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from downloader import MARKET_INDIA, download_symbol
+from downloader import MARKET_INDIA, _date_after_latest, _sample_download_start, download_symbol
 
 
 class IncrementalDownloaderTests(unittest.TestCase):
+    def test_daily_start_skips_weekend_dates(self):
+        self.assertEqual(
+            _date_after_latest(pd.Timestamp("2026-07-17"), "1d"),
+            pd.Timestamp("2026-07-20"),
+        )
+
+    def test_five_company_sample_selects_one_conservative_start_date(self):
+        sample_dates = [
+            "2026-07-17",
+            "2026-07-17",
+            "2026-07-16",
+            "2026-07-17",
+            "2026-07-17",
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_dir = Path(temp_dir)
+            symbols = [f"TEST{index}" for index in range(5)]
+            for symbol, latest_date in zip(symbols, sample_dates):
+                (target_dir / f"{symbol}.json").write_text(
+                    json.dumps([{"Date": latest_date, "Close": 100.0}])
+                )
+
+            start = _sample_download_start(symbols, target_dir, "1d")
+
+        self.assertEqual(start, pd.Timestamp("2026-07-17"))
+
     def test_download_starts_after_latest_saved_date_and_appends_new_candle(self):
         existing_records = [
             {
