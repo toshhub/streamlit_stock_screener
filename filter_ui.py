@@ -32,12 +32,19 @@ _ORIGINAL_SELECTBOX = st.selectbox
 _ORIGINAL_BUTTON = st.button
 _ORIGINAL_EXPANDER = st.expander
 _ORIGINAL_MARKDOWN = st.markdown
-_ORIGINAL_CONTAINER = st.container
 _STYLES_INJECTED = False
 
 
 def _slug(value):
     return re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
+
+
+def _card_widget_key(label):
+    return f"_filter_card_add_{_slug(label)}"
+
+
+def _expander_widget_key(label):
+    return f"colored_filter_expander_{_slug(label)}"
 
 
 def _inject_filter_styles():
@@ -49,47 +56,52 @@ def _inject_filter_styles():
     expander_rules = []
     for label, tone in _FILTER_LABEL_TONES.items():
         accent, background, border = _FILTER_COLORS[tone]
-        card_key = f"filter_card_{_slug(label)}"
+        card_key = _card_widget_key(label)
+        expander_prefix = f"colored_filter_expander_"
         card_rules.append(
             f"""
             .st-key-{card_key} button {{
-                min-height: 74px;
+                min-height: 78px;
+                width: 100%;
                 justify-content: flex-start;
-                padding: 0.8rem 0.9rem;
-                border: 1px solid {border};
-                border-left: 5px solid {accent};
-                border-radius: 14px;
-                background: {background};
-                color: #172033;
-                font-weight: 750;
+                padding: 0.85rem 0.95rem;
+                border: 1px solid {border} !important;
+                border-left: 6px solid {accent} !important;
+                border-radius: 14px !important;
+                background: {background} !important;
+                color: #172033 !important;
+                font-weight: 750 !important;
                 line-height: 1.25;
                 text-align: left;
                 box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
             }}
             .st-key-{card_key} button:hover {{
-                border-color: {accent};
-                background: {background};
-                color: {accent};
+                border-color: {accent} !important;
+                background: {background} !important;
+                color: {accent} !important;
                 transform: translateY(-1px);
             }}
             .st-key-{card_key} button p {{
                 color: inherit !important;
-                white-space: normal;
+                white-space: normal !important;
+                text-align: left !important;
             }}
             """
         )
         expander_rules.append(
             f"""
+            div[class*="st-key-{expander_prefix}"][data-testid="stExpander"]:has(.filter-tone-{tone}),
+            div[class*="st-key-{expander_prefix}"]:has(> div[data-testid="stExpander"] .filter-tone-{tone}) > div[data-testid="stExpander"],
             div[data-testid="stExpander"]:has(.filter-tone-{tone}) {{
-                border: 1px solid {border};
-                border-left: 6px solid {accent};
-                border-radius: 14px;
-                background: linear-gradient(90deg, {background} 0%, #ffffff 34%);
+                border: 1px solid {border} !important;
+                border-left: 6px solid {accent} !important;
+                border-radius: 14px !important;
+                background: linear-gradient(90deg, {background} 0%, #ffffff 38%) !important;
                 box-shadow: 0 5px 16px rgba(15, 23, 42, 0.05);
             }}
             div[data-testid="stExpander"]:has(.filter-tone-{tone}) summary p {{
                 color: {accent} !important;
-                font-weight: 800;
+                font-weight: 800 !important;
             }}
             """
         )
@@ -97,14 +109,31 @@ def _inject_filter_styles():
     _ORIGINAL_MARKDOWN(
         """
         <style>
-        .st-key-filter_card_grid [data-testid="stHorizontalBlock"] {
-            row-gap: 0.55rem;
+        .filter-card-grid [data-testid="stHorizontalBlock"],
+        .current-filter-grid [data-testid="stHorizontalBlock"] {
+            gap: 0.75rem !important;
+            align-items: stretch;
         }
-        .st-key-filter_card_grid .stButton {
-            margin-bottom: 0.25rem;
+        .filter-card-grid [data-testid="column"],
+        .current-filter-grid [data-testid="column"] {
+            min-width: 0;
+        }
+        .filter-card-grid .stButton {
+            margin-bottom: 0.15rem;
         }
         .filter-tone-marker {
             display: none;
+        }
+        @media (max-width: 640px) {
+            .filter-card-grid [data-testid="stHorizontalBlock"],
+            .current-filter-grid [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap;
+            }
+            .filter-card-grid [data-testid="column"],
+            .current-filter-grid [data-testid="column"] {
+                flex: 1 1 calc(50% - 0.75rem) !important;
+                width: calc(50% - 0.75rem) !important;
+            }
         }
         """
         + "".join(card_rules)
@@ -113,13 +142,6 @@ def _inject_filter_styles():
         unsafe_allow_html=True,
     )
     _STYLES_INJECTED = True
-
-
-def _keyed_container(key):
-    try:
-        return _ORIGINAL_CONTAINER(key=key)
-    except TypeError:
-        return _ORIGINAL_CONTAINER()
 
 
 def _filter_card_selectbox(label, options, *args, **kwargs):
@@ -133,22 +155,22 @@ def _filter_card_selectbox(label, options, *args, **kwargs):
     if selected not in options:
         selected = options[0]
 
-    with _keyed_container("filter_card_grid"):
-        columns = st.columns(2)
-        for index, option in enumerate(options):
-            display_label = str(format_func(option))
-            with columns[index % 2]:
-                with _keyed_container(f"filter_card_{_slug(display_label)}"):
-                    clicked = _ORIGINAL_BUTTON(
-                        f"＋  {display_label}",
-                        key=f"_filter_card_add_{_slug(option)}",
-                        use_container_width=True,
-                        help=f"Add {display_label} to the current filter set.",
-                    )
-            if clicked:
-                selected = option
-                st.session_state["_filter_card_selected"] = option
-                st.session_state["_filter_card_add_clicked"] = True
+    _ORIGINAL_MARKDOWN('<div class="filter-card-grid">', unsafe_allow_html=True)
+    columns = st.columns(2, gap="small")
+    for index, option in enumerate(options):
+        display_label = str(format_func(option))
+        with columns[index % 2]:
+            clicked = _ORIGINAL_BUTTON(
+                f"＋  {display_label}",
+                key=_card_widget_key(display_label),
+                use_container_width=True,
+                help=f"Add {display_label} to the current filter set.",
+            )
+        if clicked:
+            selected = option
+            st.session_state["_filter_card_selected"] = option
+            st.session_state["_filter_card_add_clicked"] = True
+    _ORIGINAL_MARKDOWN("</div>", unsafe_allow_html=True)
 
     return selected
 
@@ -183,14 +205,21 @@ class _ColoredExpander(AbstractContextManager):
 
 
 def _patched_expander(label, *args, **kwargs):
-    delegate = _ORIGINAL_EXPANDER(label, *args, **kwargs)
     match = re.match(r"^\d+\.\s+(.+)$", str(label))
     if not match:
-        return delegate
+        return _ORIGINAL_EXPANDER(label, *args, **kwargs)
+
     tone = _FILTER_LABEL_TONES.get(match.group(1))
     if tone is None:
-        return delegate
+        return _ORIGINAL_EXPANDER(label, *args, **kwargs)
+
     _inject_filter_styles()
+    keyed_kwargs = dict(kwargs)
+    keyed_kwargs.setdefault("key", _expander_widget_key(label))
+    try:
+        delegate = _ORIGINAL_EXPANDER(label, *args, **keyed_kwargs)
+    except TypeError:
+        delegate = _ORIGINAL_EXPANDER(label, *args, **kwargs)
     return _ColoredExpander(delegate, tone)
 
 
