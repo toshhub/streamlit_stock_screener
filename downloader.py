@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 import time
 from datetime import timedelta
 from threading import Lock
@@ -28,13 +29,15 @@ TIMEFRAME_CONFIG = {
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
 # Increase carefully if your network and yfinance remain stable.
 DEFAULT_MAX_DOWNLOAD_WORKERS = 3
-DEFAULT_DOWNLOAD_DATE_SAMPLE_SIZE = 5
-MIN_DOWNLOAD_DATE_SAMPLE_SIZE = 4
 NIFTY_DATA_SYMBOL = "NIFTY"
 INDEX_YFINANCE_SYMBOLS = {
     NIFTY_DATA_SYMBOL: "^NSEI",
 }
 YFINANCE_DOWNLOAD_LOCK = Lock()
+DOWNLOAD_JOBS_LOCK = Lock()
+DOWNLOAD_JOBS = {}
+LAST_DATE_TAIL_BYTES = 16 * 1024
+DATE_FIELD_PATTERN = re.compile(rb'"Date"\s*:\s*"([^"]+)"')
 
 
 def normalize_market(market):
@@ -89,6 +92,57 @@ def _load_existing_dataframe(out_file):
     return _records_to_dataframe(records)
 
 
+def _last_saved_date(out_file):
+    """Read the latest candle date without loading the entire JSON file."""
+    try:
+        with out_file.open("rb") as file_handle:
+            file_handle.seek(0, 2)
+            file_size = file_handle.tell()
+            file_handle.seek(max(0, file_size - LAST_DATE_TAIL_BYTES))
+            tail = file_handle.read()
+    except OSError:
+        return None
+
+    for raw_date in reversed(DATE_FIELD_PATTERN.findall(tail)):
+        try:
+            parsed_date = pd.Timestamp(raw_date.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, TypeError):
+            continue
+        if not pd.isna(parsed_date):
+            return parsed_date.normalize()
+    return None
+
+
+def data_availability_summary(directory):
+    """Return the latest date and stock-file coverage for that date."""
+    if not directory or not directory.exists():
+        return {"Latest Date": None, "Stocks On Latest Date": 0, "Stock Files": 0}
+
+    stock_files = [
+        path
+        for path in directory.glob("*.json")
+        if path.stem.upper() != NIFTY_DATA_SYMBOL
+    ]
+    latest_dates = [
+        latest_date
+        for path in stock_files
+        if (latest_date := _last_saved_date(path)) is not None
+    ]
+    if not latest_dates:
+        return {
+            "Latest Date": None,
+            "Stocks On Latest Date": 0,
+            "Stock Files": len(stock_files),
+        }
+
+    latest_date = max(latest_dates)
+    return {
+        "Latest Date": latest_date,
+        "Stocks On Latest Date": sum(date == latest_date for date in latest_dates),
+        "Stock Files": len(stock_files),
+    }
+
+
 def _next_download_start(existing_df, interval):
     if existing_df.empty or "Date" not in existing_df.columns:
         return None
@@ -106,34 +160,6 @@ def _date_after_latest(latest, interval):
     if interval == "1wk":
         return latest + pd.DateOffset(weeks=1)
     return latest + pd.offsets.BDay(1)
-
-
-def _sample_download_start(
-    symbols,
-    target_dir,
-    interval,
-    sample_size=DEFAULT_DOWNLOAD_DATE_SAMPLE_SIZE,
-):
-    latest_dates = []
-    for symbol in symbols:
-        existing_df = _load_existing_dataframe(target_dir / f"{symbol}.json")
-        if existing_df.empty or "Date" not in existing_df.columns:
-            continue
-
-        latest = pd.to_datetime(existing_df["Date"], errors="coerce").max()
-        if pd.isna(latest):
-            continue
-
-        latest_dates.append(latest)
-        if len(latest_dates) >= sample_size:
-            break
-
-    if len(latest_dates) < min(MIN_DOWNLOAD_DATE_SAMPLE_SIZE, len(symbols)):
-        return None
-
-    # Use the oldest latest date in the sample. This may download a small
-    # overlap, which the merge removes, but avoids gaps if one sample lags.
-    return _date_after_latest(min(latest_dates), interval)
 
 
 def _prepare_downloaded_dataframe(data):
@@ -180,23 +206,12 @@ def download_symbol(
     max_retries=2,
     incremental=True,
     market=MARKET_INDIA,
-    shared_download_start=None,
 ):
     today = pd.Timestamp.today().normalize()
-    has_existing_data = out_file.exists() and out_file.stat().st_size > 2
-    if (
-        incremental
-        and has_existing_data
-        and shared_download_start is not None
-        and shared_download_start.normalize() > today
-    ):
-        return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
-
     existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
-    if incremental and not existing_df.empty and shared_download_start is not None:
-        download_start = shared_download_start
-    else:
-        download_start = _next_download_start(existing_df, interval) if incremental else None
+    # Each symbol can have a different last saved candle. Start immediately
+    # after this file's own latest date so no already-stored history is fetched.
+    download_start = _next_download_start(existing_df, interval) if incremental else None
     if incremental and download_start is not None and download_start.normalize() > today:
         return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
 
@@ -344,7 +359,6 @@ def _download_symbol_row(
     config,
     incremental=True,
     market=MARKET_INDIA,
-    shared_download_start=None,
 ):
     out_file = config["target_dir"] / f"{symbol}.json"
     try:
@@ -355,7 +369,6 @@ def _download_symbol_row(
             out_file,
             incremental=incremental,
             market=market,
-            shared_download_start=shared_download_start,
         )
         return {"Symbol": symbol, **result, "Error": ""}
     except Exception as exc:
@@ -405,13 +418,6 @@ def download_top_stocks(
 
     rows = []
     downloaded_count = 0
-    shared_download_start = None
-    if incremental:
-        shared_download_start = _sample_download_start(
-            symbols,
-            target_dir,
-            config["interval"],
-        )
 
     for completed_count, symbol in enumerate(symbols, start=1):
         row = _download_symbol_row(
@@ -419,7 +425,6 @@ def download_top_stocks(
             config,
             incremental=incremental,
             market=market,
-            shared_download_start=shared_download_start,
         )
         rows.append(row)
         if row["Downloaded"]:
@@ -429,3 +434,101 @@ def download_top_stocks(
             progress_callback(completed_count, total, downloaded_count, symbol)
 
     return rows
+
+
+def _run_background_download(job, symbols_file, timeframe, limit, incremental, market):
+    def update_progress(done, total, downloaded_count, symbol):
+        with DOWNLOAD_JOBS_LOCK:
+            job.update({
+                "done": done,
+                "total": total,
+                "downloaded_count": downloaded_count,
+                "symbol": symbol,
+                "status": "Downloading",
+            })
+
+    try:
+        if not incremental:
+            deleted_count = clear_downloaded_json_files(timeframe, market=market)
+            with DOWNLOAD_JOBS_LOCK:
+                job["deleted_count"] = deleted_count
+                job["status"] = "Cleared old data"
+
+        download_rows = download_top_stocks(
+            symbols_file,
+            timeframe,
+            limit=limit,
+            progress_callback=update_progress,
+            incremental=incremental,
+            market=market,
+        )
+        nifty_row = download_nifty_index(
+            timeframe,
+            incremental=incremental,
+            market=market,
+        )
+        downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
+        rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
+        failed = [row for row in download_rows if not row["Downloaded"]]
+        with DOWNLOAD_JOBS_LOCK:
+            job.update({
+                "running": False,
+                "status": "Completed",
+                "done": len(download_rows),
+                "total": len(download_rows),
+                "downloaded_count": downloaded_count,
+                "rows_added": rows_added,
+                "failed": failed,
+                "nifty_row": nifty_row,
+                "completed_at": time.strftime("%d-%m-%Y %H:%M:%S"),
+            })
+    except Exception as exc:
+        with DOWNLOAD_JOBS_LOCK:
+            job.update({
+                "running": False,
+                "status": "Failed",
+                "error": str(exc),
+                "completed_at": time.strftime("%d-%m-%Y %H:%M:%S"),
+            })
+
+
+def start_background_download(symbols_file, timeframe, limit, incremental=True, market=MARKET_INDIA):
+    """Start one server-side download that survives a disconnected browser session."""
+    market = normalize_market(market)
+    with DOWNLOAD_JOBS_LOCK:
+        running_job = next((job for job in DOWNLOAD_JOBS.values() if job.get("running")), None)
+        if running_job:
+            return dict(running_job), False
+
+        job = {
+            "id": f"{market}-{time.time_ns()}",
+            "market": market,
+            "running": True,
+            "status": "Starting",
+            "done": 0,
+            "total": int(limit),
+            "downloaded_count": 0,
+            "symbol": "",
+            "rows_added": 0,
+            "failed": [],
+            "error": "",
+            "started_at": time.strftime("%d-%m-%Y %H:%M:%S"),
+        }
+        DOWNLOAD_JOBS[market] = job
+
+    thread = threading.Thread(
+        target=_run_background_download,
+        args=(job, symbols_file, timeframe, int(limit), incremental, market),
+        daemon=True,
+        name=f"stock-download-{market.lower()}",
+    )
+    thread.start()
+    with DOWNLOAD_JOBS_LOCK:
+        return dict(job), True
+
+
+def background_download_snapshot(market=MARKET_INDIA):
+    market = normalize_market(market)
+    with DOWNLOAD_JOBS_LOCK:
+        job = DOWNLOAD_JOBS.get(market)
+        return dict(job) if job else None

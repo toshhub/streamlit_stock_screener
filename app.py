@@ -27,12 +27,15 @@ from downloader import (
     MARKET_INDIA,
     MARKET_US,
     NIFTY_DATA_SYMBOL,
+    background_download_snapshot,
     clear_downloaded_json_files,
+    data_availability_summary,
     download_nifty_index,
     download_top_stocks,
     load_top_symbols,
     market_label,
     normalize_market,
+    start_background_download,
     timeframe_config,
 )
 from fundamentals import (
@@ -96,13 +99,13 @@ def symbols_file_for_market(market):
 
 
 def download_limit_for_market(market, symbols_file):
+    """Return the complete source-file universe for scheduled downloads."""
     market = normalize_market(market)
-    if market == MARKET_US:
-        if not symbols_file.exists():
-            return int(settings.get("download_limit_us", 1000))
-        default_limit = len(load_top_symbols(symbols_file, limit=1_000_000, market=market))
-        return int(settings.get("download_limit_us", default_limit))
-    return int(settings.get("download_limit", 1000))
+    if not symbols_file.exists():
+        return 0
+    # Cron must not inherit the smaller interactive slider value. Use every
+    # unique valid symbol present in the selected market's source file.
+    return len(load_top_symbols(symbols_file, limit=1_000_000, market=market))
 
 
 def run_scheduled_download():
@@ -157,6 +160,7 @@ def run_scheduled_download():
             "Market": market_label(market),
             "Status": "Completed",
             "Processed": f"{downloaded_count}/{len(download_rows)}",
+            "Universe": limit,
             "Rows Added": rows_added,
             "File": symbols_file.name,
         })
@@ -515,6 +519,12 @@ st.markdown(
         background: linear-gradient(135deg, #effaf5, #e4f6ef);
         color: #176148;
     }
+    .data-status-card__coverage {
+        display: block;
+        margin-top: 0.3rem;
+        font-size: 0.82rem;
+        font-weight: 550;
+    }
     .data-status-empty {
         border-color: #dce4ea;
         background: linear-gradient(135deg, #f7f9fb, #eef3f6);
@@ -804,17 +814,6 @@ st.markdown(
         background: #ffffff;
         box-shadow: var(--shadow-sm);
     }
-    [data-testid="stProgress"] > div {
-        overflow: hidden;
-        border: 1px solid #c8d4de;
-        border-radius: 999px;
-        background: #e8eef3;
-        box-shadow: inset 0 1px 2px rgba(16, 36, 62, 0.10);
-    }
-    [data-testid="stProgress"] > div > div {
-        background: linear-gradient(90deg, #f6b73c, #ed762f) !important;
-        box-shadow: 0 0 8px rgba(237, 118, 47, 0.34);
-    }
     hr {
         border-color: var(--border) !important;
         margin: 1.4rem 0 !important;
@@ -995,27 +994,6 @@ def apply_filter_selection_to_state(filter_name):
         "pattern_reversal_pct": reversal_pct,
         "pattern_expressions": loaded_expressions,
     })
-
-
-def _get_last_date_from_json_dir(json_dir, top_n=10):
-    """Scan up to `top_n` JSON files in `json_dir` and return the latest 'Date' found, or None."""
-    if not json_dir or not json_dir.exists():
-        return None
-    files = stock_data_files(json_dir)[:top_n]
-    latest = None
-    for f in files:
-        try:
-            records = json.loads(f.read_text())
-            if records:
-                last_rec = records[-1]
-                date_str = last_rec.get("Date")
-                if date_str:
-                    dt = pd.Timestamp(date_str).to_pydatetime()
-                    if latest is None or dt > latest:
-                        latest = dt
-        except Exception:
-            continue
-    return latest
 
 
 def is_stock_data_file(path):
@@ -1424,15 +1402,22 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
 
 
 def render_data_availability_status(market=MARKET_INDIA):
-    """Render the latest available data date."""
+    """Render the latest available data date and its stock coverage."""
     market = normalize_market(market)
     directory = timeframe_config("DAY", market)["target_dir"]
-    last_date = _get_last_date_from_json_dir(directory)
+    availability = data_availability_summary(directory)
+    last_date = availability["Latest Date"]
     if last_date:
         date_formatted = last_date.strftime("%d-%m-%Y")
+        stocks_on_date = availability["Stocks On Latest Date"]
+        total_stocks = availability["Stock Files"]
         st.markdown(
             f'<div class="data-status-card data-status-available">'
             f'📅 Last download: <b>{date_formatted}</b>'
+            f'<span class="data-status-card__coverage">'
+            f'Data available for this date: <b>{stocks_on_date:,}</b> of '
+            f'<b>{total_stocks:,}</b> stocks'
+            f'</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1444,6 +1429,59 @@ def render_data_availability_status(market=MARKET_INDIA):
             unsafe_allow_html=True,
         )
         st.warning("No stock data found. Click '⬇️ Download Stocks Data' to begin.")
+
+
+def render_download_job_status(job):
+    st.markdown(
+        '<div class="data-panel-heading"><span>↻</span>Download Activity</div>',
+        unsafe_allow_html=True,
+    )
+    total = int(job.get("total", 0) or 0)
+    done = int(job.get("done", 0) or 0)
+    downloaded_count = int(job.get("downloaded_count", 0) or 0)
+    st.progress(min(1.0, done / total) if total else 0.0)
+
+    if job.get("running"):
+        symbol = job.get("symbol") or "preparing download"
+        st.info(
+            f"Processed {downloaded_count} of {total} stocks. "
+            f"Processing {done}/{total}: {symbol}. You can close or minimize this page."
+        )
+        return
+
+    if job.get("error"):
+        st.error(f"Download stopped: {job['error']}")
+        return
+
+    completed_at = job.get("completed_at", "")
+    st.success(
+        f"✅ Processed {downloaded_count} of {total} stocks. "
+        f"Last download: {completed_at}"
+    )
+    st.caption(f"Incremental rows added: {int(job.get('rows_added', 0) or 0):,}")
+
+    nifty_row = job.get("nifty_row") or {}
+    if job.get("market") == MARKET_INDIA and nifty_row.get("Downloaded"):
+        st.success("Downloaded Nifty 50 benchmark data")
+    elif job.get("market") == MARKET_INDIA and nifty_row:
+        st.warning(
+            "Could not download Nifty 50 benchmark data: "
+            f"{nifty_row.get('Error') or 'No data returned'}"
+        )
+
+    failed = job.get("failed") or []
+    if failed:
+        st.markdown(pd.DataFrame(failed).to_html(index=False), unsafe_allow_html=True)
+
+
+@st.fragment(run_every=1)
+def render_live_download_activity(market):
+    job = background_download_snapshot(market)
+    if not job:
+        return
+    render_download_job_status(job)
+    if not job.get("running"):
+        st.rerun()
 
 
 def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=1200):
@@ -2346,14 +2384,47 @@ with tab1:
                 '<p class="data-panel-subtitle">Set the universe size and choose incremental or full refresh.</p>',
                 unsafe_allow_html=True,
             )
-            download_limit = st.number_input(
-                "Number of stocks",
-                min_value=1,
-                max_value=available_symbol_count or None,
-                value=saved_download_limit,
-                step=50,
-                help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
-            )
+            download_limit_max = available_symbol_count or max(saved_download_limit, 1000)
+            download_limit_value = min(max(1, saved_download_limit), int(download_limit_max))
+            slider_key = f"download_limit_slider_{selected_market.lower()}"
+            field_key = f"download_limit_field_{selected_market.lower()}"
+            current_slider_value = int(st.session_state.get(slider_key, download_limit_value))
+            current_slider_value = min(max(1, current_slider_value), int(download_limit_max))
+            st.session_state[slider_key] = current_slider_value
+            if field_key not in st.session_state:
+                st.session_state[field_key] = str(current_slider_value)
+
+            def sync_download_limit_field():
+                st.session_state[field_key] = str(st.session_state[slider_key])
+
+            def sync_download_limit_slider():
+                try:
+                    entered_value = int(str(st.session_state[field_key]).strip())
+                except (TypeError, ValueError):
+                    entered_value = int(st.session_state[slider_key])
+                entered_value = min(max(1, entered_value), int(download_limit_max))
+                st.session_state[slider_key] = entered_value
+                st.session_state[field_key] = str(entered_value)
+
+            slider_col, field_col = st.columns([4, 1])
+            with slider_col:
+                st.slider(
+                    "Number of stocks",
+                    min_value=1,
+                    max_value=int(download_limit_max),
+                    step=1,
+                    key=slider_key,
+                    on_change=sync_download_limit_field,
+                    help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
+                )
+            with field_col:
+                st.text_input(
+                    "Exact count",
+                    key=field_key,
+                    on_change=sync_download_limit_slider,
+                    help="Type an exact stock count and press Enter.",
+                )
+            download_limit = int(st.session_state[slider_key])
 
             full_refresh = st.checkbox(
                 "Clear existing data before downloading",
@@ -2377,69 +2448,33 @@ with tab1:
         if not symbols_file.exists():
             st.error(f"❌ Add {symbols_file.name} before downloading {market_label(selected_market)} stock data.")
         else:
-            st.markdown(
-                '<div class="data-panel-heading"><span>↻</span>Download Activity</div>',
-                unsafe_allow_html=True,
+            existing_job, started = start_background_download(
+                symbols_file,
+                download_tf,
+                download_limit,
+                incremental=not full_refresh,
+                market=selected_market,
             )
-            progress_bar = st.progress(0)
-            progress_text = st.empty()
-
-            def show_download_progress(done, total, downloaded_count, symbol):
-                progress = done / total if total else 0
-                progress_bar.progress(progress)
-                progress_text.info(
-                    f"Processed {downloaded_count} of {total} stocks. "
-                    f"Processing {done}/{total}: {symbol}"
+            if not started:
+                st.warning(
+                    f"A {market_label(existing_job.get('market'))} stock download is already running."
                 )
 
-            if full_refresh:
-                deleted_count = clear_downloaded_json_files(download_tf, market=selected_market)
-                if deleted_count:
-                    progress_text.info(f"Cleared {deleted_count} old {download_tf.lower()} JSON files.")
-
-            with st.spinner(f"⬇️ Downloading {download_limit} {market_label(selected_market)} stocks from yfinance..."):
-                download_rows = download_top_stocks(
-                    symbols_file,
-                    download_tf,
-                    limit=download_limit,
-                    progress_callback=show_download_progress,
-                    incremental=not full_refresh,
-                    market=selected_market,
-                )
-                nifty_row = download_nifty_index(download_tf, incremental=not full_refresh, market=selected_market)
-
-            downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
-            rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
-            progress_bar.progress(1.0)
-            last_download_at = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-            update_settings({
-                "market": selected_market,
-                "last_download_at": last_download_at,
-                "last_download_tf": download_tf,
-                "last_download_market": selected_market,
-            })
-            progress_text.success(
-                f"✅ Processed {downloaded_count} of {len(download_rows)} stocks. "
-                f"Last download: {last_download_at}"
-            )
-            st.success(f"✅ Processed {downloaded_count} of {len(download_rows)} stocks")
-
-            st.caption(f"Incremental rows added: {rows_added}")
-
-            if selected_market == MARKET_INDIA and nifty_row["Downloaded"]:
-                st.success("Downloaded Nifty 50 benchmark data")
-            elif selected_market == MARKET_INDIA:
-                st.warning(f"Could not download Nifty 50 benchmark data: {nifty_row['Error'] or 'No data returned'}")
-
-            failed = [row for row in download_rows if not row["Downloaded"]]
-            if failed:
-                st.markdown(
-                    pd.DataFrame(failed).to_html(index=False),
-                    unsafe_allow_html=True,
-                )
-
-            # Refresh data availability display
-            st.rerun()
+    download_job = background_download_snapshot(selected_market)
+    if download_job:
+        if download_job.get("running"):
+            render_live_download_activity(selected_market)
+        else:
+            completed_at = download_job.get("completed_at", "")
+            if completed_at and settings.get("last_download_job_id") != download_job.get("id"):
+                update_settings({
+                    "market": selected_market,
+                    "last_download_at": completed_at,
+                    "last_download_tf": download_tf,
+                    "last_download_market": selected_market,
+                    "last_download_job_id": download_job.get("id"),
+                })
+            render_download_job_status(download_job)
 
 
 # =====================================================================
