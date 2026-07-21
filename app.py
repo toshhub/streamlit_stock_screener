@@ -526,6 +526,31 @@ st.markdown(
         font-size: 0.82rem;
         font-weight: 550;
     }
+    .data-status-progress {
+        display: flex;
+        width: 100%;
+        height: 0.72rem;
+        margin-top: 0.65rem;
+        overflow: hidden;
+        border: 1px solid rgba(23, 97, 72, 0.18);
+        border-radius: 999px;
+        background: #e5e7eb;
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.12);
+    }
+    .data-status-progress__current {
+        height: 100%;
+        background: linear-gradient(90deg, #16a34a, #22c55e);
+    }
+    .data-status-progress__legend {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 0.25rem 0.8rem;
+        margin-top: 0.38rem;
+        font-size: 0.72rem;
+        font-weight: 650;
+    }
+    .data-status-progress__legend-current { color: #15803d; }
     .data-status-empty {
         border-color: #dce4ea;
         background: linear-gradient(135deg, #f7f9fb, #eef3f6);
@@ -1419,14 +1444,25 @@ def render_data_availability_status(market=MARKET_INDIA):
     if last_date:
         date_formatted = last_date.strftime("%d-%m-%Y")
         stocks_on_date = availability["Stocks On Latest Date"]
-        total_stocks = availability["Stock Files"]
+        current_stock_files = availability["Current Stock Files"]
+        # The active status universe intentionally excludes stale/failed files.
+        # Those files remain retryable on disk but do not reduce this bar.
+        progress_total = current_stock_files
+        current_width = 100 if progress_total else 0
         st.markdown(
             f'<div class="data-status-card data-status-available">'
             f'📅 Last download: <b>{date_formatted}</b>'
             f'<span class="data-status-card__coverage">'
             f'Data available for this date: <b>{stocks_on_date:,}</b> of '
-            f'<b>{total_stocks:,}</b> stocks'
+            f'<b>{current_stock_files:,}</b> stocks'
             f'</span>'
+            f'<div class="data-status-progress" role="img" '
+            f'aria-label="{current_stock_files} of {progress_total} downloaded stocks current">'
+            f'<span class="data-status-progress__current" style="width:{current_width:.3f}%"></span>'
+            f'</div>'
+            f'<div class="data-status-progress__legend">'
+            f'<span class="data-status-progress__legend-current">● Current: {current_stock_files:,}</span>'
+            f'</div>'
             f'</div>',
             unsafe_allow_html=True,
         )

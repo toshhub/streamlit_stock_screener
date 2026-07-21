@@ -83,6 +83,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
 
         self.assertEqual(summary["Latest Date"], pd.Timestamp("2026-07-21"))
         self.assertEqual(summary["Stocks On Latest Date"], 2)
+        self.assertEqual(summary["Current Stock Files"], 2)
         self.assertEqual(summary["Stock Files"], 3)
 
     def test_daily_start_skips_weekend_dates(self):

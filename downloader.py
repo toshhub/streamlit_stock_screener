@@ -116,7 +116,12 @@ def _last_saved_date(out_file):
 def data_availability_summary(directory):
     """Return the latest date and stock-file coverage for that date."""
     if not directory or not directory.exists():
-        return {"Latest Date": None, "Stocks On Latest Date": 0, "Stock Files": 0}
+        return {
+            "Latest Date": None,
+            "Stocks On Latest Date": 0,
+            "Current Stock Files": 0,
+            "Stock Files": 0,
+        }
 
     stock_files = [
         path
@@ -132,13 +137,19 @@ def data_availability_summary(directory):
         return {
             "Latest Date": None,
             "Stocks On Latest Date": 0,
+            "Current Stock Files": 0,
             "Stock Files": len(stock_files),
         }
 
     latest_date = max(latest_dates)
+    stocks_on_latest_date = sum(date == latest_date for date in latest_dates)
     return {
         "Latest Date": latest_date,
-        "Stocks On Latest Date": sum(date == latest_date for date in latest_dates),
+        "Stocks On Latest Date": stocks_on_latest_date,
+        # The displayed active universe contains only stocks successfully
+        # downloaded through the latest market date. Stale files remain on
+        # disk so future incremental runs can retry and recover them.
+        "Current Stock Files": stocks_on_latest_date,
         "Stock Files": len(stock_files),
     }
 
