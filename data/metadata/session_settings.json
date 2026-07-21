@@ -56,8 +56,8 @@
       }
     }
   ],
-  "download_limit": 1500,
-  "last_download_at": "17-07-2026 14:16:45",
+  "download_limit": 2867,
+  "last_download_at": "21-07-2026 18:11:48",
   "last_download_tf": "DAY",
   "pattern_lookback_days": 120,
   "pattern_reversal_pct": 7.5,
