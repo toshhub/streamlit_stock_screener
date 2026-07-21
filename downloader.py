@@ -28,6 +28,8 @@ TIMEFRAME_CONFIG = {
 # Keep this conservative to avoid overloading Yahoo Finance or hitting rate limits.
 # Increase carefully if your network and yfinance remain stable.
 DEFAULT_MAX_DOWNLOAD_WORKERS = 3
+DEFAULT_DOWNLOAD_DATE_SAMPLE_SIZE = 5
+MIN_DOWNLOAD_DATE_SAMPLE_SIZE = 4
 NIFTY_DATA_SYMBOL = "NIFTY"
 INDEX_YFINANCE_SYMBOLS = {
     NIFTY_DATA_SYMBOL: "^NSEI",
@@ -95,11 +97,43 @@ def _next_download_start(existing_df, interval):
     if pd.isna(latest):
         return None
 
+    return _date_after_latest(latest, interval)
+
+
+def _date_after_latest(latest, interval):
     if interval == "1mo":
         return latest + pd.DateOffset(months=1)
     if interval == "1wk":
         return latest + pd.DateOffset(weeks=1)
-    return latest + pd.DateOffset(days=1)
+    return latest + pd.offsets.BDay(1)
+
+
+def _sample_download_start(
+    symbols,
+    target_dir,
+    interval,
+    sample_size=DEFAULT_DOWNLOAD_DATE_SAMPLE_SIZE,
+):
+    latest_dates = []
+    for symbol in symbols:
+        existing_df = _load_existing_dataframe(target_dir / f"{symbol}.json")
+        if existing_df.empty or "Date" not in existing_df.columns:
+            continue
+
+        latest = pd.to_datetime(existing_df["Date"], errors="coerce").max()
+        if pd.isna(latest):
+            continue
+
+        latest_dates.append(latest)
+        if len(latest_dates) >= sample_size:
+            break
+
+    if len(latest_dates) < min(MIN_DOWNLOAD_DATE_SAMPLE_SIZE, len(symbols)):
+        return None
+
+    # Use the oldest latest date in the sample. This may download a small
+    # overlap, which the merge removes, but avoids gaps if one sample lags.
+    return _date_after_latest(min(latest_dates), interval)
 
 
 def _prepare_downloaded_dataframe(data):
@@ -138,10 +172,31 @@ def _merge_price_data(existing_df, downloaded_df):
     return merged
 
 
-def download_symbol(symbol, interval, period, out_file, max_retries=2, incremental=True, market=MARKET_INDIA):
-    existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
-    download_start = _next_download_start(existing_df, interval) if incremental else None
+def download_symbol(
+    symbol,
+    interval,
+    period,
+    out_file,
+    max_retries=2,
+    incremental=True,
+    market=MARKET_INDIA,
+    shared_download_start=None,
+):
     today = pd.Timestamp.today().normalize()
+    has_existing_data = out_file.exists() and out_file.stat().st_size > 2
+    if (
+        incremental
+        and has_existing_data
+        and shared_download_start is not None
+        and shared_download_start.normalize() > today
+    ):
+        return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
+
+    existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
+    if incremental and not existing_df.empty and shared_download_start is not None:
+        download_start = shared_download_start
+    else:
+        download_start = _next_download_start(existing_df, interval) if incremental else None
     if incremental and download_start is not None and download_start.normalize() > today:
         return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
 
@@ -284,7 +339,13 @@ def load_top_symbols(symbols_file, limit=1000, market=MARKET_INDIA):
     return symbols
 
 
-def _download_symbol_row(symbol, config, incremental=True, market=MARKET_INDIA):
+def _download_symbol_row(
+    symbol,
+    config,
+    incremental=True,
+    market=MARKET_INDIA,
+    shared_download_start=None,
+):
     out_file = config["target_dir"] / f"{symbol}.json"
     try:
         result = download_symbol(
@@ -294,6 +355,7 @@ def _download_symbol_row(symbol, config, incremental=True, market=MARKET_INDIA):
             out_file,
             incremental=incremental,
             market=market,
+            shared_download_start=shared_download_start,
         )
         return {"Symbol": symbol, **result, "Error": ""}
     except Exception as exc:
@@ -343,9 +405,22 @@ def download_top_stocks(
 
     rows = []
     downloaded_count = 0
+    shared_download_start = None
+    if incremental:
+        shared_download_start = _sample_download_start(
+            symbols,
+            target_dir,
+            config["interval"],
+        )
 
     for completed_count, symbol in enumerate(symbols, start=1):
-        row = _download_symbol_row(symbol, config, incremental=incremental, market=market)
+        row = _download_symbol_row(
+            symbol,
+            config,
+            incremental=incremental,
+            market=market,
+            shared_download_start=shared_download_start,
+        )
         rows.append(row)
         if row["Downloaded"]:
             downloaded_count += 1
