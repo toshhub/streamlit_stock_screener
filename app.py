@@ -2947,7 +2947,10 @@ with tab2:
     )
 
     if pattern_expression_filters:
-        expression_col, reference_col = st.columns([1.35, 1])
+        # Keep the keyword guide beside the expression builder. The [1.35, 1]
+        # ratio is reserved by StreamlitFilterProxy for the vertically stacked
+        # Quick Run/Add Filter layout near the top of the screener.
+        expression_col, reference_col = st.columns([1.4, 1])
         with expression_col:
             expression_panel = st.container(border=True)
     else:

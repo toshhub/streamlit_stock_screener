@@ -165,10 +165,18 @@ def _inject_styles(force=False):
                 overflow-wrap: anywhere !important;
             }}
             div[class*="st-key-favorite_filter_card_tone_{tone}_selected_"] button {{
-                border-color: {accent} !important;
-                background: {background} !important;
-                color: {accent} !important;
-                box-shadow: 0 0 0 2px {border}, 0 5px 13px rgba(15, 23, 42, 0.08) !important;
+                border: 2px solid {accent} !important;
+                border-left: 7px solid {accent} !important;
+                background: {border} !important;
+                color: #0f172a !important;
+                font-weight: 800 !important;
+                box-shadow: 0 0 0 3px {border}, 0 7px 16px rgba(15, 23, 42, 0.16) !important;
+                transform: translateY(-1px);
+            }}
+            div[class*="st-key-favorite_filter_card_tone_{tone}_selected_"] button:hover {{
+                background: {border} !important;
+                color: #0f172a !important;
+                box-shadow: 0 0 0 3px {border}, 0 8px 18px rgba(15, 23, 42, 0.2) !important;
             }}
             """
         )
@@ -491,7 +499,11 @@ class StreamlitFilterProxy:
                                 row_start + column_index,
                             ),
                             use_container_width=True,
-                            help=f"Load and run the {option} filter set.",
+                            help=(
+                                f"Selected strategy: {option}"
+                                if is_selected
+                                else f"Load and run the {option} filter set."
+                            ),
                             **button_kwargs,
                         )
 
