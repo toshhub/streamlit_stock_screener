@@ -36,6 +36,7 @@ from downloader import (
     market_label,
     normalize_market,
     start_background_download,
+    stock_files_for_symbols,
     timeframe_config,
 )
 from fundamentals import (
@@ -1082,7 +1083,7 @@ def run_live_screener_job(
 ):
     total = len(stock_files)
     max_workers = min(8, max(1, total))
-    matched_rows = []
+    matched_rows_by_index = {}
     failed_count = 0
 
     try:
@@ -1110,7 +1111,7 @@ def run_live_screener_job(
                     stock_name = stock_file.stem if stock_file else stock_name
                     result = worker_result.get("result")
                     if result:
-                        matched_rows.append(result)
+                        matched_rows_by_index[worker_result["index"]] = result
                         job_queue.put({
                             "type": "match",
                             "row": result,
@@ -1131,11 +1132,15 @@ def run_live_screener_job(
                     "type": "progress",
                     "done": done,
                     "total": total,
-                    "matches": len(matched_rows),
+                    "matches": len(matched_rows_by_index),
                     "finished": stock_name,
                     "max_workers": max_workers,
                 })
 
+        matched_rows = [
+            matched_rows_by_index[index]
+            for index in sorted(matched_rows_by_index)
+        ]
         save_results(matched_rows)
         job_queue.put({
             "type": "complete",
@@ -1145,6 +1150,10 @@ def run_live_screener_job(
             "matches": len(matched_rows),
         })
     except Exception as exc:
+        matched_rows = [
+            matched_rows_by_index[index]
+            for index in sorted(matched_rows_by_index)
+        ]
         job_queue.put({"type": "fatal_error", "message": str(exc), "rows": matched_rows})
 
 
@@ -3192,7 +3201,21 @@ with tab2:
                 st.stop()
 
         target_dir = timeframe_config(tf, current_market)["target_dir"]
-        stock_files = stock_data_files(target_dir)
+        selected_symbols = load_top_symbols(
+            symbols_file,
+            limit=int(download_limit),
+            market=current_market,
+        )
+        stock_files = stock_files_for_symbols(target_dir, selected_symbols)
+        missing_stock_count = len(selected_symbols) - len(stock_files)
+        if missing_stock_count:
+            st.warning(
+                f"{missing_stock_count} of the selected {len(selected_symbols)} stocks do not have "
+                "downloaded JSON data and will be skipped."
+            )
+        if not stock_files:
+            st.error("No downloaded stock data is available for the selected Data Management universe.")
+            st.stop()
 
         active_job = drain_live_screener_events()
         if active_job and active_job.get("running"):

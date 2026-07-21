@@ -16,10 +16,24 @@ from downloader import (
     background_download_snapshot,
     download_symbol,
     start_background_download,
+    stock_files_for_symbols,
 )
 
 
 class IncrementalDownloaderTests(unittest.TestCase):
+    def test_stock_files_follow_selected_source_order_and_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            for symbol in ["AAA", "BBB", "CCC"]:
+                (directory / f"{symbol}.json").write_text("[]")
+
+            files = stock_files_for_symbols(
+                directory,
+                ["CCC", "AAA", "MISSING", "BBB"][:3],
+            )
+
+        self.assertEqual([path.stem for path in files], ["CCC", "AAA"])
+
     def test_background_download_continues_without_browser_callback(self):
         with DOWNLOAD_JOBS_LOCK:
             DOWNLOAD_JOBS.clear()

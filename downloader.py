@@ -354,6 +354,24 @@ def load_top_symbols(symbols_file, limit=1000, market=MARKET_INDIA):
     return symbols
 
 
+def stock_files_for_symbols(directory, symbols):
+    """Map symbols to existing JSON files while preserving source order."""
+    if not directory or not directory.exists():
+        return []
+
+    files = []
+    seen = set()
+    for symbol in symbols:
+        clean = str(symbol).strip()
+        if not clean or clean in seen or clean.upper() == NIFTY_DATA_SYMBOL:
+            continue
+        stock_file = directory / f"{clean}.json"
+        if stock_file.exists():
+            files.append(stock_file)
+            seen.add(clean)
+    return files
+
+
 def _download_symbol_row(
     symbol,
     config,
