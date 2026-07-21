@@ -120,6 +120,11 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("minBarSpacing: 1.2", result)
         self.assertNotIn("title: label", result)
         self.assertIn("item.label + ' ' + formatPrice(value)", result)
+        self.assertIn("Gain versus previous candle close", result)
+        self.assertIn("gainFromPreviousCandle", result)
+        self.assertIn("candleAtOrBeforeCursor", result)
+        self.assertIn("Math.floor(logical)", result)
+        self.assertIn('class="legend-gain ', result)
         self.assertIn("@media (max-width: 640px)", result)
         self.assertIn("grid-template-rows: auto auto minmax(280px, 1fr) auto", result)
         self.assertIn("padding: 0;", result)
@@ -219,6 +224,7 @@ class InteractiveChartTests(unittest.TestCase):
                 {
                     "Symbol": "360ONE",
                     "PE Ratio": 20,
+                    "Market Cap Position": 2,
                     "Sales CAGR 3Y": 7,
                     "Profit CAGR 3Y": 8,
                     "Price CAGR 3Y": -9,
@@ -235,6 +241,7 @@ class InteractiveChartTests(unittest.TestCase):
                 {
                     "Symbol": "REDTEST",
                     "PE Ratio": 40,
+                    "Market Cap Position": 1,
                     "ValuationMedians": {
                         "Median PE": {
                             "3 Years": 30,
@@ -339,6 +346,12 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("market=INDIA", result)
         self.assertIn("ma=50%2C200", result)
         self.assertIn("pe=20", result)
+        self.assertIn('onclick="toggleSymbolSort(0)"', result)
+        self.assertIn('onclick="sortNumericColumn(1)"', result)
+        self.assertIn('onclick="sortNumericColumn(2)"', result)
+        self.assertIn("restoreOriginalOrder", result)
+        self.assertIn("tap again for market-cap order", result)
+        self.assertIn("<th class=\"sortable\" onclick=\"sortNumericColumn(2)\">Market Cap Position</th>", result)
         self.assertNotIn("<th>Sales CAGR 3Y</th>", result)
         self.assertNotIn("<th>Profit CAGR 3Y</th>", result)
         self.assertNotIn("<th>Price CAGR 3Y</th>", result)

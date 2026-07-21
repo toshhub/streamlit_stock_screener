@@ -856,6 +856,11 @@ def interactive_stock_chart_html(
         }}
         .legend-date {{ color: var(--muted); font-weight: 750; }}
         .legend-ohlc b {{ margin-left: 4px; color: var(--ink); }}
+        .legend-gain {{ font-weight: 750; }}
+        .legend-gain b {{ margin-left: 4px; }}
+        .legend-gain.is-positive {{ color: #15803d; }}
+        .legend-gain.is-negative {{ color: #b91c1c; }}
+        .legend-gain.is-neutral {{ color: var(--muted); }}
         .legend-ma {{ font-weight: 750; }}
         #chart {{
           position: relative;
@@ -1058,7 +1063,7 @@ def interactive_stock_chart_html(
             </section>
           </div>
         </header>
-        <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC and MA values.</div>
+        <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC, gain vs previous candle, and MA values.</div>
         <section id="chart" aria-label="{safe_symbol} interactive stock chart">
           <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
         </section>
@@ -1178,11 +1183,17 @@ def interactive_stock_chart_html(
             priceLineColor: "#176b87",
           }});
           candleSeries.setData(payload.candles);
+          const candleIndexByTime = new Map(
+            payload.candles.map(function(candle, index) {{
+              return [String(candle.time), index];
+            }})
+          );
 
           const maSeries = [];
           payload.maPeriods.forEach(function(period, index) {{
             const label = "SMA" + period;
             const color = colors[index % colors.length];
+            const points = payload.movingAverages[label] || [];
             const series = chart.addSeries(LightweightCharts.LineSeries, {{
               color: color,
               lineWidth: 2,
@@ -1190,8 +1201,15 @@ def interactive_stock_chart_html(
               lastValueVisible: true,
               crosshairMarkerVisible: false,
             }});
-            series.setData(payload.movingAverages[label] || []);
-            maSeries.push({{ label: label, color: color, series: series }});
+            series.setData(points);
+            maSeries.push({{
+              label: label,
+              color: color,
+              series: series,
+              values: new Map(points.map(function(point) {{
+                return [String(point.time), point.value];
+              }})),
+            }});
           }});
 
           if (payload.volume.length) {{
@@ -1211,16 +1229,74 @@ def interactive_stock_chart_html(
               : "—";
           }}
 
-          function renderLegend(time, candle, param) {{
+          function formatTimeKey(time) {{
+            if (!time) return "";
+            if (typeof time === "string") return time;
+            if (typeof time === "object" && time.year && time.month && time.day) {{
+              return String(time.year) + "-" +
+                String(time.month).padStart(2, "0") + "-" +
+                String(time.day).padStart(2, "0");
+            }}
+            return String(time);
+          }}
+
+          function candleAtOrBeforeCursor(param) {{
+            if (!param || !payload.candles.length) return null;
+            const key = formatTimeKey(param.time);
+            const logical = Number(param.logical);
+            let index = null;
+
+            if (Number.isFinite(logical)) {{
+              const roundedLogical = Math.round(logical);
+              const isDirectlyOnCandle = Math.abs(logical - roundedLogical) < 0.001;
+              index = isDirectlyOnCandle && candleIndexByTime.has(key)
+                ? candleIndexByTime.get(key)
+                : Math.floor(logical);
+            }} else if (candleIndexByTime.has(key)) {{
+              index = candleIndexByTime.get(key);
+            }}
+
+            // When the cursor is between candles (or in the right-side empty
+            // area), use the candle immediately before its logical position.
+            if (index === null || index < 0) return null;
+            index = Math.min(index, payload.candles.length - 1);
+            return {{ index: index, candle: payload.candles[index] }};
+          }}
+
+          function gainFromPreviousCandle(index) {{
+            if (index <= 0 || index >= payload.candles.length) return null;
+            const previousClose = Number(payload.candles[index - 1].close);
+            const currentClose = Number(payload.candles[index].close);
+            if (!Number.isFinite(previousClose) || !Number.isFinite(currentClose) || previousClose === 0) {{
+              return null;
+            }}
+            return (currentClose - previousClose) / Math.abs(previousClose) * 100;
+          }}
+
+          function formatGain(value) {{
+            if (!Number.isFinite(Number(value))) return "—";
+            const numeric = Number(value);
+            return (numeric > 0 ? "+" : "") + numeric.toFixed(2) + "%";
+          }}
+
+          function renderLegend(time, candle, candleIndex, param) {{
             if (!candle) return;
+            const gain = gainFromPreviousCandle(candleIndex);
+            const gainClass = gain > 0 ? "is-positive" : (gain < 0 ? "is-negative" : "is-neutral");
             let content = '<span class="legend-date">' + String(time || "") + '</span>' +
               '<span class="legend-ohlc">O <b>' + formatPrice(candle.open) + '</b></span>' +
               '<span class="legend-ohlc">H <b>' + formatPrice(candle.high) + '</b></span>' +
               '<span class="legend-ohlc">L <b>' + formatPrice(candle.low) + '</b></span>' +
-              '<span class="legend-ohlc">C <b>' + formatPrice(candle.close) + '</b></span>';
+              '<span class="legend-ohlc">C <b>' + formatPrice(candle.close) + '</b></span>' +
+              '<span class="legend-gain ' + gainClass + '" title="Gain versus previous candle close">' +
+              'Gain <b>' + formatGain(gain) + '</b></span>';
             maSeries.forEach(function(item) {{
-              const point = param ? param.seriesData.get(item.series) : null;
-              const value = point && point.value;
+              const point = param && param.seriesData
+                ? param.seriesData.get(item.series)
+                : null;
+              const value = point && Number.isFinite(Number(point.value))
+                ? point.value
+                : item.values.get(String(time));
               content += '<span class="legend-ma" style="color:' + item.color + '">' +
                 item.label + ' ' + formatPrice(value) + '</span>';
             }});
@@ -1228,8 +1304,9 @@ def interactive_stock_chart_html(
           }}
 
           chart.subscribeCrosshairMove(function(param) {{
-            if (!param || !param.time || !param.seriesData) return;
-            renderLegend(param.time, param.seriesData.get(candleSeries), param);
+            const selected = candleAtOrBeforeCursor(param);
+            if (!selected) return;
+            renderLegend(selected.candle.time, selected.candle, selected.index, param);
           }});
 
           function showBars(count) {{
@@ -2038,9 +2115,6 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     </script>
     """
 
-    # Columns that support click-to-sort: all except Symbol (text column)
-    _sort_exempt = {"Symbol"}
-
     def display_column_label(column):
         label = str(column)
         diff_match = re.fullmatch(r"DiffSMA(\d+)", label)
@@ -2053,10 +2127,12 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
     header_cells = "".join(
         (
+            f'<th class="sortable" onclick="toggleSymbolSort({index})">'
+            f"{html.escape(display_column_label(column))}</th>"
+            if column == "Symbol"
+            else
             f"<th class=\"sortable\" onclick=\"sortNumericColumn({index})\">"
             f"{html.escape(display_column_label(column))}</th>"
-            if column not in _sort_exempt
-            else f"<th>{html.escape(display_column_label(column))}</th>"
         )
         for index, column in enumerate(visible_df.columns)
     )
@@ -2065,7 +2141,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     valuation_medians_series = df.get("ValuationMedians")
     interactive_periods = normalize_interactive_ma_periods(interactive_ma_periods)
     interactive_ma_query = ",".join(str(period) for period in interactive_periods)
-    for row_index, row in visible_df.iterrows():
+    for original_index, (row_index, row) in enumerate(visible_df.iterrows()):
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
         chart_source = chart_sources.loc[row_index] if chart_sources is not None else None
@@ -2175,13 +2251,39 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
                     f'<span class="stock-symbol-cell">'
                     f"{symbol_html}{interactive_link}{screener_company_link}</span>"
                 )
-            cells.append(f"<td>{escaped_value}</td>")
-        rows.append(f"<tr>{''.join(cells)}</tr>")
+            sort_value = html.escape(value, quote=True)
+            cells.append(f'<td data-sort-value="{sort_value}">{escaped_value}</td>')
+        rows.append(
+            f'<tr data-original-index="{original_index}">{"".join(cells)}</tr>'
+        )
 
     script = r"""
     <script>
       // Per-column sort directions (keyed by columnIndex)
       const numericSortDirections = {};
+
+      function tableRows(table) {
+        return Array.from(table.tBodies[0].rows);
+      }
+
+      function clearSortIndicators(table) {
+        table.querySelectorAll("th.sortable").forEach(header => {
+          header.removeAttribute("data-sort-dir");
+        });
+      }
+
+      function restoreOriginalOrder(table) {
+        const tbody = table.tBodies[0];
+        tableRows(table)
+          .sort((a, b) => Number(a.dataset.originalIndex) - Number(b.dataset.originalIndex))
+          .forEach(row => tbody.appendChild(row));
+        clearSortIndicators(table);
+      }
+
+      function cellSortValue(row, columnIndex) {
+        const cell = row.cells[columnIndex];
+        return cell.dataset.sortValue || cell.innerText || "";
+      }
 
       function parseNumeric(value) {
         // Remove commas, percentage signs, and whitespace; treat empty as +Infinity (sorts to bottom)
@@ -2193,11 +2295,35 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
       }
 
+      function toggleSymbolSort(columnIndex) {
+        const table = document.querySelector(".hover-results-table");
+        if (!table || !table.tBodies || !table.tBodies.length) return;
+        const header = table.tHead.rows[0].cells[columnIndex];
+
+        // Second tap disables alphabetic sorting and restores the original
+        // market-cap-ranked result order.
+        if (header && header.getAttribute("data-sort-dir") === "asc") {
+          restoreOriginalOrder(table);
+          return;
+        }
+
+        const tbody = table.tBodies[0];
+        tableRows(table)
+          .sort((a, b) => cellSortValue(a, columnIndex).localeCompare(
+            cellSortValue(b, columnIndex),
+            undefined,
+            { sensitivity: "base", numeric: true }
+          ))
+          .forEach(row => tbody.appendChild(row));
+        clearSortIndicators(table);
+        if (header) header.setAttribute("data-sort-dir", "asc");
+      }
+
       function sortNumericColumn(columnIndex) {
         const table = document.querySelector(".hover-results-table");
         if (!table || !table.tBodies || !table.tBodies.length) return;
         const tbody = table.tBodies[0];
-        const rows = Array.from(tbody.rows);
+        const rows = tableRows(table);
 
         // Toggle direction for this specific column (default desc on first click)
         const prev = numericSortDirections[columnIndex] || "desc";
@@ -2205,15 +2331,13 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         numericSortDirections[columnIndex] = dir;
 
         rows.sort((a, b) => {
-          const av = parseNumeric(a.cells[columnIndex].innerText);
-          const bv = parseNumeric(b.cells[columnIndex].innerText);
+          const av = parseNumeric(cellSortValue(a, columnIndex));
+          const bv = parseNumeric(cellSortValue(b, columnIndex));
           return dir === "asc" ? av - bv : bv - av;
         });
         rows.forEach(row => tbody.appendChild(row));
 
-        table.querySelectorAll("th.sortable").forEach(header => {
-          header.removeAttribute("data-sort-dir");
-        });
+        clearSortIndicators(table);
         const activeHeader = table.tHead.rows[0].cells[columnIndex];
         if (activeHeader) activeHeader.setAttribute("data-sort-dir", dir);
       }
@@ -2226,7 +2350,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         f"<div class='results-table-toolbar'>"
         f"<div class='results-table-toolbar__title'>Screening Results"
         f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"
-        f"<div class='results-table-toolbar__meta'>Sort metrics · Select a symbol for the fast chart · "
+        f"<div class='results-table-toolbar__meta'>Tap Symbol for A–Z; tap again for market-cap order · "
+        f"Select a symbol for the fast chart · "
         f"Use the candle icon for interactive view</div>"
         f"</div>"
         f"<div class='results-table-wrapper'>"

@@ -1038,6 +1038,7 @@ CHART_CREATION_LOCK = threading.RLock()
 def screen_stock_file_worker(
     index,
     stock_file,
+    market_cap_position,
     filter_set,
     market,
     pattern_lookback_days,
@@ -1073,6 +1074,7 @@ def screen_stock_file_worker(
         )
 
     if pattern_passed:
+        result["Market Cap Position"] = int(market_cap_position)
         enrich_result_with_growth_metrics(result, stock_file.stem, market)
 
     if pattern_passed and create_charts:
@@ -1099,6 +1101,7 @@ def screen_stock_file_worker(
 def run_live_screener_job(
     job_queue,
     stock_files,
+    market_cap_positions,
     filter_set,
     market,
     pattern_lookback_days,
@@ -1118,6 +1121,7 @@ def run_live_screener_job(
                     screen_stock_file_worker,
                     index,
                     stock_file,
+                    market_cap_positions.get(stock_file.stem, index),
                     filter_set,
                     market,
                     pattern_lookback_days,
@@ -1184,6 +1188,7 @@ def run_live_screener_job(
 
 def start_live_screener_job(
     stock_files,
+    market_cap_positions,
     filter_set,
     market,
     pattern_lookback_days,
@@ -1199,6 +1204,7 @@ def start_live_screener_job(
         args=(
             job_queue,
             stock_files,
+            market_cap_positions,
             filter_set,
             market,
             pattern_lookback_days,
@@ -3242,6 +3248,10 @@ with tab2:
             limit=int(download_limit),
             market=current_market,
         )
+        market_cap_positions = {
+            symbol: position
+            for position, symbol in enumerate(selected_symbols, start=1)
+        }
         stock_files = stock_files_for_symbols(target_dir, selected_symbols)
         missing_stock_count = len(selected_symbols) - len(stock_files)
         if missing_stock_count:
@@ -3263,6 +3273,7 @@ with tab2:
         update_settings({"last_results_market": current_market})
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
+            market_cap_positions,
             run_filter_set,
             current_market,
             run_lookback_days,
@@ -3505,26 +3516,42 @@ with tab4:
                 f"Run the screener again to refresh results for {market_label(selected_market)}."
             )
 
-        df = pd.DataFrame(rows)
+        result_symbols_file = symbols_file_for_market(result_market)
+        ranked_symbols = (
+            load_top_symbols(
+                result_symbols_file,
+                limit=1_000_000,
+                market=result_market,
+            )
+            if result_symbols_file.exists()
+            else []
+        )
+        market_cap_positions = {
+            symbol: position
+            for position, symbol in enumerate(ranked_symbols, start=1)
+        }
+        display_rows = []
+        for row in rows:
+            display_row = dict(row)
+            symbol = str(display_row.get("Symbol", ""))
+            display_row["Market Cap Position"] = market_cap_positions.get(
+                symbol,
+                display_row.get("Market Cap Position", ""),
+            )
+            display_rows.append(display_row)
+        display_rows.sort(
+            key=lambda row: (
+                int(row["Market Cap Position"])
+                if str(row.get("Market Cap Position", "")).isdigit()
+                else float("inf")
+            )
+        )
+
+        df = pd.DataFrame(display_rows)
         df.index = range(1, len(df) + 1)
         display_df = df
 
-        # Base columns that always appear (if present)
-        result_columns = ["Symbol", "PE Ratio"]
-
-        # Insert DiffSMA* columns (signed % diff from price to each MA) right after PE Ratio
-        diff_ma_cols = sorted(
-            [col for col in display_df.columns if col.startswith("DiffSMA")],
-            key=lambda c: int(c.replace("DiffSMA", "")),
-        )
-        result_columns.extend(diff_ma_cols)
-
-        # Insert RocSMA* columns (Rate of Change of MA from 2 bars back)
-        roc_ma_cols = sorted(
-            [col for col in display_df.columns if col.startswith("RocSMA")],
-            key=lambda c: int(c.replace("RocSMA", "")),
-        )
-        result_columns.extend(roc_ma_cols)
+        result_columns = ["Symbol", "PE Ratio", "Market Cap Position"]
 
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 
