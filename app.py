@@ -3,6 +3,7 @@ import html
 import hmac
 import os
 import queue
+import re
 import threading
 import time
 import uuid
@@ -58,6 +59,7 @@ from screener import (
     custom_filter_expressions,
     merge_legacy_expression_filters,
     normalize_filter_set,
+    price_near_ma_periods,
     required_ma_periods,
     screen_json_file,
 )
@@ -3623,6 +3625,7 @@ with tab3:
                 '<li><code>10%</code> sets a price 10% above the buy price.</li>'
                 '<li><code>-10%</code> sets a price 10% below the buy price.</li>'
                 '<li><code>min(Candle[0..-1].Low) - 1%</code> sets a price 1% below the lower Low of the buy candle and its previous candle.</li>'
+                '<li><code>SMA50 - 1%</code> is dynamic: every future candle uses that day\'s SMA50 value, reduced by 1%.</li>'
                 '<li>In these expressions, <code>Candle[0]</code> is always the buy-date candle.</li>'
                 '</ul>'
                 '</div>'
@@ -3654,7 +3657,10 @@ with tab3:
                     "Stop Loss",
                     key="backtest_stop_loss_expression_input",
                     placeholder="e.g. -10% or min(Candle[0..-1].Low) - 1%",
-                    help="-10% means 10% below the buy price. Candle[0] is the buy-date candle.",
+                    help=(
+                        "-10% means 10% below the buy price. Candle[0] remains the buy-date candle. "
+                        "SMA-based stops are recalculated for every future candle."
+                    ),
                     on_change=persist_backtest_widget_settings,
                 )
                 stop_is_valid, stop_error = validate_sell_price_expression(
@@ -3899,7 +3905,24 @@ with tab4:
         df.index = range(1, len(df) + 1)
         display_df = df
 
-        result_columns = ["Symbol", "PE Ratio", "Market Cap Position"]
+        near_ma_periods = set(price_near_ma_periods(repair_filter_set))
+        near_ma_periods.update(
+            int(match.group(1))
+            for column in df.columns
+            if (match := re.fullmatch(r"ROI(\d+)", str(column)))
+        )
+        near_ma_periods = sorted(near_ma_periods)
+        for period in near_ma_periods:
+            roi_column = f"ROI{period}"
+            if roi_column not in df.columns:
+                df[roi_column] = None
+
+        result_columns = [
+            "Symbol",
+            "PE Ratio",
+            "Market Cap Position",
+            *(f"ROI{period}" for period in near_ma_periods),
+        ]
 
         display_df = display_df[[column for column in result_columns if column in display_df.columns]]
 

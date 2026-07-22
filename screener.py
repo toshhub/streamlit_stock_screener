@@ -197,6 +197,18 @@ def long_ma_rising_from_two_bars_back(series):
     rising_rate_pct = (current_value - two_bars_back_value) / two_bars_back_value * 100
     return current_value > two_bars_back_value, rising_rate_pct
 
+
+def ma_roi_from_previous_bar(series):
+    values = series.dropna()
+    if len(values) < 2:
+        return None
+
+    current_value = float(values.iloc[-1])
+    previous_value = float(values.iloc[-2])
+    if previous_value == 0:
+        return None
+    return (current_value - previous_value) / abs(previous_value) * 100
+
 def ma_rising_from_two_bars_back(df, ma_label):
     return long_ma_rising_from_two_bars_back(df[ma_label])
 
@@ -346,6 +358,14 @@ def required_ma_periods(filter_set):
 
     return sorted(periods)
 
+
+def price_near_ma_periods(filter_set):
+    return sorted({
+        int(item["params"]["long_ma"])
+        for item in filter_set
+        if item.get("type") == "price_near_long"
+    })
+
 def normalize_filter_item(filter_item, fallback_id):
     filter_type = filter_item.get("type")
     if filter_type not in FILTER_TYPE_DEFAULTS:
@@ -451,6 +471,7 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
+    near_ma_periods = set(price_near_ma_periods(filter_set))
 
     for period in ma_periods:
         ma_label = f"SMA{period}"
@@ -463,6 +484,9 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET
         # Rate of Change of the MA from 2 bars back
         _, roc_pct = long_ma_rising_from_two_bars_back(df[ma_label])
         result[f"Roc{ma_label}"] = round(roc_pct, 2) if roc_pct is not None else None
+        if period in near_ma_periods:
+            roi_pct = ma_roi_from_previous_bar(df[ma_label])
+            result[f"ROI{period}"] = round(roi_pct, 2) if roi_pct is not None else None
 
     indexed_filter_set = list(enumerate(filter_set, start=1))
     ordered_filter_set = [

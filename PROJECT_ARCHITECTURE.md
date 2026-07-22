@@ -133,7 +133,7 @@ Key functions:
   - Separately stored legacy expressions are migrated into Custom Filter rows when settings or favorites are loaded.
   - Candle expressions support `Candle[0]`, negative historical offsets, inclusive ranges such as `Candle[0..-4]`, OHLC fields, and `IsGreen()`.
 
-Backtest sell strategies provide optional Target and Stop Loss expressions. Percentage-only values are relative to the buy price; candle expressions are anchored to the buy date. Trades use High/Low touches by default or Close when Closing Basis is enabled, and realized returns are averaged with equal stock weights. An optional Backtest-wide Green Candle toggle limits every selected strategy to stocks whose Buy Date Close is greater than Open. Per-stock charts show ten available trading candles before the buy date through ten after the requested end date. Both static and interactive views mark the buy and booked exit; the interactive view also overlays the evaluated Buy, Target, and Stop Loss price lines and every MA period required by that favorite strategy, including MA references in Custom Filters.
+Backtest sell strategies provide optional Target and Stop Loss expressions. Percentage-only values are relative to the buy price; candle expressions are anchored to the buy date. SMA- and market-value-based Stop Loss expressions are recalculated on every future candle while their `Candle[...]` references remain anchored to the buy candle. Trades use the corresponding candle's High/Low touch by default or Close when Closing Basis is enabled, and realized returns are averaged with equal stock weights. An optional Backtest-wide Green Candle toggle limits every selected strategy to stocks whose Buy Date Close is greater than Open. Per-stock charts show ten available trading candles before the buy date through ten after the requested end date. Both static and interactive views mark the buy and booked exit; the interactive view also overlays the evaluated Buy, Target, and Stop Loss price lines and every MA period required by that favorite strategy, including MA references in Custom Filters.
 - `long_ma_rising_from_two_bars_back(series)`
   - Long MA is considered rising if current Long MA is greater than the Long MA value from two rows/candles back.
   - Also returns the rising-rate percent between those two values.
@@ -149,7 +149,8 @@ Backtest sell strategies provide optional Target and Stop Loss expressions. Perc
   - Merges a user/favorite filter set with defaults.
 - `screen_json_file(...)`
   - Reads one downloaded stock JSON file.
-  - Builds all SMA columns required by enabled filters.
+- Builds all SMA columns required by enabled filters.
+- Emits a sortable `ROI{period}` value when a `price_near_long` filter is active; this matches the Custom Filter `ROI(period)` calculation and measures the SMA percentage change from the previous trading candle.
   - Applies every enabled filter in the selected filter set.
   - Returns a result dictionary only if the stock matches all enabled filters.
   - Returns `None` if it does not match or does not have enough data.

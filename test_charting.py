@@ -401,6 +401,18 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("border-width: 0", result)
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
+        self.assertIn("table-layout: fixed", result)
+        self.assertIn("overflow-x: hidden", result)
+        self.assertNotIn("min-width: 560px", result)
+
+        roi_result = results_hover_table_html(
+            pd.DataFrame([{"Symbol": "TEST", "ROI50": 1.25}]),
+            interactive_market="INDIA",
+        )
+        self.assertIn(
+            '<th class="sortable" onclick="sortNumericColumn(1)">ROI50</th>',
+            roi_result,
+        )
 
         us_result = results_hover_table_html(
             df,

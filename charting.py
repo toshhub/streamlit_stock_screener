@@ -1515,11 +1515,14 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       body {
         margin: 0;
         padding: 2px;
+        max-width: 100%;
+        overflow-x: hidden;
         background: transparent;
         color: #334a63;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       .results-table-shell {
+        max-width: 100%;
         overflow: hidden;
         border: 1px solid var(--border);
         border-radius: 16px;
@@ -1559,12 +1562,15 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       }
       .results-table-wrapper {
         max-height: 430px;
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+        width: 100%;
         -webkit-overflow-scrolling: touch;
       }
       .hover-results-table {
         width: 100%;
-        min-width: 560px;
+        max-width: 100%;
+        table-layout: fixed;
         border-collapse: separate;
         border-spacing: 0;
         font-size: 13px;
@@ -1574,6 +1580,9 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         padding: 11px 13px;
         text-align: left;
         vertical-align: middle;
+        min-width: 0;
+        overflow: hidden;
+        overflow-wrap: anywhere;
       }
       .hover-results-table th {
         position: sticky;
@@ -1586,7 +1595,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         letter-spacing: 0.065em;
         text-transform: uppercase;
         user-select: none;
-        white-space: nowrap;
+        white-space: normal;
       }
       .hover-results-table th:not(:first-child),
       .hover-results-table td:not(:first-child) {
@@ -1614,11 +1623,15 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       }
       .hover-results-table tbody tr:last-child td { border-bottom: none; }
       .hover-results-table td:first-child { font-weight: 750; }
+      .hover-results-table th:first-child,
+      .hover-results-table td:first-child { width: 40%; }
       .stock-symbol-cell {
         display: inline-flex;
         align-items: center;
         gap: 4px;
         white-space: nowrap;
+        max-width: 100%;
+        min-width: 0;
       }
       .stock-hover,
       .stock-symbol-label {
@@ -1632,6 +1645,11 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         color: var(--brand-dark);
         font-weight: 800;
         transition: transform 0.14s ease, box-shadow 0.14s ease;
+        max-width: calc(100% - 52px);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .stock-hover { cursor: pointer; }
       .stock-symbol-label { cursor: default; }
@@ -1887,8 +1905,19 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
       /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
-        .hover-results-table { font-size: 11px; }
-        .hover-results-table th, .hover-results-table td { padding: 4px 5px; }
+        body { padding: 0; }
+        .results-table-shell { border-radius: 10px; }
+        .results-table-toolbar { align-items: flex-start; flex-direction: column; gap: 4px; padding: 8px; }
+        .results-table-toolbar__meta { font-size: 9px; text-align: left; }
+        .hover-results-table { font-size: 10px; }
+        .hover-results-table th, .hover-results-table td { padding: 4px 2px; }
+        .hover-results-table th { font-size: 8px; letter-spacing: 0.015em; }
+        .hover-results-table th.sortable::after { margin-left: 2px; }
+        .hover-results-table th:first-child,
+        .hover-results-table td:first-child { width: 43%; }
+        .stock-symbol-cell { gap: 2px; }
+        .stock-hover, .stock-symbol-label { gap: 2px; padding: 3px 5px; max-width: calc(100% - 48px); }
+        .interactive-chart-link, .screener-company-link { height: 20px; width: 20px; flex-basis: 20px; }
         .chart-panel { max-height: 42vh; padding: 6px; }
         .chart-panel img { max-height: 34vh; }
         .chart-title-row { font-size: 12px; padding: 0 38px; }

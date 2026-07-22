@@ -260,7 +260,12 @@ def _numeric_pe(pe_ratio):
     return value if math.isfinite(value) else math.nan
 
 
-def build_ma_expression_context(df, pe_ratio=None, expressions=None):
+def build_ma_expression_context(
+    df,
+    pe_ratio=None,
+    expressions=None,
+    candle_anchor_position=None,
+):
     df = prepare_price_dataframe(df)
     close = df["Close"] if "Close" in df.columns else pd.Series(dtype=float)
     ma_cache = {}
@@ -320,9 +325,15 @@ def build_ma_expression_context(df, pe_ratio=None, expressions=None):
             return math.nan
         return (maximum - minimum) / abs(maximum) * 100
 
+    candle_anchor = (
+        len(df) - 1
+        if candle_anchor_position is None
+        else int(candle_anchor_position)
+    )
+
     def candle_at(offset_value):
         offset = int(offset_value)
-        position = len(df) - 1 + offset
+        position = candle_anchor + offset
         if offset > 0 or position < 0 or position >= len(df):
             raise ValueError(f"Candle[{offset}] is unavailable for the loaded price history.")
         row = df.iloc[position]
@@ -401,10 +412,20 @@ def evaluate_expression(expression, context):
     return bool(result), ""
 
 
-def evaluate_numeric_expression_from_df(df, expression, pe_ratio=None):
+def evaluate_numeric_expression_from_df(
+    df,
+    expression,
+    pe_ratio=None,
+    candle_anchor_position=None,
+):
     """Safely evaluate an expression that must produce one finite numeric value."""
     expression = str(expression).strip()
-    context = build_ma_expression_context(df, pe_ratio=pe_ratio, expressions=[expression])
+    context = build_ma_expression_context(
+        df,
+        pe_ratio=pe_ratio,
+        expressions=[expression],
+        candle_anchor_position=candle_anchor_position,
+    )
     is_valid, error = validate_expression(expression, context.keys())
     if not is_valid:
         return None, error

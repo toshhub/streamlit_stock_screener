@@ -9,10 +9,36 @@ from pattern import (
     expression_uses_pe,
     validate_expression,
 )
-from screener import custom_filter_expressions, merge_legacy_expression_filters, required_ma_periods
+from screener import (
+    custom_filter_expressions,
+    merge_legacy_expression_filters,
+    required_ma_periods,
+    screen_dataframe,
+)
 
 
 class MovingAverageExpressionTests(unittest.TestCase):
+    def test_price_near_filter_adds_custom_expression_compatible_roi_for_its_sma(self):
+        df = pd.DataFrame({
+            "Close": [1.0, 2.0, 3.0, 4.0],
+            "Open": [0.9, 1.9, 2.9, 3.9],
+        })
+        filter_set = [{
+            "id": 1,
+            "type": "price_near_long",
+            "params": {"long_ma": 2, "threshold_pct": 20.0},
+        }]
+
+        result = screen_dataframe(
+            df,
+            "TEST",
+            filter_set=filter_set,
+            include_pe=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["ROI2"], 40.0)
+
     def test_custom_filter_reports_every_ma_period_for_charting(self):
         filter_set = [
             {

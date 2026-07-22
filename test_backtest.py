@@ -91,6 +91,65 @@ class SellStrategyTests(unittest.TestCase):
         self.assertEqual(details["Exit Reason"], "Stop Loss")
         self.assertEqual(details["Exit Price"], 90)
 
+    def test_sma_stop_is_recalculated_for_each_future_candle_intraday(self):
+        dates = pd.date_range("2026-03-01", periods=6, freq="D")
+        df = pd.DataFrame({
+            "Date": dates,
+            "Open": [79, 89, 99, 118, 114, 109],
+            "High": [82, 92, 102, 122, 116, 111],
+            "Low": [78, 88, 98, 105, 108, 104],
+            "Close": [80, 90, 100, 120, 115, 110],
+        })
+        positions = {date.normalize(): index for index, date in enumerate(dates)}
+        calendar = [date.normalize() for date in dates[2:]]
+
+        gain_path, details = _build_trade_gain_path(
+            df,
+            calendar,
+            positions,
+            {"target": "", "stop_loss": "SMA2", "closing_basis": False},
+        )
+
+        self.assertTrue(details["Dynamic Stop Loss"])
+        self.assertEqual(details["Exit Reason"], "Stop Loss")
+        self.assertEqual(details["Exit Date"], dates[3].normalize())
+        self.assertAlmostEqual(details["Stop Loss Price"], 110.0)
+        self.assertAlmostEqual(details["Exit Price"], 110.0)
+        self.assertAlmostEqual(gain_path[1]["Stop Loss Price"], 110.0)
+
+        anchored_price, anchored_error = evaluate_sell_price_expression(
+            "SMA2 - Candle[0].Low + 90",
+            df.iloc[:4],
+            100,
+            candle_anchor_position=2,
+        )
+        self.assertEqual(anchored_error, "")
+        self.assertAlmostEqual(anchored_price, 102.0)
+
+    def test_dynamic_sma_stop_uses_close_and_books_close_on_closing_basis(self):
+        dates = pd.date_range("2026-04-01", periods=6, freq="D")
+        df = pd.DataFrame({
+            "Date": dates,
+            "Open": [79, 89, 99, 104, 94, 94],
+            "High": [82, 92, 102, 108, 96, 97],
+            "Low": [78, 88, 98, 100, 89, 92],
+            "Close": [80, 90, 100, 105, 90, 95],
+        })
+        positions = {date.normalize(): index for index, date in enumerate(dates)}
+        calendar = [date.normalize() for date in dates[2:]]
+
+        _, details = _build_trade_gain_path(
+            df,
+            calendar,
+            positions,
+            {"target": "", "stop_loss": "SMA2", "closing_basis": True},
+        )
+
+        self.assertEqual(details["Exit Reason"], "Stop Loss")
+        self.assertEqual(details["Exit Date"], dates[4].normalize())
+        self.assertAlmostEqual(details["Stop Loss Price"], 97.5)
+        self.assertAlmostEqual(details["Exit Price"], 90.0)
+
     def test_chart_window_has_ten_trading_candles_on_each_side(self):
         dates = pd.bdate_range("2026-01-01", periods=35)
         df = pd.DataFrame({

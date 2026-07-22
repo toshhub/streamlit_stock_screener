@@ -94,8 +94,13 @@ def validate_sell_price_expression(expression):
     return validate_expression(parts["expression"])
 
 
-def evaluate_sell_price_expression(expression, buy_window, buy_price):
-    """Resolve a sell expression to a fixed price using data through the buy candle."""
+def evaluate_sell_price_expression(
+    expression,
+    evaluation_window,
+    buy_price,
+    candle_anchor_position=None,
+):
+    """Resolve a sell expression using current MA data and buy-anchored Candle references."""
     parts = _sell_expression_parts(expression)
     if parts["kind"] == "blank":
         return None, ""
@@ -105,8 +110,9 @@ def evaluate_sell_price_expression(expression, buy_window, buy_price):
         price = float(buy_price) * (1 + parts["percent"] / 100)
     else:
         price, error = evaluate_numeric_expression_from_df(
-            buy_window,
+            evaluation_window,
             parts["expression"],
+            candle_anchor_position=candle_anchor_position,
         )
         if error:
             return None, error
@@ -116,6 +122,16 @@ def evaluate_sell_price_expression(expression, buy_window, buy_price):
     if price is None or price <= 0:
         return None, "Sell strategy expressions must evaluate to a price greater than zero."
     return float(price), ""
+
+
+def sell_expression_uses_dynamic_market_value(expression):
+    parts = _sell_expression_parts(expression)
+    base_expression = str(parts.get("expression", ""))
+    return bool(re.search(
+        r"\b(?:P|SMA\d+|CD|ROI|MA_MIN|MA_MAX|MA_VAR)\b",
+        base_expression,
+        re.IGNORECASE,
+    ))
 
 
 def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strategy=None):
@@ -141,6 +157,10 @@ def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strat
         raise ValueError(f"Invalid Stop Loss expression: {stop_error}")
 
     closing_basis = bool(strategy.get("closing_basis", False))
+    dynamic_stop = sell_expression_uses_dynamic_market_value(
+        strategy.get("stop_loss", "")
+    )
+    effective_stop_price = stop_price
     exit_price = None
     exit_reason = ""
     exit_recorded = False
@@ -154,19 +174,31 @@ def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strat
         # The position is entered at the buy candle's close, so exit checks
         # start with the next candle to avoid using pre-entry OHLC movement.
         if offset > 0 and exit_price is None:
+            if dynamic_stop:
+                effective_stop_price, dynamic_stop_error = evaluate_sell_price_expression(
+                    strategy.get("stop_loss", ""),
+                    df.iloc[: position + 1].copy(),
+                    buy_price,
+                    candle_anchor_position=reference_position,
+                )
+                if dynamic_stop_error:
+                    raise ValueError(
+                        f"Invalid Stop Loss expression on {calendar_date.date()}: "
+                        f"{dynamic_stop_error}"
+                    )
             if closing_basis:
-                stop_hit = stop_price is not None and market_close <= stop_price
+                stop_hit = effective_stop_price is not None and market_close <= effective_stop_price
                 target_hit = target_price is not None and market_close >= target_price
             else:
                 low = float(row["Low"]) if "Low" in df.columns and pd.notna(row["Low"]) else market_close
                 high = float(row["High"]) if "High" in df.columns and pd.notna(row["High"]) else market_close
-                stop_hit = stop_price is not None and low <= stop_price
+                stop_hit = effective_stop_price is not None and low <= effective_stop_price
                 target_hit = target_price is not None and high >= target_price
 
             # OHLC data cannot reveal which threshold was touched first when
             # both occur in one candle, so use the conservative stop-first rule.
             if stop_hit:
-                exit_price = market_close if closing_basis else stop_price
+                exit_price = market_close if closing_basis else effective_stop_price
                 exit_reason = "Stop Loss"
             elif target_hit:
                 exit_price = market_close if closing_basis else target_price
@@ -185,6 +217,8 @@ def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strat
             "Date": calendar_date,
             "Close": market_close,
         }
+        if effective_stop_price is not None:
+            path_point["Stop Loss Price"] = float(effective_stop_price)
         if exit_reason and exit_price is not None and not exit_recorded:
             path_point.update({
                 "Exit Reason": exit_reason,
@@ -200,7 +234,8 @@ def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strat
     return gain_path, {
         "Buy Price": buy_price,
         "Target Price": target_price,
-        "Stop Loss Price": stop_price,
+        "Stop Loss Price": effective_stop_price,
+        "Dynamic Stop Loss": dynamic_stop,
         "Exit Date": exit_point["Date"],
         "Exit Price": float(exit_point.get("Exit Price", exit_price)),
         "Exit Reason": exit_point.get("Exit Reason", exit_reason),
