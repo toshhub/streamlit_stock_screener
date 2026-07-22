@@ -13,6 +13,7 @@ from downloader import MARKET_INDIA, normalize_market, yfinance_symbol
 from storage import load_pe_ratios, save_pe_ratios
 
 FILTER_TYPE_LABELS = {
+    "custom_expression": "Custom Filter",
     "ma_rising": "MA Rising",
     "short_above_long": "Short MA Above Long MA",
     "price_near_long": "Current Price Near And Above Long MA",
@@ -26,6 +27,7 @@ FILTER_TYPE_LABELS = {
 }
 
 FILTER_TYPE_DEFAULTS = {
+    "custom_expression": {"expression": ""},
     "ma_rising": {"ma": 200},
     "short_above_long": {"short_ma": 50, "long_ma": 200},
     "price_near_long": {"long_ma": 200, "threshold_pct": 5.0},
@@ -47,6 +49,35 @@ DEFAULT_FILTER_SET = [
 
 def filter_label(filter_item):
     return FILTER_TYPE_LABELS.get(filter_item["type"], filter_item["type"])
+
+
+def custom_filter_expressions(filter_set):
+    """Return non-blank expressions stored in Custom Filter rows."""
+    return [
+        str(item.get("params", {}).get("expression", "")).strip()
+        for item in normalize_filter_set(filter_set, use_default=False)
+        if item["type"] == "custom_expression"
+        and str(item.get("params", {}).get("expression", "")).strip()
+    ]
+
+
+def merge_legacy_expression_filters(filter_set, expressions):
+    """Migrate separately stored expressions into the unified filter list."""
+    normalized = normalize_filter_set(filter_set, use_default=False)
+    existing = custom_filter_expressions(normalized)
+    next_id = max((int(item.get("id", 0)) for item in normalized), default=0) + 1
+    for expression in expressions or []:
+        expression = str(expression).strip()
+        if not expression or expression in existing:
+            continue
+        normalized.append({
+            "id": next_id,
+            "type": "custom_expression",
+            "params": {"expression": expression},
+        })
+        existing.append(expression)
+        next_id += 1
+    return normalized
 
 def clean_pe_ratio(pe):
     if pe is None:
@@ -300,6 +331,18 @@ def required_ma_periods(filter_set):
             periods.add(int(config["long_ma"]))
         elif name in {"price_near_long", "long_ma_down_from_max", "long_ma_up_from_min"}:
             periods.add(int(config["long_ma"]))
+        elif name == "custom_expression":
+            expression = str(config.get("expression", ""))
+            periods.update(int(value) for value in re.findall(r"\bSMA(\d+)\b", expression, re.IGNORECASE))
+            for match in re.finditer(
+                r"\b(CD|ROI|MA_MIN|MA_MAX|MA_VAR)\s*\(\s*(\d+(?:\.\d+)?)"
+                r"(?:\s*,\s*(\d+(?:\.\d+)?))?",
+                expression,
+                re.IGNORECASE,
+            ):
+                periods.add(max(1, int(float(match.group(2)) + 0.5)))
+                if match.group(1).upper() == "CD" and match.group(3):
+                    periods.add(max(1, int(float(match.group(3)) + 0.5)))
 
     return sorted(periods)
 

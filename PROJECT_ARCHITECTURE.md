@@ -128,6 +128,12 @@ Key functions:
   - Maps internal filter type IDs to UI labels.
 - `FILTER_TYPE_DEFAULTS`
   - Defines the default params for each filter category.
+- Custom expression filters are regular, repeatable filter rows (`custom_expression`).
+  - Each row stores one expression in `params.expression` and is saved with the rest of the current filter set.
+  - Separately stored legacy expressions are migrated into Custom Filter rows when settings or favorites are loaded.
+  - Candle expressions support `Candle[0]`, negative historical offsets, inclusive ranges such as `Candle[0..-4]`, OHLC fields, and `IsGreen()`.
+
+Backtest sell strategies provide optional Target and Stop Loss expressions. Percentage-only values are relative to the buy price; candle expressions are anchored to the buy date. Trades use High/Low touches by default or Close when Closing Basis is enabled, and realized returns are averaged with equal stock weights. An optional Backtest-wide Green Candle toggle limits every selected strategy to stocks whose Buy Date Close is greater than Open. Per-stock charts show ten available trading candles before the buy date through ten after the requested end date. Both static and interactive views mark the buy and booked exit; the interactive view also overlays the evaluated Buy, Target, and Stop Loss price lines and every MA period required by that favorite strategy, including MA references in Custom Filters.
 - `long_ma_rising_from_two_bars_back(series)`
   - Long MA is considered rising if current Long MA is greater than the Long MA value from two rows/candles back.
   - Also returns the rising-rate percent between those two values.

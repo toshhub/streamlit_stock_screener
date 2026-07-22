@@ -1,28 +1,211 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 
 import pandas as pd
 
 from charting import create_stock_chart
-from pattern import evaluate_pattern_filters_from_df, expression_uses_pe
-from screener import load_price_dataframe, normalize_filter_set, screen_dataframe
+from pattern import (
+    evaluate_numeric_expression_from_df,
+    evaluate_pattern_filters_from_df,
+    expression_uses_pe,
+    validate_expression,
+)
+from screener import (
+    custom_filter_expressions,
+    load_price_dataframe,
+    merge_legacy_expression_filters,
+    normalize_filter_set,
+    required_ma_periods,
+    screen_dataframe,
+)
 
 
 def split_favorite_filter(saved_filter):
     if isinstance(saved_filter, list):
-        return normalize_filter_set(saved_filter, use_default=False), {}
+        filter_set = normalize_filter_set(saved_filter, use_default=False)
+        return filter_set, {
+            "lookback_days": 120,
+            "reversal_pct": 5.0,
+            "expressions": custom_filter_expressions(filter_set),
+        }
 
     ma_filter_set = normalize_filter_set(saved_filter.get("ma_filter_set", []), use_default=False)
     pattern_settings = saved_filter.get("pattern", {}) if isinstance(saved_filter, dict) else {}
-    expressions = [
+    legacy_expressions = [
         str(expression).strip()
         for expression in pattern_settings.get("expressions", [])
         if str(expression).strip()
     ]
+    ma_filter_set = merge_legacy_expression_filters(ma_filter_set, legacy_expressions)
+    expressions = custom_filter_expressions(ma_filter_set)
 
     return ma_filter_set, {
         "lookback_days": int(pattern_settings.get("lookback_days", 120)),
         "reversal_pct": float(pattern_settings.get("reversal_pct", 5.0)),
         "expressions": expressions,
+    }
+
+
+_PERCENT_PRICE_PATTERN = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*%$")
+_PERCENT_ADJUSTMENT_PATTERN = re.compile(
+    r"^(.+?)\s*([+-])\s*(\d+(?:\.\d+)?)\s*%$"
+)
+
+
+def _sell_expression_parts(expression):
+    expression = str(expression or "").strip()
+    if not expression:
+        return {"kind": "blank"}
+
+    percent_match = _PERCENT_PRICE_PATTERN.fullmatch(expression)
+    if percent_match:
+        return {"kind": "buy_percent", "percent": float(percent_match.group(1))}
+
+    adjustment_match = _PERCENT_ADJUSTMENT_PATTERN.fullmatch(expression)
+    if adjustment_match:
+        percent = float(adjustment_match.group(3))
+        if adjustment_match.group(2) == "-":
+            percent = -percent
+        return {
+            "kind": "adjusted_expression",
+            "expression": adjustment_match.group(1).strip(),
+            "percent": percent,
+        }
+
+    if "%" in expression:
+        return {
+            "kind": "error",
+            "error": "Use a percentage by itself (10% or -10%), or after a price expression (price - 1%).",
+        }
+    return {"kind": "expression", "expression": expression}
+
+
+def validate_sell_price_expression(expression):
+    """Validate a Target or Stop Loss expression without requiring price data."""
+    parts = _sell_expression_parts(expression)
+    if parts["kind"] == "error":
+        return False, parts["error"]
+    if parts["kind"] == "blank":
+        return True, ""
+    if parts.get("percent", 0) <= -100:
+        return False, "A percentage adjustment must leave a price greater than zero."
+    if parts["kind"] == "buy_percent":
+        return True, ""
+    return validate_expression(parts["expression"])
+
+
+def evaluate_sell_price_expression(expression, buy_window, buy_price):
+    """Resolve a sell expression to a fixed price using data through the buy candle."""
+    parts = _sell_expression_parts(expression)
+    if parts["kind"] == "blank":
+        return None, ""
+    if parts["kind"] == "error":
+        return None, parts["error"]
+    if parts["kind"] == "buy_percent":
+        price = float(buy_price) * (1 + parts["percent"] / 100)
+    else:
+        price, error = evaluate_numeric_expression_from_df(
+            buy_window,
+            parts["expression"],
+        )
+        if error:
+            return None, error
+        if parts["kind"] == "adjusted_expression":
+            price *= 1 + parts["percent"] / 100
+
+    if price is None or price <= 0:
+        return None, "Sell strategy expressions must evaluate to a price greater than zero."
+    return float(price), ""
+
+
+def _build_trade_gain_path(df, normalized_calendar, date_to_position, sell_strategy=None):
+    reference_position = date_to_position[normalized_calendar[0]]
+    end_position = date_to_position[normalized_calendar[-1]]
+    chart_start_position = max(0, reference_position - 10)
+    chart_end_position = min(len(df) - 1, end_position + 10)
+    buy_price = float(df.iloc[reference_position]["Close"])
+    if buy_price <= 0:
+        raise ValueError("Buy price must be greater than zero.")
+
+    strategy = sell_strategy or {}
+    buy_window = df.iloc[: reference_position + 1].copy()
+    target_price, target_error = evaluate_sell_price_expression(
+        strategy.get("target", ""), buy_window, buy_price
+    )
+    stop_price, stop_error = evaluate_sell_price_expression(
+        strategy.get("stop_loss", ""), buy_window, buy_price
+    )
+    if target_error:
+        raise ValueError(f"Invalid Target expression: {target_error}")
+    if stop_error:
+        raise ValueError(f"Invalid Stop Loss expression: {stop_error}")
+
+    closing_basis = bool(strategy.get("closing_basis", False))
+    exit_price = None
+    exit_reason = ""
+    exit_recorded = False
+    gain_path = []
+
+    for offset, calendar_date in enumerate(normalized_calendar):
+        position = date_to_position[calendar_date]
+        row = df.iloc[position]
+        market_close = float(row["Close"])
+
+        # The position is entered at the buy candle's close, so exit checks
+        # start with the next candle to avoid using pre-entry OHLC movement.
+        if offset > 0 and exit_price is None:
+            if closing_basis:
+                stop_hit = stop_price is not None and market_close <= stop_price
+                target_hit = target_price is not None and market_close >= target_price
+            else:
+                low = float(row["Low"]) if "Low" in df.columns and pd.notna(row["Low"]) else market_close
+                high = float(row["High"]) if "High" in df.columns and pd.notna(row["High"]) else market_close
+                stop_hit = stop_price is not None and low <= stop_price
+                target_hit = target_price is not None and high >= target_price
+
+            # OHLC data cannot reveal which threshold was touched first when
+            # both occur in one candle, so use the conservative stop-first rule.
+            if stop_hit:
+                exit_price = market_close if closing_basis else stop_price
+                exit_reason = "Stop Loss"
+            elif target_hit:
+                exit_price = market_close if closing_basis else target_price
+                exit_reason = "Target"
+
+        is_last_candle = offset == len(normalized_calendar) - 1
+        if is_last_candle and exit_price is None:
+            exit_price = market_close
+            exit_reason = "End Date"
+
+        valuation_price = exit_price if exit_price is not None else market_close
+        gain_pct = (valuation_price - buy_price) / buy_price * 100
+        path_point = {
+            "Candle": offset,
+            "Portfolio Gain %": round(gain_pct, 2),
+            "Date": calendar_date,
+            "Close": market_close,
+        }
+        if exit_reason and exit_price is not None and not exit_recorded:
+            path_point.update({
+                "Exit Reason": exit_reason,
+                "Exit Price": float(exit_price),
+            })
+            exit_recorded = True
+        gain_path.append(path_point)
+
+    exit_point = next(
+        (point for point in gain_path if point.get("Exit Reason")),
+        gain_path[-1],
+    )
+    return gain_path, {
+        "Buy Price": buy_price,
+        "Target Price": target_price,
+        "Stop Loss Price": stop_price,
+        "Exit Date": exit_point["Date"],
+        "Exit Price": float(exit_point.get("Exit Price", exit_price)),
+        "Exit Reason": exit_point.get("Exit Reason", exit_reason),
+        "Chart Start Date": pd.Timestamp(df.iloc[chart_start_position]["Date"]).normalize(),
+        "Chart End Date": pd.Timestamp(df.iloc[chart_end_position]["Date"]).normalize(),
     }
 
 
@@ -103,7 +286,10 @@ def _build_backtest_chart_annotations(gain_path):
         return []
 
     start_point = gain_path[0]
-    end_point = gain_path[-1]
+    exit_point = next(
+        (point for point in gain_path if point.get("Exit Reason")),
+        gain_path[-1],
+    )
     annotations = []
 
     if "Close" in start_point:
@@ -114,18 +300,27 @@ def _build_backtest_chart_annotations(gain_path):
             "label": "BUY",
         })
 
-    if end_point is not start_point and "Close" in end_point:
+    if exit_point is not start_point:
+        reason = exit_point.get("Exit Reason", "End Date")
+        label = {"Target": "TARGET", "Stop Loss": "STOP", "End Date": "END"}.get(reason, "SELL")
         annotations.append({
-            "type": "END",
-            "date": pd.Timestamp(end_point["Date"]).normalize(),
-            "price": float(end_point["Close"]),
-            "label": "END",
+            "type": label,
+            "date": pd.Timestamp(exit_point["Date"]).normalize(),
+            "price": float(exit_point.get("Exit Price", exit_point["Close"])),
+            "label": label,
         })
 
     return annotations
 
 
-def _backtest_stock_file(path, favorite_configs, calendar_dates, market):
+def _backtest_stock_file(
+    path,
+    favorite_configs,
+    calendar_dates,
+    market,
+    sell_strategy=None,
+    green_candle_only=False,
+):
     df = load_price_dataframe(path)
     if df.empty or "Date" not in df.columns or not calendar_dates:
         return {name: [] for name in favorite_configs}
@@ -143,23 +338,21 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates, market):
     events_by_filter = {name: [] for name in favorite_configs}
 
     reference_position = date_to_position[normalized_calendar[0]]
-    signal_close = float(df.iloc[reference_position]["Close"])
-    if signal_close == 0:
-        return events_by_filter
-
-    gain_path = []
-    for offset, calendar_date in enumerate(normalized_calendar):
-        position = date_to_position[calendar_date]
-        close_at_offset = float(df.iloc[position]["Close"])
-        gain_pct = (close_at_offset - signal_close) / signal_close * 100
-        gain_path.append({
-            "Candle": offset,
-            "Portfolio Gain %": round(gain_pct, 2),
-            "Date": calendar_date,
-            "Close": close_at_offset,
-        })
-
     signal_date = normalized_calendar[0]
+    trade_result = None
+
+    if green_candle_only:
+        buy_row = df.iloc[reference_position]
+        try:
+            is_green_buy_candle = (
+                pd.notna(buy_row.get("Open"))
+                and pd.notna(buy_row.get("Close"))
+                and float(buy_row["Close"]) > float(buy_row["Open"])
+            )
+        except (TypeError, ValueError):
+            is_green_buy_candle = False
+        if not is_green_buy_candle:
+            return events_by_filter
 
     for filter_name, config in favorite_configs.items():
         if _screen_backtest_signal(
@@ -170,6 +363,14 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates, market):
             config["pattern"],
             market,
         ):
+            if trade_result is None:
+                trade_result = _build_trade_gain_path(
+                    df,
+                    normalized_calendar,
+                    date_to_position,
+                    sell_strategy=sell_strategy,
+                )
+            gain_path, exit_details = trade_result
             events_by_filter[filter_name].append({
                 "Filter Name": filter_name,
                 "Symbol": path.stem,
@@ -177,6 +378,7 @@ def _backtest_stock_file(path, favorite_configs, calendar_dates, market):
                 "Date": signal_date,
                 "Final Gain %": gain_path[-1]["Portfolio Gain %"],
                 "Gain Path": gain_path,
+                **exit_details,
             })
 
     return events_by_filter
@@ -234,6 +436,8 @@ def run_backtest(
     progress_callback=None,
     benchmark_file=None,
     market="INDIA",
+    sell_strategy=None,
+    green_candle_only=False,
 ):
     favorite_configs = {}
     for name in selected_filter_names:
@@ -260,6 +464,8 @@ def run_backtest(
                 favorite_configs,
                 calendar_dates,
                 market,
+                sell_strategy,
+                green_candle_only,
             )
             for path in stock_files
         ]
@@ -275,10 +481,6 @@ def run_backtest(
     series_by_filter = {}
     stock_details_by_filter = {}
     chart_paths = {}
-    date_markers = [
-        {"label": "Start", "date": calendar_dates[0]},
-        {"label": "End", "date": calendar_dates[-1]},
-    ]
     for filter_name in selected_filter_names:
         events = all_events[filter_name]
         if events:
@@ -305,8 +507,9 @@ def run_backtest(
                         chart_paths[chart_key] = create_stock_chart(
                             pd.io.common.stringify_path(event["JsonPath"]),
                             favorite_configs[filter_name]["filter_set"],
-                            swing_annotations=_build_backtest_chart_annotations(gain_path),
-                            date_markers=date_markers,
+                            date_markers=_build_backtest_chart_annotations(gain_path),
+                            window_start_date=event.get("Chart Start Date"),
+                            window_end_date=event.get("Chart End Date"),
                         )
                     except Exception:
                         chart_paths[chart_key] = None
@@ -314,6 +517,28 @@ def run_backtest(
                     "Symbol": event["Symbol"],
                     "Gain at End Date": round(float(event["Final Gain %"]), 2),
                     "Peak Gain %": round(max(stock_gain_values), 2),
+                    "Exit Reason": event.get("Exit Reason", "End Date"),
+                    "Buy Date": pd.Timestamp(event.get("Date")).strftime("%d-%m-%Y"),
+                    "Buy Price": round(float(event.get("Buy Price")), 2),
+                    "Exit Date": pd.Timestamp(event.get("Exit Date")).strftime("%d-%m-%Y"),
+                    "Exit Price": round(float(event.get("Exit Price")), 2),
+                    "Target Price": (
+                        round(float(event["Target Price"]), 2)
+                        if event.get("Target Price") is not None else None
+                    ),
+                    "Stop Loss Price": (
+                        round(float(event["Stop Loss Price"]), 2)
+                        if event.get("Stop Loss Price") is not None else None
+                    ),
+                    "Chart Start Date": pd.Timestamp(event.get("Chart Start Date")).strftime("%Y-%m-%d"),
+                    "Chart End Date": pd.Timestamp(event.get("Chart End Date")).strftime("%Y-%m-%d"),
+                    "Chart Buy Price": float(event.get("Buy Price")),
+                    "Chart Exit Price": float(event.get("Exit Price")),
+                    "Chart Target Price": event.get("Target Price"),
+                    "Chart Stop Loss Price": event.get("Stop Loss Price"),
+                    "Chart MA Periods": required_ma_periods(
+                        favorite_configs[filter_name]["filter_set"]
+                    ),
                 }
                 if chart_paths[chart_key]:
                     stock_row["ChartPath"] = chart_paths[chart_key]

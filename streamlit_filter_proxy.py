@@ -6,6 +6,7 @@ import streamlit as _st
 
 
 _FILTER_LABEL_TONES = {
+    "Custom Filter": 9,
     "MA Rising": 0,
     "Short MA Above Long MA": 1,
     "Current Price Near And Above Long MA": 2,
@@ -27,6 +28,7 @@ _FILTER_COLORS = [
     ("#ca8a04", "#fefce8", "#fef08a"),
     ("#be123c", "#fff1f2", "#fecdd3"),
     ("#4f46e5", "#eef2ff", "#c7d2fe"),
+    ("#db2777", "#fdf2f8", "#fbcfe8"),
 ]
 
 _STYLES_INJECTED = False

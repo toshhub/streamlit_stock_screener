@@ -74,7 +74,7 @@ def _chart_data_hash(chart_df):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, max_years, pe_ratio, swing_annotations, date_markers):
+def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, max_years, pe_ratio, swing_annotations, date_markers, window_start_date, window_end_date):
     try:
         stat = json_path.stat()
         file_signature = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
@@ -82,7 +82,7 @@ def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, max_
         file_signature = {}
 
     payload = {
-        "style_version": 4,
+        "style_version": 6,
         "source": str(json_path),
         "file": file_signature,
         "data_hash": _chart_data_hash(chart_df),
@@ -92,6 +92,8 @@ def _chart_context_fingerprint(json_path, chart_df, filter_set, max_points, max_
         "pe_ratio": pe_ratio,
         "swing_annotations": swing_annotations or [],
         "date_markers": date_markers or [],
+        "window_start_date": window_start_date,
+        "window_end_date": window_end_date,
     }
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
@@ -153,6 +155,8 @@ def create_stock_chart(
     pe_ratio=None,
     swing_annotations=None,
     date_markers=None,
+    window_start_date=None,
+    window_end_date=None,
 ):
     json_path = Path(json_path)
     df = load_price_data(json_path)
@@ -163,8 +167,14 @@ def create_stock_chart(
     for period in ma_periods:
         df[f"SMA{period}"] = df["Close"].rolling(period).mean()
 
-    last_available_date = df["Date"].dropna().iloc[-1]
-    if max_years:
+    if window_start_date is not None or window_end_date is not None:
+        chart_df = df
+        if window_start_date is not None:
+            chart_df = chart_df[chart_df["Date"] >= pd.Timestamp(window_start_date)]
+        if window_end_date is not None:
+            chart_df = chart_df[chart_df["Date"] <= pd.Timestamp(window_end_date)]
+    elif max_years:
+        last_available_date = df["Date"].dropna().iloc[-1]
         start_date = last_available_date - pd.DateOffset(years=max_years)
         chart_df = df[df["Date"] >= start_date]
     else:
@@ -184,6 +194,8 @@ def create_stock_chart(
         pe_ratio,
         swing_annotations,
         date_markers,
+        window_start_date,
+        window_end_date,
     )
     out_file = output_dir / f"{json_path.stem}_{fingerprint}.png"
 
@@ -275,8 +287,12 @@ def create_stock_chart(
 
     if date_markers:
         marker_styles = {
-            "Start": {"color": "#16a34a", "offset": 18, "va": "bottom"},
-            "End": {"color": "#dc2626", "offset": -20, "va": "top"},
+            "Start": {"color": "#16a34a", "x_offset": 0, "y_offset": 18, "ha": "center", "va": "bottom"},
+            "End": {"color": "#dc2626", "x_offset": 0, "y_offset": -20, "ha": "center", "va": "top"},
+            "BUY": {"color": "#16a34a", "x_offset": -10, "y_offset": 18, "ha": "right", "va": "bottom"},
+            "TARGET": {"color": "#15803d", "x_offset": 10, "y_offset": -20, "ha": "left", "va": "top"},
+            "STOP": {"color": "#dc2626", "x_offset": 10, "y_offset": -20, "ha": "left", "va": "top"},
+            "END": {"color": "#dc2626", "x_offset": 10, "y_offset": -20, "ha": "left", "va": "top"},
         }
         marker_dates = pd.to_datetime(chart_df["Date"], errors="coerce")
         chart_min = marker_dates.min()
@@ -288,13 +304,20 @@ def create_stock_chart(
             label = marker.get("label", "")
             row_index = (marker_dates - marker_date).abs().idxmin()
             row = chart_df.loc[row_index]
-            marker_price = row["Close"]
-            style = marker_styles.get(label, {"color": "#7c3aed", "offset": 18, "va": "bottom"})
+            marker_price = marker.get("price", row["Close"])
+            try:
+                marker_price = float(marker_price)
+            except (TypeError, ValueError):
+                marker_price = float(row["Close"])
+            style = marker_styles.get(label, {
+                "color": "#7c3aed", "x_offset": 0, "y_offset": 18,
+                "ha": "center", "va": "bottom",
+            })
             ax.scatter(
                 [row["Date"]],
                 [marker_price],
                 color=style["color"],
-                marker="^" if label == "Start" else "v",
+                marker="^" if label in {"Start", "BUY"} else "v",
                 s=86,
                 edgecolors="white",
                 linewidths=0.9,
@@ -304,8 +327,8 @@ def create_stock_chart(
                 label,
                 (row["Date"], marker_price),
                 textcoords="offset points",
-                xytext=(0, style["offset"]),
-                ha="center",
+                xytext=(style["x_offset"], style["y_offset"]),
+                ha=style["ha"],
                 va=style["va"],
                 color=style["color"],
                 fontsize=9,
@@ -361,7 +384,7 @@ def normalize_interactive_ma_periods(periods):
             continue
         if 1 <= value <= 1000 and value not in normalized:
             normalized.append(value)
-    return sorted(normalized)[:7] or list(INTERACTIVE_CHART_DEFAULT_MAS)
+    return sorted(normalized) or list(INTERACTIVE_CHART_DEFAULT_MAS)
 
 
 def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
@@ -485,8 +508,27 @@ def interactive_stock_chart_html(
     initial_range="252",
     growth_metrics=None,
     valuation_medians=None,
+    trade_overlay=None,
 ):
     payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
+    normalized_overlay = {}
+    if isinstance(trade_overlay, dict):
+        for key in ("buyDate", "exitDate", "windowStart", "windowEnd"):
+            value = trade_overlay.get(key)
+            if value:
+                parsed = pd.to_datetime(value, errors="coerce", dayfirst=False)
+                if pd.notna(parsed):
+                    normalized_overlay[key] = parsed.strftime("%Y-%m-%d")
+        for key in ("buyPrice", "targetPrice", "stopPrice", "exitPrice"):
+            try:
+                value = float(trade_overlay.get(key))
+                if math.isfinite(value):
+                    normalized_overlay[key] = value
+            except (TypeError, ValueError):
+                pass
+        if trade_overlay.get("exitReason"):
+            normalized_overlay["exitReason"] = str(trade_overlay["exitReason"])
+    payload["tradeOverlay"] = normalized_overlay
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
     pe_badge_html = ""
@@ -1188,6 +1230,53 @@ def interactive_stock_chart_html(
               return [String(candle.time), index];
             }})
           );
+          const tradeOverlay = payload.tradeOverlay || {{}};
+          [
+            {{ key: "buyPrice", title: "BUY", color: "#15803d", style: LightweightCharts.LineStyle.Solid }},
+            {{ key: "targetPrice", title: "TARGET", color: "#2563eb", style: LightweightCharts.LineStyle.Dashed }},
+            {{ key: "stopPrice", title: "STOP", color: "#dc2626", style: LightweightCharts.LineStyle.Dashed }},
+          ].forEach(function(level) {{
+            const price = Number(tradeOverlay[level.key]);
+            if (!Number.isFinite(price)) return;
+            candleSeries.createPriceLine({{
+              price: price,
+              color: level.color,
+              lineWidth: 2,
+              lineStyle: level.style,
+              axisLabelVisible: true,
+              title: level.title,
+            }});
+          }});
+
+          const tradeMarkers = [];
+          if (tradeOverlay.buyDate && candleIndexByTime.has(String(tradeOverlay.buyDate))) {{
+            tradeMarkers.push({{
+              time: tradeOverlay.buyDate,
+              position: "belowBar",
+              color: "#15803d",
+              shape: "arrowUp",
+              text: "BUY",
+            }});
+          }}
+          if (tradeOverlay.exitDate && candleIndexByTime.has(String(tradeOverlay.exitDate))) {{
+            const reasonLabel = tradeOverlay.exitReason === "Target"
+              ? "TARGET"
+              : (tradeOverlay.exitReason === "Stop Loss" ? "STOP" : "END");
+            tradeMarkers.push({{
+              time: tradeOverlay.exitDate,
+              position: "aboveBar",
+              color: reasonLabel === "TARGET" ? "#2563eb" : (reasonLabel === "STOP" ? "#dc2626" : "#475569"),
+              shape: "arrowDown",
+              text: reasonLabel,
+            }});
+          }}
+          if (tradeMarkers.length) {{
+            if (typeof LightweightCharts.createSeriesMarkers === "function") {{
+              LightweightCharts.createSeriesMarkers(candleSeries, tradeMarkers);
+            }} else if (typeof candleSeries.setMarkers === "function") {{
+              candleSeries.setMarkers(tradeMarkers);
+            }}
+          }}
 
           const maSeries = [];
           payload.maPeriods.forEach(function(period, index) {{
@@ -1344,7 +1433,16 @@ def interactive_stock_chart_html(
           }});
           resizeObserver.observe(container);
           loading.remove();
-          showBars({json.dumps(selected_range)});
+          const tradeWindowStart = candleIndexByTime.get(String(tradeOverlay.windowStart || ""));
+          const tradeWindowEnd = candleIndexByTime.get(String(tradeOverlay.windowEnd || ""));
+          if (Number.isInteger(tradeWindowStart) && Number.isInteger(tradeWindowEnd)) {{
+            chart.timeScale().setVisibleLogicalRange({{
+              from: Math.max(0, tradeWindowStart),
+              to: Math.min(payload.candles.length - 1, tradeWindowEnd) + 1,
+            }});
+          }} else {{
+            showBars({json.dumps(selected_range)});
+          }}
         }})();
       </script>
     </body>
@@ -1364,6 +1462,7 @@ def render_interactive_stock_chart(
     initial_range="252",
     growth_metrics=None,
     valuation_medians=None,
+    trade_overlay=None,
     height=760,
 ):
     components.html(
@@ -1379,6 +1478,7 @@ def render_interactive_stock_chart(
             initial_range=initial_range,
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
+            trade_overlay=trade_overlay,
         ),
         height=height,
         scrolling=False,

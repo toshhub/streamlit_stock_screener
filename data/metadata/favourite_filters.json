@@ -148,12 +148,28 @@
           "short_ma": 29,
           "long_ma": 50
         }
+      },
+      {
+        "id": 8,
+        "type": "ma_rising",
+        "params": {
+          "ma": 29
+        }
+      },
+      {
+        "id": 9,
+        "type": "custom_expression",
+        "params": {
+          "expression": "Candle[0].Open > SMA50"
+        }
       }
     ],
     "pattern": {
       "lookback_days": 120,
       "reversal_pct": 7.5,
-      "expressions": []
+      "expressions": [
+        "Candle[0].Open > SMA50"
+      ]
     }
   },
   "200 Support": {

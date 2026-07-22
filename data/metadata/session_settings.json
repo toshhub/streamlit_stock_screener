@@ -69,13 +69,16 @@
   "backtest_candles": 93,
   "gain_candles": 92,
   "backtest_selected_filters": [
-    "200 Support",
-    "50-200 Golden Cross Weekly Bullish"
+    "50 Support"
   ],
   "backtest_start_date": "2026-05-29",
-  "backtest_end_date": "2026-07-09",
+  "backtest_end_date": "2026-07-21",
   "market": "INDIA",
   "download_limit_us": 1225,
   "last_results_market": "INDIA",
-  "last_download_market": "INDIA"
+  "last_download_market": "INDIA",
+  "backtest_target_expression": "10%",
+  "backtest_stop_loss_expression": "SMA50-1%",
+  "backtest_closing_basis": false,
+  "backtest_green_candle_only": true
 }

@@ -71,9 +71,10 @@ Responsibilities:
 - Handles market selection in Data Management. India uses XLS; US uses the Nasdaq CSV.
 - Handles India Excel upload/replacement for the stock universe file.
 - Lets the user download fresh stock data for daily, weekly, or monthly timeframes.
-- Lets the user configure moving-average filters, P/E filters, ATH filters, green candle filters, and pattern-expression filters.
+- Lets the user configure moving-average filters, P/E filters, ATH filters, green candle filters, and repeatable Custom Filters containing expressions.
 - Saves selected filter settings and favourite filter sets.
 - Runs screening against downloaded JSON stock files.
+- Backtests saved filters as equal-weight portfolios and supports Target/Stop Loss sell expressions with optional closing-basis execution.
 - Generates charts for matching symbols.
 - Saves and reloads the last result set.
 - After a successful Run Screener, sets `st.session_state["switch_to_results_tab"] = True`, calls `st.rerun()`, and `switch_to_tab(3)` activates the Results tab on the next pass.
@@ -200,18 +201,17 @@ When changing this file:
 
 ### `pattern.py`
 
-Swing high / swing low detection and safe custom expression evaluation.
+Safe custom expression evaluation for price, moving-average, valuation, and candle rules.
 
 Responsibilities:
 
 - Loads price JSON data into a clean DataFrame.
-- Detects swing highs and lows within a configurable lookback window and reversal percentage.
 - Builds a context for pattern expressions using:
   - `P` = latest close price
-  - `H1`, `H2`, ... = most recent swing highs
-  - `L1`, `L2`, ... = most recent swing lows
-  - `DH1`, `DH2`, ... = days since swing highs
-  - `DL1`, `DL2`, ... = days since swing lows
+  - `PE` = current price-to-earnings ratio
+  - `SMA<days>` and the supported MA functions
+  - `Candle[0]`, negative historical offsets, inclusive candle ranges, and OHLC fields
+  - `IsGreen(Candle[offset])` for close-above-open checks
 - Validates expressions with Python AST before evaluation.
 - Allows only simple arithmetic, comparisons, boolean operations, and safe functions:
   - `abs`
@@ -223,7 +223,19 @@ Responsibilities:
 When changing this file:
 
 - Keep expression evaluation sandboxed; do not allow arbitrary builtins, attributes, imports, subscripts, or comprehensions unless intentionally secured.
-- If adding new pattern variables, update `is_pattern_variable`, `build_swing_context`, and UI/help text in `app.py`.
+- Candle notation is translated only into whitelisted internal functions before AST validation; keep the translation and runtime validators aligned.
+- If adding expression variables or functions, update validation, context construction, and UI/help text in `app.py`.
+
+### `backtest.py`
+
+Historical signal, exit, and portfolio calculations.
+
+- Buys matching stocks at the selected start-date close with equal weight per stock.
+- Resolves Target and Stop Loss expressions once using data through the buy candle; `Candle[0]` is therefore the buy-date candle.
+- A standalone `10%`/`-10%` is relative to buy price. A suffix such as `price - 1%` adjusts the preceding evaluated price.
+- Without Closing Basis, subsequent candle High/Low values trigger exits at the configured level. With Closing Basis, Close triggers the exit and becomes the booked price.
+- Exit checks begin on the candle after entry. If both levels occur in the same OHLC candle, Stop Loss wins because intraday ordering is unavailable.
+- After exit, realized gain remains fixed through the end date so each stock retains the same portfolio weight.
 
 ### `charting.py`
 

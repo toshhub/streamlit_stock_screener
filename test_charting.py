@@ -136,6 +136,32 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("valuation-favorable", result)
         self.assertIn("Below historical median", result)
 
+    def test_interactive_trade_overlay_adds_levels_markers_and_window(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(40)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                trade_overlay={
+                    "buyDate": "2020-01-12",
+                    "exitDate": "2020-01-20",
+                    "windowStart": "2020-01-02",
+                    "windowEnd": "2020-01-30",
+                    "buyPrice": 11,
+                    "targetPrice": 12.1,
+                    "stopPrice": 10.45,
+                    "exitPrice": 12.1,
+                    "exitReason": "Target",
+                },
+            )
+
+        self.assertIn('"tradeOverlay":{', result)
+        self.assertIn('"targetPrice":12.1', result)
+        self.assertIn("candleSeries.createPriceLine", result)
+        self.assertIn("LightweightCharts.createSeriesMarkers", result)
+        self.assertIn("tradeWindowStart", result)
+
     def test_ma_periods_are_sanitized_capped_and_defaulted(self):
         self.assertEqual(
             normalize_interactive_ma_periods([200, "50", 50.9, -1, 0, "bad", 1200]),
@@ -144,7 +170,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertEqual(normalize_interactive_ma_periods([]), [50, 200])
         self.assertEqual(
             normalize_interactive_ma_periods(range(1, 20)),
-            [1, 2, 3, 4, 5, 6, 7],
+            list(range(1, 20)),
         )
 
     def test_growth_section_is_hidden_when_values_are_unavailable(self):

@@ -10,12 +10,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from backtest import get_backtest_calendar_dates, run_backtest, split_favorite_filter
+from backtest import (
+    get_backtest_calendar_dates,
+    run_backtest,
+    split_favorite_filter,
+    validate_sell_price_expression,
+)
 from config import *
 from charting import (
     create_stock_chart,
@@ -49,6 +55,8 @@ from screener import (
     DEFAULT_FILTER_SET,
     FILTER_TYPE_DEFAULTS,
     FILTER_TYPE_LABELS,
+    custom_filter_expressions,
+    merge_legacy_expression_filters,
     normalize_filter_set,
     required_ma_periods,
     screen_json_file,
@@ -76,6 +84,27 @@ def query_param_value(name, default=None):
     if isinstance(value, list):
         return value[0] if value else default
     return value
+
+
+def persist_backtest_widget_settings():
+    """Persist only Backtest controls that currently exist in session state."""
+    updates = {"backtest_tf": "DAY"}
+    date_range = st.session_state.get("backtest_date_range_input")
+    if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
+        updates["backtest_start_date"] = date_range[0].isoformat()
+        updates["backtest_end_date"] = date_range[1].isoformat()
+
+    key_map = {
+        "backtest_selected_filters_input": "backtest_selected_filters",
+        "backtest_target_expression_input": "backtest_target_expression",
+        "backtest_stop_loss_expression_input": "backtest_stop_loss_expression",
+        "backtest_closing_basis_input": "backtest_closing_basis",
+        "backtest_green_candle_only_input": "backtest_green_candle_only",
+    }
+    for session_key, settings_key in key_map.items():
+        if session_key in st.session_state:
+            updates[settings_key] = st.session_state[session_key]
+    update_settings(updates)
 
 
 def scheduled_task_token():
@@ -211,6 +240,17 @@ def run_interactive_chart_view():
     has_previous = str(query_param_value("has_previous", "") or "").lower() in {"1", "true", "yes"}
     has_next = str(query_param_value("has_next", "") or "").lower() in {"1", "true", "yes"}
     chart_range = str(query_param_value("range", "252") or "252").lower()
+    trade_overlay = {
+        "buyDate": query_param_value("buy_date", None),
+        "exitDate": query_param_value("exit_date", None),
+        "windowStart": query_param_value("window_start", None),
+        "windowEnd": query_param_value("window_end", None),
+        "buyPrice": query_param_value("buy_price", None),
+        "targetPrice": query_param_value("target_price", None),
+        "stopPrice": query_param_value("stop_price", None),
+        "exitPrice": query_param_value("exit_price", None),
+        "exitReason": query_param_value("exit_reason", None),
+    }
     growth_metrics, valuation_medians = get_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
@@ -252,6 +292,7 @@ def run_interactive_chart_view():
             initial_range=chart_range,
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
+            trade_overlay=trade_overlay,
             height=1060 if embedded else 920,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -574,6 +615,67 @@ st.markdown(
         border-radius: 9px;
         background: var(--brand-soft);
         font-size: 1rem;
+    }
+    .sell-strategy-help {
+        position: relative;
+        display: inline-block;
+        margin-left: -0.35rem;
+        z-index: 30;
+    }
+    .sell-strategy-help summary {
+        display: grid;
+        place-items: center;
+        width: 1.35rem;
+        height: 1.35rem;
+        border: 1px solid #9ab8c4;
+        border-radius: 999px;
+        background: #ffffff;
+        color: var(--brand-dark);
+        font-size: 0.78rem;
+        font-weight: 850;
+        line-height: 1;
+        cursor: pointer;
+        list-style: none;
+        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+    }
+    .sell-strategy-help summary::-webkit-details-marker { display: none; }
+    .sell-strategy-help summary:hover,
+    .sell-strategy-help summary:focus-visible {
+        border-color: var(--brand);
+        background: var(--brand-soft);
+        outline: none;
+    }
+    .sell-strategy-help__popup {
+        position: absolute;
+        top: 1.75rem;
+        left: 50%;
+        width: min(25rem, 78vw);
+        padding: 0.9rem 1rem;
+        border: 1px solid #cbd9e4;
+        border-radius: 11px;
+        background: #ffffff;
+        color: #304860;
+        font-size: 0.78rem;
+        font-weight: 500;
+        line-height: 1.45;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+    }
+    .sell-strategy-help__popup strong {
+        display: block;
+        margin-bottom: 0.4rem;
+        color: var(--ink-strong);
+        font-size: 0.86rem;
+    }
+    .sell-strategy-help__popup ul {
+        margin: 0;
+        padding-left: 1.1rem;
+    }
+    .sell-strategy-help__popup li + li { margin-top: 0.3rem; }
+    .sell-strategy-help__popup code {
+        padding: 0.08rem 0.25rem;
+        border-radius: 4px;
+        background: #eef5f7;
+        color: #155e75;
     }
     .data-panel-subtitle {
         min-height: 2.4rem;
@@ -913,19 +1015,9 @@ def sync_pattern_reversal_from_number():
     st.session_state["pattern_reversal_pct_slider"] = st.session_state["pattern_reversal_pct_number"]
 
 
-def initialize_pattern_expression_state():
-    if "pattern_expression_filters" not in st.session_state:
-        saved_expressions = settings.get("pattern_expressions", [])
-        st.session_state["pattern_expression_filters"] = [
-            {"id": index, "expression": expression}
-            for index, expression in enumerate(saved_expressions, start=1)
-        ]
-        st.session_state["next_pattern_expression_id"] = len(saved_expressions) + 1
-
-
 def clear_filter_widget_state():
     for key in list(st.session_state.keys()):
-        if key.startswith("ma_filter_") or key.startswith("pattern_expression_"):
+        if key.startswith("ma_filter_"):
             del st.session_state[key]
 
 
@@ -938,7 +1030,11 @@ def favorite_ma_filter_set(filter_name):
         return None
     if isinstance(saved_filter, list):
         return normalize_filter_set(saved_filter, use_default=False)
-    return normalize_filter_set(saved_filter.get("ma_filter_set", []), use_default=False)
+    pattern_settings = saved_filter.get("pattern", {})
+    return merge_legacy_expression_filters(
+        saved_filter.get("ma_filter_set", []),
+        pattern_settings.get("expressions", []),
+    )
 
 
 def comparable_filter_set(filter_set):
@@ -983,12 +1079,11 @@ def apply_filter_selection_to_state(filter_name):
         ma_filter_set = saved_filter.get("ma_filter_set", [])
         pattern_settings = saved_filter.get("pattern", {})
 
-    loaded_ma_filter_set = normalize_filter_set(ma_filter_set, use_default=False)
-    loaded_expressions = [
-        str(expression).strip()
-        for expression in pattern_settings.get("expressions", [])
-        if str(expression).strip()
-    ]
+    loaded_ma_filter_set = merge_legacy_expression_filters(
+        ma_filter_set,
+        pattern_settings.get("expressions", []),
+    )
+    loaded_expressions = custom_filter_expressions(loaded_ma_filter_set)
     lookback_days = int(pattern_settings.get("lookback_days", settings.get("pattern_lookback_days", 120)))
     reversal_pct = float(pattern_settings.get("reversal_pct", settings.get("pattern_reversal_pct", 5.0)))
 
@@ -1000,11 +1095,6 @@ def apply_filter_selection_to_state(filter_name):
     st.session_state["next_filter_id"] = (
         max((int(item.get("id", 0)) for item in loaded_ma_filter_set), default=0) + 1
     )
-    st.session_state["pattern_expression_filters"] = [
-        {"id": index, "expression": expression}
-        for index, expression in enumerate(loaded_expressions, start=1)
-    ]
-    st.session_state["next_pattern_expression_id"] = len(loaded_expressions) + 1
     st.session_state["pattern_lookback_days_slider"] = lookback_days
     st.session_state["pattern_lookback_days_number"] = lookback_days
     st.session_state["pattern_reversal_pct_slider"] = reversal_pct
@@ -1354,6 +1444,16 @@ def expression_keyword_reference_html():
             ],
         ),
         (
+            "Candles",
+            [
+                ("Candle[0]", "The latest candle. Use Candle[-1] for the previous candle, Candle[-2] for two candles ago, and so on."),
+                ("Candle[-1].High", "The high price of the previous candle. Open, High, Low, and Close are supported."),
+                ("Candle[0..-4]", "A five-candle list ordered from the current candle back through four candles ago."),
+                ("Candle[0..-4].Low", "A list containing the Low price from each candle in the selected range."),
+                ("IsGreen(Candle[0])", "True when the selected candle's Close is greater than its Open."),
+            ],
+        ),
+        (
             "Logic & comparisons",
             [
                 ("and", "Both conditions must be true."),
@@ -1408,6 +1508,9 @@ def expression_keyword_reference_html():
         '<div class="expression-example">MA_MIN(50, 120) · lowest SMA50 in 120 days</div>'
         '<div class="expression-example">MA_MAX(50, 100) · highest SMA50 in 100 days</div>'
         '<div class="expression-example">MA_VAR(200, 150) &gt; 15 · max-to-min variation %</div>'
+        '<div class="expression-example">IsGreen(Candle[0]) · latest candle closed above its open</div>'
+        '<div class="expression-example">Candle[-1].High &gt; Candle[-2].High</div>'
+        '<div class="expression-example">min(Candle[0..-4].Low) &gt; SMA200</div>'
         '<div class="expression-example">P &gt; SMA200 and PE &lt; 30</div>'
         '<div class="expression-example">Positive decimal parameters are rounded to the nearest trading day.</div>'
         "</div>"
@@ -1429,9 +1532,35 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
         enriched_rows = []
         for row in rows:
             enriched_row = dict(row)
+            enriched_row.setdefault("Chart MA Periods", required_ma_periods(filter_set))
             stock_file = files_by_symbol.get(str(row.get("Symbol", "")))
-            if stock_file:
-                chart_path = create_stock_chart(stock_file, filter_set, date_markers=date_markers)
+            if stock_file and not enriched_row.get("ChartPath"):
+                row_markers = date_markers
+                if enriched_row.get("Buy Date") and enriched_row.get("Buy Price") is not None:
+                    exit_label = {
+                        "Target": "TARGET",
+                        "Stop Loss": "STOP",
+                        "End Date": "END",
+                    }.get(enriched_row.get("Exit Reason"), "END")
+                    row_markers = [
+                        {
+                            "label": "BUY",
+                            "date": pd.to_datetime(enriched_row["Buy Date"], dayfirst=True),
+                            "price": enriched_row["Buy Price"],
+                        },
+                        {
+                            "label": exit_label,
+                            "date": pd.to_datetime(enriched_row["Exit Date"], dayfirst=True),
+                            "price": enriched_row["Exit Price"],
+                        },
+                    ]
+                chart_path = create_stock_chart(
+                    stock_file,
+                    filter_set,
+                    date_markers=row_markers,
+                    window_start_date=enriched_row.get("Chart Start Date"),
+                    window_end_date=enriched_row.get("Chart End Date"),
+                )
                 if chart_path:
                     enriched_row["ChartPath"] = chart_path
                     enriched_row["ChartSource"] = stock_file.stem
@@ -1535,19 +1664,56 @@ def render_live_download_activity(market):
         st.rerun()
 
 
-def render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter, height=1200):
+def render_backtest_results_table(
+    summary_rows,
+    series_by_filter,
+    stock_details_by_filter,
+    interactive_market=None,
+    backtest_favorite_filter_sets=None,
+    height=1200,
+):
     payload = json.dumps(series_by_filter, default=str)
     chart_details_by_filter = {}
     for filter_name, rows in stock_details_by_filter.items():
+        fallback_ma_periods = []
+        if backtest_favorite_filter_sets and filter_name in backtest_favorite_filter_sets:
+            filter_set, _ = split_favorite_filter(backtest_favorite_filter_sets[filter_name])
+            fallback_ma_periods = required_ma_periods(filter_set)
         chart_rows = []
         for row in rows:
             chart_row = dict(row)
+            chart_row.setdefault("Chart MA Periods", fallback_ma_periods)
             chart_path = chart_row.get("ChartPath")
             if chart_path:
                 try:
                     chart_row["ChartSrc"] = image_to_data_uri(chart_path)
                 except OSError:
                     chart_row["ChartSrc"] = ""
+            chart_source = chart_row.get("ChartSource") or chart_row.get("Symbol")
+            if chart_source and interactive_market:
+                query = {
+                    "interactive_chart": chart_source,
+                    "market": interactive_market,
+                    "embedded": "1",
+                    "range": "all",
+                    "buy_date": pd.to_datetime(chart_row.get("Buy Date"), dayfirst=True).strftime("%Y-%m-%d"),
+                    "exit_date": pd.to_datetime(chart_row.get("Exit Date"), dayfirst=True).strftime("%Y-%m-%d"),
+                    "window_start": chart_row.get("Chart Start Date"),
+                    "window_end": chart_row.get("Chart End Date"),
+                    "buy_price": chart_row.get("Chart Buy Price", chart_row.get("Buy Price")),
+                    "exit_price": chart_row.get("Chart Exit Price", chart_row.get("Exit Price")),
+                    "exit_reason": chart_row.get("Exit Reason"),
+                }
+                ma_periods = chart_row.get("Chart MA Periods") or []
+                if ma_periods:
+                    query["ma"] = ",".join(str(period) for period in ma_periods)
+                target_price = chart_row.get("Chart Target Price", chart_row.get("Target Price"))
+                stop_price = chart_row.get("Chart Stop Loss Price", chart_row.get("Stop Loss Price"))
+                if target_price is not None:
+                    query["target_price"] = target_price
+                if stop_price is not None:
+                    query["stop_price"] = stop_price
+                chart_row["InteractiveSrc"] = "?" + urlencode(query)
             chart_rows.append(chart_row)
         chart_details_by_filter[filter_name] = chart_rows
     stock_payload = json.dumps(chart_details_by_filter, default=str)
@@ -1672,6 +1838,23 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         text-decoration: underline;
       }}
       .stock-chart-link.active {{ background: #e0e7ff; border-radius: 4px; color: #1d4ed8; }}
+      .stock-symbol-actions {{ align-items: center; display: inline-flex; gap: 8px; }}
+      .stock-interactive-link {{
+        align-items: center;
+        background: #fff7e8;
+        border: 1px solid #f0b15f;
+        border-radius: 6px;
+        color: #b65d18;
+        cursor: pointer;
+        display: inline-grid;
+        flex: 0 0 22px;
+        height: 22px;
+        padding: 0;
+        place-items: center;
+        width: 22px;
+      }}
+      .stock-interactive-link:hover, .stock-interactive-link.active {{ background: #ffedd2; border-color: #df7a2c; }}
+      .stock-interactive-link svg {{ height: 13px; pointer-events: none; width: 13px; }}
       .backtest-table th.sortable {{
         color: #2563eb;
         cursor: pointer;
@@ -1697,6 +1880,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         z-index: 50;
       }}
       .stock-chart-panel img {{ display: block; height: auto; max-height: 46vh; object-fit: contain; width: 100%; }}
+      .stock-interactive-frame {{ border: 0; display: block; height: 50vh; min-height: 420px; width: 100%; }}
       .stock-chart-frame {{ position: relative; touch-action: pan-y; user-select: none; }}
       .stock-chart-title {{ color: #334155; font-size: 13px; font-weight: 700; margin-bottom: 6px; text-align: center; }}
       .stock-chart-title-row {{
@@ -1912,14 +2096,24 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
           const endGain = stockValue(row, "Gain at End Date");
           const peakGain = stockValue(row, "Peak Gain %");
           const symbol = escapeHtml(row["Symbol"]);
-          const symbolCell = row["ChartSrc"]
+          const exitReason = escapeHtml(row["Exit Reason"] || "End Date");
+          const exitDate = escapeHtml(row["Exit Date"] || "");
+          const exitPrice = stockValue(row, "Exit Price");
+          const staticSymbol = row["ChartSrc"]
             ? `<button class="stock-chart-link" data-symbol="${{symbol}}" data-chart-src="${{row["ChartSrc"]}}">${{symbol}}</button>`
             : `<span class="stock-symbol">${{symbol}}</span>`;
+          const interactiveButton = row["InteractiveSrc"]
+            ? `<button class="stock-interactive-link" data-symbol="${{symbol}}" data-interactive-src="${{escapeHtml(row["InteractiveSrc"])}}" title="Show ${{symbol}} interactive chart" aria-label="Show ${{symbol}} interactive chart"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v4M3 9v5M1.5 6h3v3h-3zM8 1v3M8 8v5M6.5 4h3v4h-3zM13 3v5M13 11v3M11.5 8h3v3h-3z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg></button>`
+            : "";
+          const symbolCell = `<span class="stock-symbol-actions">${{staticSymbol}}${{interactiveButton}}</span>`;
           return `
             <tr>
               <td>${{symbolCell}}</td>
               <td class="${{gainClass(endGain)}}">${{signed(endGain)}}</td>
               <td class="${{gainClass(peakGain)}}">${{signed(peakGain)}}</td>
+              <td>${{exitReason}}</td>
+              <td>${{exitDate}}</td>
+              <td>${{exitPrice.toFixed(2)}}</td>
             </tr>
           `;
         }}).join("");
@@ -1936,7 +2130,7 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         if (!chartPanel) return;
         const ownerSection = section || chartPanel.closest(".stock-detail-section");
         if (ownerSection) {{
-          ownerSection.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
+          ownerSection.querySelectorAll(".stock-chart-link, .stock-interactive-link").forEach(item => item.classList.remove("active"));
         }}
         resetStockChartPanel(chartPanel);
       }}
@@ -1952,8 +2146,8 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             resetStockChartPanel(panel);
           }}
         }});
-        document.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
-        section.querySelectorAll(".stock-chart-link").forEach(item => item.classList.remove("active"));
+        document.querySelectorAll(".stock-chart-link, .stock-interactive-link").forEach(item => item.classList.remove("active"));
+        section.querySelectorAll(".stock-chart-link, .stock-interactive-link").forEach(item => item.classList.remove("active"));
         button.classList.add("active");
         chartPanel.classList.add("active");
         const symbol = escapeHtml(button.dataset.symbol);
@@ -1995,6 +2189,66 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         bindStockChartSwipe(section, chartPanel.querySelector(".stock-chart-frame"));
       }}
 
+      function renderInteractiveStockChart(section, button) {{
+        const chartPanel = section.querySelector(".stock-chart-panel");
+        const buttons = Array.from(section.querySelectorAll(".stock-interactive-link"));
+        const index = buttons.indexOf(button);
+        if (!chartPanel || !button || index < 0) return;
+        document.querySelectorAll(".stock-chart-panel").forEach(panel => {{
+          if (panel !== chartPanel) resetStockChartPanel(panel);
+        }});
+        document.querySelectorAll(".stock-chart-link, .stock-interactive-link").forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        chartPanel.classList.add("active");
+        const symbol = escapeHtml(button.dataset.symbol);
+        const prevDisabled = index <= 0 ? "disabled" : "";
+        const nextDisabled = index >= buttons.length - 1 ? "disabled" : "";
+        const separator = button.dataset.interactiveSrc.includes("?") ? "&" : "?";
+        const interactiveSrc = button.dataset.interactiveSrc + separator
+          + "position=" + encodeURIComponent(index + 1)
+          + "&total=" + encodeURIComponent(buttons.length)
+          + "&has_previous=" + (index > 0 ? "1" : "0")
+          + "&has_next=" + (index < buttons.length - 1 ? "1" : "0");
+        chartPanel.innerHTML = `
+          <div class="stock-chart-frame">
+            <div class="stock-chart-title-row">
+              <span class="stock-chart-symbol">${{symbol}} interactive trade chart</span>
+              <span class="stock-chart-counter">${{index + 1}} / ${{buttons.length}}</span>
+              <button type="button" class="stock-chart-close" data-chart-close aria-label="Close chart">&times;</button>
+            </div>
+            <button type="button" class="stock-chart-nav stock-chart-prev" data-interactive-nav="prev" aria-label="Previous interactive chart" ${{prevDisabled}}>&lsaquo;</button>
+            <button type="button" class="stock-chart-nav stock-chart-next" data-interactive-nav="next" aria-label="Next interactive chart" ${{nextDisabled}}>&rsaquo;</button>
+            <iframe class="stock-interactive-frame" src="${{interactiveSrc}}" title="${{symbol}} interactive trade chart"></iframe>
+          </div>
+        `;
+        const closeButton = chartPanel.querySelector("[data-chart-close]");
+        if (closeButton) closeButton.addEventListener("click", event => {{
+          event.preventDefault();
+          event.stopPropagation();
+          closeStockChart(section);
+        }});
+        chartPanel.querySelectorAll("[data-interactive-nav]").forEach(navButton => {{
+          navButton.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            const offset = navButton.dataset.interactiveNav === "next" ? 1 : -1;
+            const nextIndex = Math.max(0, Math.min(buttons.length - 1, index + offset));
+            if (nextIndex !== index) renderInteractiveStockChart(section, buttons[nextIndex]);
+          }});
+        }});
+      }}
+
+      function navigateActiveInteractiveChart(offset) {{
+        const activeButton = document.querySelector(".stock-interactive-link.active");
+        if (!activeButton) return;
+        const section = activeButton.closest(".stock-detail-section");
+        if (!section) return;
+        const buttons = Array.from(section.querySelectorAll(".stock-interactive-link"));
+        const index = buttons.indexOf(activeButton);
+        const nextIndex = Math.max(0, Math.min(buttons.length - 1, index + offset));
+        if (nextIndex !== index) renderInteractiveStockChart(section, buttons[nextIndex]);
+      }}
+
       function bindStockChartSwipe(section, frame) {{
         if (!frame) return;
         let touchStartX = 0;
@@ -2023,6 +2277,13 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
             event.preventDefault();
             event.stopPropagation();
             renderStockChart(section, button);
+          }});
+        }});
+        section.querySelectorAll(".stock-interactive-link").forEach(button => {{
+          button.addEventListener("click", event => {{
+            event.preventDefault();
+            event.stopPropagation();
+            renderInteractiveStockChart(section, button);
           }});
         }});
       }}
@@ -2059,6 +2320,17 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
         }});
       }}
 
+      window.addEventListener("message", event => {{
+        const message = event && event.data;
+        if (!message || message.source !== "nse-interactive-chart") return;
+        if (message.action === "previous") navigateActiveInteractiveChart(-1);
+        else if (message.action === "next") navigateActiveInteractiveChart(1);
+        else if (message.action === "close") {{
+          const activeButton = document.querySelector(".stock-interactive-link.active");
+          if (activeButton) closeStockChart(activeButton.closest(".stock-detail-section"));
+        }}
+      }});
+
       document.addEventListener("keydown", event => {{
         if (event.key === "Escape") {{
           closeStockChart();
@@ -2094,6 +2366,9 @@ def render_backtest_results_table(summary_rows, series_by_filter, stock_details_
                     <th class="sortable" data-sort-key="Symbol" data-label="Stock">Stock</th>
                     <th class="sortable" data-sort-key="Gain at End Date" data-label="Gain at End Date" data-sort-dir="desc">Gain at End Date v</th>
                     <th class="sortable" data-sort-key="Peak Gain %" data-label="Peak Gain">Peak Gain</th>
+                    <th>Exit Reason</th>
+                    <th>Exit Date</th>
+                    <th>Exit Price</th>
                   </tr>
                 </thead>
                 <tbody>${{stockRowsHtml(rows)}}</tbody>
@@ -2544,6 +2819,10 @@ with tab2:
         loaded_filter_set = normalize_filter_set(settings.get("screener_filter_set"), use_default=False)
     else:
         loaded_filter_set = normalize_filter_set(DEFAULT_FILTER_SET)
+    loaded_filter_set = merge_legacy_expression_filters(
+        loaded_filter_set,
+        settings.get("pattern_expressions", []),
+    )
 
     if "current_filter_set" not in st.session_state:
         st.session_state["current_filter_set"] = deepcopy(loaded_filter_set)
@@ -2651,7 +2930,7 @@ with tab2:
                 favorite_options,
                 key="_favorite_select_widget",
                 on_change=on_favorite_filter_selected,
-                help="Select a saved favorite filter set to load its MA and expression filters.",
+                help="Select a saved favorite filter set to load all of its filters.",
             )
             # Ensure the save-name field is pre-filled with the currently-selected favourite
             if "_favorite_name_to_save" not in st.session_state:
@@ -2678,7 +2957,7 @@ with tab2:
     with add_filter_panel:
         st.markdown(
             '<div class="data-panel-heading"><span>＋</span>Add a Filter</div>'
-            '<p class="data-panel-subtitle">Choose a technical or valuation rule for the current set.</p>',
+            '<p class="data-panel-subtitle">Choose a technical, valuation, or custom expression rule.</p>',
             unsafe_allow_html=True,
         )
         filter_type_to_add = st.selectbox(
@@ -2710,9 +2989,13 @@ with tab2:
     current_filter_heading = st.empty()
 
     if not current_filter_set:
-        st.info("No MA filters selected. Screening will pass stocks through this tab.")
+        st.info("No filters selected. Screening will pass stocks through this tab.")
 
     rendered_filter_set = []
+    valid_pattern_expressions = []
+    invalid_pattern_errors = []
+    pattern_lookback_days = int(settings.get("pattern_lookback_days", 120))
+    pattern_reversal_pct = float(settings.get("pattern_reversal_pct", 5.0))
     filter_grid_columns = st.columns(2)
 
     for index, filter_item in enumerate(current_filter_set, start=1):
@@ -2751,7 +3034,37 @@ with tab2:
             st.rerun()
 
         with filter_expander:
-            if filter_type == "ma_rising":
+            if filter_type == "custom_expression":
+                expression = st.text_input(
+                    "Expression",
+                    value=str(params.get("expression", "")),
+                    key=f"{filter_widget_prefix}_{filter_id}_expression_v{widget_key_version}",
+                    placeholder="e.g. P > SMA200 and ROI(50) > 0",
+                    help="Every Custom Filter must evaluate to true for a stock to match.",
+                    on_change=mark_current_filter_custom,
+                )
+                params["expression"] = expression
+                if not expression.strip():
+                    st.info("Enter an expression for this Custom Filter.")
+                    invalid_pattern_errors.append(
+                        f"Custom Filter {index}: Expression is required."
+                    )
+                else:
+                    is_valid, error = validate_expression(expression)
+                    if is_valid:
+                        st.success("✅ Valid and supported expression")
+                        valid_pattern_expressions.append(expression.strip())
+                    else:
+                        st.error(f"❌ {error}")
+                        invalid_pattern_errors.append(f"Custom Filter {index}: {error}")
+                st.markdown(
+                    '<div class="data-panel-heading"><span>⌨️</span>Allowed Keywords</div>'
+                    '<p class="data-panel-subtitle">Tap or click any keyword to see what it means.</p>'
+                    + expression_keyword_reference_html(),
+                    unsafe_allow_html=True,
+                )
+
+            elif filter_type == "ma_rising":
                 params["ma"] = int(st.number_input(
                     "MA",
                     min_value=2,
@@ -3011,122 +3324,9 @@ with tab2:
 
     update_settings({
         "screener_filter_set": filter_set,
-    })
-
-    # ===== Expression Based Filtering =====
-    initialize_pattern_expression_state()
-
-    pattern_lookback_days = int(
-        st.session_state.get("pattern_lookback_days_number", settings.get("pattern_lookback_days", 120))
-    )
-    pattern_reversal_pct = float(
-        st.session_state.get("pattern_reversal_pct_number", settings.get("pattern_reversal_pct", 5.0))
-    )
-    pattern_expression_filters = st.session_state["pattern_expression_filters"]
-
-    st.markdown(
-        '<div class="screener-section-heading">'
-        '<div class="screener-section-heading__title">📝 Expression Filters</div>'
-        '</div>'
-        '<p class="screener-section-copy">Build formulas with price, PE, moving averages, crosses, and MA statistics.</p>',
-        unsafe_allow_html=True,
-    )
-
-    if pattern_expression_filters:
-        # Keep the keyword guide beside the expression builder. The [1.35, 1]
-        # ratio is reserved by StreamlitFilterProxy for the vertically stacked
-        # Quick Run/Add Filter layout near the top of the screener.
-        expression_col, reference_col = st.columns([1.4, 1])
-        with expression_col:
-            expression_panel = st.container(border=True)
-    else:
-        expression_panel = st.container(border=True)
-
-    with expression_panel:
-        st.markdown(
-            '<div class="data-panel-heading"><span>📝</span>Expressions</div>'
-            '<p class="data-panel-subtitle">Every expression must evaluate to true for a stock to match.</p>',
-            unsafe_allow_html=True,
-        )
-        add_expression = st.button(
-            "➕ Add Expression",
-            key="add_pattern_filter",
-            use_container_width=True,
-        )
-    if add_expression:
-        mark_current_filter_custom()
-        st.session_state["pattern_expression_filters"].append({
-            "id": st.session_state["next_pattern_expression_id"],
-            "expression": "",
-        })
-        st.session_state["next_pattern_expression_id"] += 1
-        st.rerun()
-
-    valid_pattern_expressions = []
-    invalid_pattern_errors = []
-
-    if not pattern_expression_filters:
-        with expression_panel:
-            st.info("No expressions selected. Click Add Expression to build a custom rule.")
-    else:
-        with reference_col:
-            with st.container(border=True):
-                st.markdown(
-                    '<div class="data-panel-heading"><span>⌨️</span>Allowed Keywords</div>'
-                    '<p class="data-panel-subtitle">Tap or click any keyword to see what it means.</p>'
-                    + expression_keyword_reference_html(),
-                    unsafe_allow_html=True,
-                )
-
-    for index, expression_filter in enumerate(pattern_expression_filters, start=1):
-        filter_id = expression_filter["id"]
-        with expression_panel:
-            col1, col2 = st.columns([5, 1])
-        with col1:
-            expression = st.text_input(
-                f"Expression {index}",
-                value=expression_filter.get("expression", ""),
-                key=f"pattern_expression_{filter_id}",
-                placeholder="e.g. P > SMA200 and ROI(50) > 0",
-                help="Use the allowed-keyword reference shown beside this form.",
-                on_change=mark_current_filter_custom,
-            )
-        with col2:
-            remove_expression = st.button(
-                "❌ Remove",
-                key=f"remove_pattern_expression_{filter_id}",
-            )
-
-        if remove_expression:
-            mark_current_filter_custom()
-            st.session_state["pattern_expression_filters"] = [
-                item for item in pattern_expression_filters if item["id"] != filter_id
-            ]
-            st.rerun()
-
-        expression_filter["expression"] = expression
-        if not expression.strip():
-            with expression_panel:
-                st.info("Blank expression ignored.")
-            continue
-
-        is_valid, error = validate_expression(expression)
-        if is_valid:
-            with expression_panel:
-                st.success("✅ Valid expression")
-            valid_pattern_expressions.append(expression.strip())
-        else:
-            with expression_panel:
-                st.error(f"❌ {error}")
-            invalid_pattern_errors.append(f"Expression {index}: {error}")
-
-    update_settings({
         "pattern_lookback_days": pattern_lookback_days,
         "pattern_reversal_pct": pattern_reversal_pct,
-        "pattern_expressions": [
-            item.get("expression", "")
-            for item in st.session_state["pattern_expression_filters"]
-        ],
+        "pattern_expressions": custom_filter_expressions(filter_set),
     })
 
     # ===== Favorite Filter Management =====
@@ -3142,7 +3342,7 @@ with tab2:
         with st.container(border=True):
             st.markdown(
                 '<div class="data-panel-heading"><span>💾</span>Save Current Set</div>'
-                '<p class="data-panel-subtitle">Store all current MA and expression filters under a memorable name.</p>',
+                '<p class="data-panel-subtitle">Store all current filters under a memorable name.</p>',
                 unsafe_allow_html=True,
             )
             favorite_name = st.text_input(
@@ -3190,10 +3390,7 @@ with tab2:
                 "pattern": {
                     "lookback_days": pattern_lookback_days,
                     "reversal_pct": pattern_reversal_pct,
-                    "expressions": [
-                        item.get("expression", "")
-                        for item in st.session_state["pattern_expression_filters"]
-                    ],
+                    "expressions": custom_filter_expressions(filter_set),
                 },
             }
             save_favourite_filter_sets(favorite_filter_sets)
@@ -3329,13 +3526,27 @@ with tab3:
                 else max_date
             )
 
+            if "backtest_date_range_input" not in st.session_state:
+                st.session_state["backtest_date_range_input"] = (default_start, default_end)
+            else:
+                saved_range = st.session_state["backtest_date_range_input"]
+                if (
+                    not isinstance(saved_range, (tuple, list))
+                    or len(saved_range) != 2
+                    or saved_range[0] < min_date
+                    or saved_range[1] > max_date
+                    or saved_range[0] >= saved_range[1]
+                ):
+                    st.session_state["backtest_date_range_input"] = (default_start, default_end)
+
             selected_start_date, selected_end_date = st.slider(
                 "Backtest date range",
                 min_value=min_date,
                 max_value=max_date,
-                value=(default_start, default_end),
                 format="DD-MM-YYYY",
                 help="Find stocks on the start date, then calculate the equal-weight portfolio gain through the end date.",
+                key="backtest_date_range_input",
+                on_change=persist_backtest_widget_settings,
             )
 
             start_candidates = [date for date in available_dates if date >= selected_start_date]
@@ -3353,24 +3564,142 @@ with tab3:
             name for name in settings.get("backtest_selected_filters", favorite_names[:1])
             if name in favorite_names
         ]
+        if "backtest_selected_filters_input" not in st.session_state:
+            st.session_state["backtest_selected_filters_input"] = (
+                saved_backtest_filters or favorite_names[:1]
+            )
+        else:
+            available_session_filters = [
+                name
+                for name in st.session_state["backtest_selected_filters_input"]
+                if name in favorite_names
+            ]
+            if available_session_filters != st.session_state["backtest_selected_filters_input"]:
+                st.session_state["backtest_selected_filters_input"] = available_session_filters
+
         selected_backtest_filters = st.multiselect(
             "Favorite filters",
             favorite_names,
-            default=saved_backtest_filters or favorite_names[:1],
+            key="backtest_selected_filters_input",
             help="Select one or more saved favorite filter sets to compare.",
+            on_change=persist_backtest_widget_settings,
         )
 
-        update_settings({
-            "backtest_tf": backtest_tf,
-            "backtest_start_date": selected_start_date.isoformat() if selected_start_date else None,
-            "backtest_end_date": selected_end_date.isoformat() if selected_end_date else None,
-            "backtest_selected_filters": selected_backtest_filters,
-        })
+        if "backtest_green_candle_only_input" not in st.session_state:
+            st.session_state["backtest_green_candle_only_input"] = bool(
+                settings.get("backtest_green_candle_only", False)
+            )
+        backtest_green_candle_only = st.toggle(
+            "🟢 Green Candle on Buy Date",
+            key="backtest_green_candle_only_input",
+            help=(
+                "Apply to every selected favorite filter. Only stocks whose Buy Date candle "
+                "has Close greater than Open will be included in the backtest."
+            ),
+            on_change=persist_backtest_widget_settings,
+        )
+
+        if "backtest_target_expression_input" not in st.session_state:
+            st.session_state["backtest_target_expression_input"] = str(
+                settings.get("backtest_target_expression", "")
+            )
+        if "backtest_stop_loss_expression_input" not in st.session_state:
+            st.session_state["backtest_stop_loss_expression_input"] = str(
+                settings.get("backtest_stop_loss_expression", "")
+            )
+        if "backtest_closing_basis_input" not in st.session_state:
+            st.session_state["backtest_closing_basis_input"] = bool(
+                settings.get("backtest_closing_basis", False)
+            )
+
+        with st.container(border=True):
+            st.markdown(
+                '<div class="data-panel-heading"><span>🎯</span>Sell Strategy'
+                '<details class="sell-strategy-help">'
+                '<summary aria-label="Sell Strategy help" title="Sell Strategy help">?</summary>'
+                '<div class="sell-strategy-help__popup">'
+                '<strong>Sell Strategy Help</strong>'
+                '<ul>'
+                '<li><code>10%</code> sets a price 10% above the buy price.</li>'
+                '<li><code>-10%</code> sets a price 10% below the buy price.</li>'
+                '<li><code>min(Candle[0..-1].Low) - 1%</code> sets a price 1% below the lower Low of the buy candle and its previous candle.</li>'
+                '<li>In these expressions, <code>Candle[0]</code> is always the buy-date candle.</li>'
+                '</ul>'
+                '</div>'
+                '</details>'
+                '</div>'
+                '<p class="data-panel-subtitle">Book each equal-weight position when its target or stop loss is hit.</p>',
+                unsafe_allow_html=True,
+            )
+            target_col, stop_col = st.columns(2)
+            with target_col:
+                backtest_target_expression = st.text_input(
+                    "Target",
+                    key="backtest_target_expression_input",
+                    placeholder="e.g. 10% or Candle[0].High + 2%",
+                    help="10% means 10% above the buy price. A candle expression is evaluated once on the buy date.",
+                    on_change=persist_backtest_widget_settings,
+                )
+                target_is_valid, target_error = validate_sell_price_expression(
+                    backtest_target_expression
+                )
+                if not backtest_target_expression.strip():
+                    st.caption("Optional — leave blank for no target exit.")
+                elif target_is_valid:
+                    st.success("✅ Valid and supported expression")
+                else:
+                    st.error(f"❌ {target_error}")
+            with stop_col:
+                backtest_stop_loss_expression = st.text_input(
+                    "Stop Loss",
+                    key="backtest_stop_loss_expression_input",
+                    placeholder="e.g. -10% or min(Candle[0..-1].Low) - 1%",
+                    help="-10% means 10% below the buy price. Candle[0] is the buy-date candle.",
+                    on_change=persist_backtest_widget_settings,
+                )
+                stop_is_valid, stop_error = validate_sell_price_expression(
+                    backtest_stop_loss_expression
+                )
+                if not backtest_stop_loss_expression.strip():
+                    st.caption("Optional — leave blank for no stop-loss exit.")
+                elif stop_is_valid:
+                    st.success("✅ Valid and supported expression")
+                else:
+                    st.error(f"❌ {stop_error}")
+            backtest_closing_basis = st.checkbox(
+                "Closing Basis",
+                key="backtest_closing_basis_input",
+                help=(
+                    "Enabled: use Close >= Target or Close <= Stop Loss and book at that close. "
+                    "Disabled: use High/Low touches and book at the evaluated target/stop price."
+                ),
+                on_change=persist_backtest_widget_settings,
+            )
+            st.caption(
+                "Exit checks start on the candle after the buy date. If Target and Stop Loss are both touched "
+                "inside the same candle, Stop Loss is applied first."
+            )
+        sell_strategy = {
+            "target": backtest_target_expression.strip(),
+            "stop_loss": backtest_stop_loss_expression.strip(),
+            "closing_basis": backtest_closing_basis,
+        }
 
         run_backtest_clicked = st.button("Backtest", type="primary", use_container_width=True)
 
         if run_backtest_clicked:
-            if not selected_backtest_filters:
+            persist_backtest_widget_settings()
+            sell_expression_errors = []
+            for label, expression, is_valid, error in (
+                ("Target", sell_strategy["target"], target_is_valid, target_error),
+                ("Stop Loss", sell_strategy["stop_loss"], stop_is_valid, stop_error),
+            ):
+                if not is_valid:
+                    sell_expression_errors.append(f"{label}: {error}")
+
+            if sell_expression_errors:
+                st.error("Fix the Sell Strategy: " + " ".join(sell_expression_errors))
+            elif not selected_backtest_filters:
                 st.error("Select at least one favorite filter.")
             elif not stock_files:
                 st.error("No stock data available for the selected timeframe.")
@@ -3402,6 +3731,8 @@ with tab3:
                         progress_callback=show_backtest_progress,
                         benchmark_file=benchmark_file,
                         market=current_market,
+                        sell_strategy=sell_strategy,
+                        green_candle_only=backtest_green_candle_only,
                     )
                     stock_details_by_filter = attach_backtest_chart_paths(
                         stock_details_by_filter,
@@ -3437,6 +3768,8 @@ with tab3:
                     effective_start_date.strftime("%d-%m-%Y"),
                     effective_end_date.strftime("%d-%m-%Y"),
                 )
+                st.session_state["backtest_result_sell_strategy"] = dict(sell_strategy)
+                st.session_state["backtest_result_green_candle_only"] = backtest_green_candle_only
 
         summary_rows = st.session_state.get("backtest_summary_rows", [])
         series_by_filter = st.session_state.get("backtest_series_by_filter", {})
@@ -3446,7 +3779,22 @@ with tab3:
             st.info(
                 f"Showing equal-weight portfolio variation for stocks found on {result_start} through {result_end}."
             )
-            render_backtest_results_table(summary_rows, series_by_filter, stock_details_by_filter)
+            result_sell_strategy = st.session_state.get("backtest_result_sell_strategy", {})
+            if result_sell_strategy.get("target") or result_sell_strategy.get("stop_loss"):
+                basis_label = "closing basis" if result_sell_strategy.get("closing_basis") else "intraday High/Low basis"
+                st.caption(
+                    f"Sell Strategy — Target: {result_sell_strategy.get('target') or 'not set'}; "
+                    f"Stop Loss: {result_sell_strategy.get('stop_loss') or 'not set'}; {basis_label}."
+                )
+            if st.session_state.get("backtest_result_green_candle_only", False):
+                st.caption("Green Candle filter applied: Buy Date Close must be greater than Open.")
+            render_backtest_results_table(
+                summary_rows,
+                series_by_filter,
+                stock_details_by_filter,
+                interactive_market=current_market,
+                backtest_favorite_filter_sets=favorite_filter_sets,
+            )
 
 
 # =====================================================================
