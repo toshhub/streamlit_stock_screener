@@ -9,9 +9,11 @@ from urllib.parse import quote, urlencode
 
 from matplotlib.figure import Figure
 import pandas as pd
+import streamlit as st
 import streamlit.components.v1 as components
 
 from config import CHARTS_DIR
+from price_alerts import create_price_alert
 from screener import required_ma_periods
 
 
@@ -26,6 +28,11 @@ MA_COLORS = [
 ]
 
 INTERACTIVE_CHART_DEFAULT_MAS = [50, 200]
+
+_CURSOR_ALERT_COMPONENT = components.declare_component(
+    "cursor_alert_chart",
+    path=str(Path(__file__).parent / "cursor_alert_component"),
+)
 
 
 def load_price_data(path):
@@ -509,6 +516,7 @@ def interactive_stock_chart_html(
     growth_metrics=None,
     valuation_medians=None,
     trade_overlay=None,
+    alert_market="INDIA",
 ):
     payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
     normalized_overlay = {}
@@ -531,6 +539,14 @@ def interactive_stock_chart_html(
     payload["tradeOverlay"] = normalized_overlay
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
+    safe_alert_market = html.escape(str(alert_market or "INDIA").strip().upper(), quote=True)
+    latest_close = None
+    if payload.get("candles"):
+        try:
+            latest_close = float(payload["candles"][-1].get("close"))
+        except (TypeError, ValueError):
+            latest_close = None
+    latest_close_value = f"{latest_close:.8g}" if latest_close is not None else ""
     pe_badge_html = ""
     current_pe = None
     try:
@@ -654,6 +670,14 @@ def interactive_stock_chart_html(
             f'<div class="growth-grid">{"".join(cards)}</div>'
             "</aside></div>"
         )
+    price_alert_html = (
+        '<div class="chart-price-alert-form">'
+        f'<button class="chart-cursor-alert" id="price-alert-at-cursor" type="button" '
+        f'data-symbol="{html.escape(str(symbol), quote=True)}" data-market="{safe_alert_market}" '
+        f'data-current-price="{latest_close_value}" aria-disabled="true" '
+        'aria-label="Add price alert at cursor" title="Move the cursor to a price, then click to add an alert">'
+        '<span aria-hidden="true">+</span></button></div>'
+    )
     match_navigation_html = ""
     if match_position and match_total:
         previous_disabled = "" if has_previous else "disabled"
@@ -929,6 +953,42 @@ def interactive_stock_chart_html(
           border: 1px solid var(--border);
           background: var(--surface);
         }}
+        .chart-price-alert-form {{
+          position: absolute;
+          inset: 0;
+          z-index: 12;
+          pointer-events: none;
+        }}
+        .chart-cursor-alert {{
+          position: absolute;
+          top: 50%;
+          right: 5px;
+          display: grid;
+          place-items: center;
+          width: 25px;
+          height: 25px;
+          padding: 0;
+          transform: translateY(-50%);
+          border: 1px solid #b7791f;
+          border-radius: 50%;
+          background: #fff7df;
+          color: #925b0b;
+          box-shadow: 0 2px 8px rgba(71, 48, 10, 0.22);
+          cursor: pointer;
+          font-size: 20px;
+          font-weight: 700;
+          line-height: 1;
+          text-decoration: none;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.12s ease, transform 0.12s ease;
+        }}
+        .chart-cursor-alert.is-ready {{ opacity: 1; pointer-events: auto; }}
+        .chart-cursor-alert.is-ready:hover {{
+          transform: translateY(-50%) scale(1.08);
+          background: #ffedb3;
+        }}
+        .chart-cursor-alert:focus-visible {{ outline: 3px solid rgba(23, 107, 135, 0.28); }}
         .chart-loading {{
           position: absolute;
           inset: 0;
@@ -1224,7 +1284,8 @@ def interactive_stock_chart_html(
         @media (prefers-reduced-motion: reduce) {{
           .fundamentals-toggle,
           .fundamentals-scrim,
-          .fundamentals-panel {{ transition: none; }}
+          .fundamentals-panel,
+          .chart-cursor-alert {{ transition: none; }}
         }}
       </style>
     </head>
@@ -1255,6 +1316,7 @@ def interactive_stock_chart_html(
         </header>
         <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC, gain vs previous candle, and MA values.</div>
         <section id="chart" aria-label="{safe_symbol} interactive stock chart">
+          {price_alert_html}
           <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
         </section>
         <footer class="chart-footer">
@@ -1275,6 +1337,28 @@ def interactive_stock_chart_html(
           const fundamentalsPanel = document.getElementById("fundamentals-panel");
           const fundamentalsClose = document.getElementById("fundamentals-close");
           const fundamentalsScrim = document.getElementById("fundamentals-scrim");
+          const priceAlertButton = document.getElementById("price-alert-at-cursor");
+
+          if (priceAlertButton) {{
+            priceAlertButton.addEventListener("click", function(event) {{
+              event.preventDefault();
+              if (priceAlertButton.getAttribute("aria-disabled") === "true") return;
+              const price = Number(priceAlertButton.dataset.alertPrice);
+              if (!Number.isFinite(price) || price <= 0) return;
+              postChartMessage({{
+                source: "nse-interactive-chart",
+                action: "create-price-alert",
+                symbol: priceAlertButton.dataset.symbol || "",
+                market: priceAlertButton.dataset.market || "INDIA",
+                price: price,
+                eventId: String(Date.now()) + "-" + String(price)
+              }});
+              const marker = priceAlertButton.querySelector("span");
+              if (marker) marker.textContent = "✓";
+              priceAlertButton.title = "Price alert submitted";
+              window.setTimeout(function() {{ if (marker) marker.textContent = "+"; }}, 1200);
+            }});
+          }}
 
           function setFundamentalsOpen(isOpen) {{
             if (!fundamentalsDrawer || !fundamentalsToggle || !fundamentalsPanel) return;
@@ -1579,7 +1663,32 @@ def interactive_stock_chart_html(
             legend.innerHTML = content;
           }}
 
+          function updateCursorPriceAlert(param) {{
+            if (!priceAlertButton || !param || !param.point) return;
+            const price = Number(candleSeries.coordinateToPrice(param.point.y));
+            const current = Number(priceAlertButton.dataset.currentPrice);
+            if (!Number.isFinite(price) || price <= 0 ||
+                (Number.isFinite(current) && Math.abs(price - current) < 0.00000001)) {{
+              priceAlertButton.setAttribute("aria-disabled", "true");
+              priceAlertButton.classList.remove("is-ready");
+              return;
+            }}
+            const roundedPrice = Number(price.toFixed(8));
+            const safeY = Math.max(15, Math.min(container.clientHeight - 28, Number(param.point.y)));
+            const direction = Number.isFinite(current) && roundedPrice < current ? "below" : "above";
+            priceAlertButton.style.top = safeY + "px";
+            priceAlertButton.dataset.alertPrice = String(roundedPrice);
+            priceAlertButton.setAttribute("aria-disabled", "false");
+            priceAlertButton.classList.add("is-ready");
+            priceAlertButton.setAttribute(
+              "aria-label",
+              "Add alert when price crosses " + direction + " " + formatPrice(roundedPrice)
+            );
+            priceAlertButton.title = "Add alert at " + formatPrice(roundedPrice);
+          }}
+
           chart.subscribeCrosshairMove(function(param) {{
+            updateCursorPriceAlert(param);
             const selected = candleAtOrBeforeCursor(param);
             if (!selected) return;
             renderLegend(selected.candle.time, selected.candle, selected.index, param);
@@ -1650,26 +1759,53 @@ def render_interactive_stock_chart(
     growth_metrics=None,
     valuation_medians=None,
     trade_overlay=None,
+    alert_market="INDIA",
     height=760,
 ):
-    components.html(
-        interactive_stock_chart_html(
-            symbol,
-            json_path,
-            ma_periods=ma_periods,
-            pe_ratio=pe_ratio,
-            match_position=match_position,
-            match_total=match_total,
-            has_previous=has_previous,
-            has_next=has_next,
-            initial_range=initial_range,
-            growth_metrics=growth_metrics,
-            valuation_medians=valuation_medians,
-            trade_overlay=trade_overlay,
-        ),
-        height=height,
-        scrolling=False,
+    chart_html = interactive_stock_chart_html(
+        symbol,
+        json_path,
+        ma_periods=ma_periods,
+        pe_ratio=pe_ratio,
+        match_position=match_position,
+        match_total=match_total,
+        has_previous=has_previous,
+        has_next=has_next,
+        initial_range=initial_range,
+        growth_metrics=growth_metrics,
+        valuation_medians=valuation_medians,
+        trade_overlay=trade_overlay,
+        alert_market=alert_market,
     )
+    alert_event = _CURSOR_ALERT_COMPONENT(
+        chartHtml=chart_html,
+        height=int(height),
+        default=None,
+        key=f"cursor_alert_chart_{str(alert_market).upper()}_{symbol}",
+    )
+    if not isinstance(alert_event, dict) or alert_event.get("action") != "create-price-alert":
+        return
+
+    event_id = str(alert_event.get("eventId") or "")
+    processed_key = f"_processed_cursor_alert_{str(alert_market).upper()}_{symbol}"
+    if not event_id or st.session_state.get(processed_key) == event_id:
+        return
+    st.session_state[processed_key] = event_id
+    try:
+        alert, created = create_price_alert(
+            alert_event.get("symbol", symbol),
+            alert_event.get("market", alert_market),
+            alert_event.get("price"),
+        )
+        direction = "above" if alert.get("direction") == "above" else "below"
+        message = (
+            f"Alert created: {alert['symbol']} crosses {direction} {alert['target_price']:g}."
+            if created
+            else "That price alert already exists."
+        )
+        st.toast(message, icon="🔔")
+    except (TypeError, ValueError, OSError) as exc:
+        st.toast(f"Could not create alert: {exc}", icon="⚠️")
 
 
 def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):

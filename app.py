@@ -52,6 +52,12 @@ from fundamentals import (
     repair_result_fundamentals,
 )
 from pattern import evaluate_pattern_filters, validate_expression
+from price_alerts import (
+    create_price_alert,
+    load_price_alerts,
+    remove_price_alerts,
+    sort_price_alerts,
+)
 from screener import (
     DEFAULT_FILTER_SET,
     FILTER_TYPE_DEFAULTS,
@@ -86,6 +92,28 @@ def query_param_value(name, default=None):
     if isinstance(value, list):
         return value[0] if value else default
     return value
+
+
+def process_price_alert_request():
+    requested = str(query_param_value("create_price_alert", "") or "").lower()
+    if requested not in {"1", "true", "yes"}:
+        return
+    symbol = str(query_param_value("alert_symbol", "") or "").strip()
+    market = normalize_market(query_param_value("alert_market", MARKET_INDIA))
+    target_price = query_param_value("alert_price", "")
+    try:
+        alert, created = create_price_alert(symbol, market, target_price)
+        direction = "above" if alert["direction"] == "above" else "below"
+        if created:
+            message = f"Alert created for {symbol}: cross {direction} {alert['target_price']:g}."
+        else:
+            message = f"That {symbol} price alert already exists. No duplicate was added."
+        st.session_state["price_alert_feedback"] = ("success", message)
+    except (TypeError, ValueError, OSError) as exc:
+        st.session_state["price_alert_feedback"] = ("error", f"Could not create alert: {exc}")
+    st.session_state["switch_to_alerts_tab"] = True
+    st.query_params.clear()
+    st.rerun()
 
 
 def persist_backtest_widget_settings():
@@ -209,6 +237,8 @@ def run_scheduled_download():
     st.stop()
 
 
+process_price_alert_request()
+
 if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true", "yes"} or str(query_param_value("ping", "") or "").lower() in {"1", "true", "yes"}:
     run_scheduled_download()
 
@@ -304,6 +334,7 @@ def run_interactive_chart_view():
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
             trade_overlay=trade_overlay,
+            alert_market=market,
             height=embedded_chart_height,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -513,6 +544,7 @@ st.markdown(
     .workspace-banner--screener { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
     .workspace-banner--backtest { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
     .workspace-banner--results { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    .workspace-banner--alerts { --banner-accent: #b66a16; --banner-soft: #fff7e8; --banner-border: #efd6aa; }
     .workspace-banner__icon {
         display: grid;
         place-items: center;
@@ -2821,7 +2853,9 @@ def switch_to_tab(tab_index):
           const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
           if (tabs[tabIndex]) {{
             window.parent.document.body.dataset.codexLastTabSwitch = String(switchToken);
+            window.parent.document.body.dataset.codexSuppressAlertsRefresh = 'true';
             tabs[tabIndex].click();
+            delete window.parent.document.body.dataset.codexSuppressAlertsRefresh;
             return true;
           }}
           return false;
@@ -2842,10 +2876,110 @@ def switch_to_tab(tab_index):
     )
 
 
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results"])
+triggered_alert_badge_count = sum(
+    alert.get("status") == "Triggered" for alert in load_price_alerts()
+)
+if triggered_alert_badge_count:
+    st.markdown(
+        f"""
+        <style>
+        .stTabs [data-baseweb="tab-list"] > button:nth-child(5) {{
+            position: relative;
+            padding-right: 1.75rem;
+        }}
+        .stTabs [data-baseweb="tab-list"] > button:nth-child(5)::after {{
+            content: "{triggered_alert_badge_count}";
+            position: absolute;
+            top: 0.2rem;
+            right: 0.32rem;
+            display: grid;
+            place-items: center;
+            min-width: 1.05rem;
+            height: 1.05rem;
+            padding: 0 0.22rem;
+            border: 2px solid white;
+            border-radius: 999px;
+            background: #dc2626;
+            color: white;
+            font-size: 0.66rem;
+            font-weight: 800;
+            line-height: 1;
+            box-shadow: 0 1px 4px rgba(127, 29, 29, 0.28);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def refresh_alerts_when_tab_is_clicked():
+    """Reload current alert data before showing the client-side Alerts tab."""
+    components.html(
+        """
+        <script>
+        const installAlertsRefresh = () => {
+          const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
+          const alertsTab = tabs.find((tab) => (tab.textContent || '').includes('Alerts'));
+          if (!alertsTab) return false;
+
+          // The tab DOM node can survive a Streamlit rerun while this component
+          // iframe (and its old callback context) is replaced. Assigning the
+          // property every run guarantees that subsequent clicks use a live
+          // callback instead of a stale first-run listener.
+          alertsTab.dataset.alertRefreshInstalled = String(Date.now());
+          alertsTab.onclick = (event) => {
+            // switch_to_tab() also clicks tabs programmatically after a rerun.
+            if (window.parent.document.body.dataset.codexSuppressAlertsRefresh === 'true') return;
+            const refreshButton = window.parent.document.querySelector(
+              '.st-key-alerts_refresh_trigger button'
+            );
+            if (refreshButton) refreshButton.click();
+          };
+          return true;
+        };
+
+        if (!installAlertsRefresh()) {
+          let attempts = 0;
+          const timer = window.setInterval(() => {
+            attempts += 1;
+            if (installAlertsRefresh() || attempts >= 50) window.clearInterval(timer);
+          }, 100);
+        }
+        </script>
+        """,
+        height=0,
+    )
+
+def mark_alerts_refresh_requested():
+    st.session_state["switch_to_alerts_tab"] = True
+
+
+st.markdown(
+    "<style>.st-key-alerts_refresh_trigger { display: none !important; }</style>",
+    unsafe_allow_html=True,
+)
+st.button(
+    "Refresh Alerts Data",
+    key="alerts_refresh_trigger",
+    on_click=mark_alerts_refresh_requested,
+)
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results", "🔔 Alerts"])
 
 if st.session_state.pop("switch_to_results_tab", False):
     switch_to_tab(3)
+if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
+    switch_to_tab(4)
+
+refresh_alerts_when_tab_is_clicked()
+
+price_alert_feedback = st.session_state.pop("price_alert_feedback", None)
+if price_alert_feedback:
+    level, message = price_alert_feedback
+    if level == "error":
+        st.error(message)
+    else:
+        st.toast(message, icon="🔔")
 
 
 # =====================================================================
@@ -4208,3 +4342,78 @@ with tab4:
         st.session_state["switch_to_results_tab"] = True
         time.sleep(0.75)
         st.rerun()
+
+
+# =====================================================================
+# TAB 5: PRICE ALERTS
+# =====================================================================
+with tab5:
+    render_workspace_banner(
+        "alerts",
+        "Workspace 05 · Price monitoring",
+        "Price Alerts",
+        "Monitor price levels created from interactive charts. Alerts are evaluated whenever daily stock data is downloaded.",
+        "🔔",
+        "Monitor",
+    )
+
+    alerts = load_price_alerts()
+    active_count = sum(alert.get("status") == "Active" for alert in alerts)
+    triggered_count = sum(alert.get("status") == "Triggered" for alert in alerts)
+    metric_active, metric_triggered, metric_total = st.columns(3)
+    metric_active.metric("Active", active_count)
+    metric_triggered.metric("Triggered", triggered_count)
+    metric_total.metric("Total", len(alerts))
+
+    if not alerts:
+        st.info("No price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
+    else:
+        sorted_alerts = sort_price_alerts(alerts)
+        alert_rows = []
+        alert_ids = []
+        for alert in sorted_alerts:
+            alert_ids.append(str(alert.get("id", "")))
+            direction = "Cross above" if alert.get("direction") == "above" else "Cross below"
+            alert_rows.append({
+                "Remove": False,
+                "Market": market_label(alert.get("market", MARKET_INDIA)),
+                "Symbol": alert.get("symbol", ""),
+                "Condition": direction,
+                "Target Price": alert.get("target_price"),
+                "Reference Price": alert.get("reference_price"),
+                "Status": alert.get("status", "Active"),
+                "Created": alert.get("created_at", ""),
+                "Date of Trigger": alert.get("triggered_candle_date", ""),
+                "Trigger Price": alert.get("triggered_price", ""),
+            })
+        alert_df = pd.DataFrame(alert_rows, index=alert_ids)
+        edited_alerts = st.data_editor(
+            alert_df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=[column for column in alert_df.columns if column != "Remove"],
+            column_config={
+                "Remove": st.column_config.CheckboxColumn("Remove", help="Select alerts to remove."),
+                "Target Price": st.column_config.NumberColumn(format="%.4f"),
+                "Reference Price": st.column_config.NumberColumn(format="%.4f"),
+                "Trigger Price": st.column_config.NumberColumn(format="%.4f"),
+                "Status": st.column_config.TextColumn(width="small"),
+            },
+            key="price_alerts_table",
+        )
+        remove_ids = [
+            str(alert_id)
+            for alert_id, selected in edited_alerts["Remove"].items()
+            if bool(selected)
+        ]
+        remove_col, _ = st.columns([1, 4])
+        with remove_col:
+            if st.button(
+                "Remove selected",
+                type="secondary",
+                disabled=not remove_ids,
+                use_container_width=True,
+            ):
+                removed = remove_price_alerts(remove_ids)
+                st.success(f"Removed {removed} price alert(s).")
+                st.rerun()

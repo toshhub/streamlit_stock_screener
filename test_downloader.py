@@ -11,6 +11,7 @@ from downloader import (
     DOWNLOAD_JOBS,
     DOWNLOAD_JOBS_LOCK,
     MARKET_INDIA,
+    _download_symbol_row,
     _date_after_latest,
     data_availability_summary,
     background_download_snapshot,
@@ -21,6 +22,32 @@ from downloader import (
 
 
 class IncrementalDownloaderTests(unittest.TestCase):
+    def test_successful_symbol_download_checks_price_alerts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "target_dir": Path(temp_dir),
+                "interval": "1d",
+                "period": "5y",
+            }
+            with (
+                patch(
+                    "downloader.download_symbol",
+                    return_value={"Downloaded": True, "Rows Added": 1, "Status": "Updated"},
+                ),
+                patch(
+                    "downloader.check_price_alerts_for_symbol",
+                    return_value=[{"id": "alert-1"}],
+                ) as check_alerts,
+            ):
+                result = _download_symbol_row("TEST", config, market=MARKET_INDIA)
+
+        self.assertEqual(result["Alerts Triggered"], 1)
+        check_alerts.assert_called_once_with(
+            "TEST",
+            MARKET_INDIA,
+            stock_file=config["target_dir"] / "TEST.json",
+        )
+
     def test_stock_files_follow_selected_source_order_and_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)

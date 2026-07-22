@@ -454,6 +454,22 @@ Email behavior:
 - Does not save Gmail App Password.
 - Saves non-sensitive email fields for convenience.
 
+### Alerts Tab
+
+Price alerts are created by moving or tapping the interactive-chart crosshair
+and clicking the `+` control at the matching right-side price level. No manual
+price field is used. Alerts are persisted in
+`data/metadata/price_alerts.json`. The target is classified automatically as a
+cross-above or cross-below alert relative to the latest close. Only candles
+after the alert's creation candle are evaluated: `High >= target` triggers an
+above alert and `Low <= target` triggers a below alert.
+
+Every successful manual or scheduled stock download checks alerts for that
+symbol. A triggered alert changes state once, so repeated downloads do not
+produce duplicate triggers. The Alerts tab lists Active and Triggered alerts
+with the trigger candle date, shows a red triggered-count badge, and lets the
+user remove selected rows.
+
 ## Runtime State vs Persistent State
 
 ### Runtime State
@@ -469,6 +485,9 @@ If the app reloads or restarts, the Results tab can reload the latest saved rows
 `data/metadata/session_settings.json` stores UI preferences and last download timestamp locally. `data/metadata/app_settings.json` is treated as a legacy settings file.
 
 `data/metadata/last_results.json` stores the latest screener output.
+
+`data/metadata/price_alerts.json` stores persistent price-alert definitions and
+their latest Active or Triggered state.
 
 On Streamlit Community Cloud, this local file may not persist across app restarts because the deployment filesystem is ephemeral.
 

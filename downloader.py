@@ -9,6 +9,7 @@ import pandas as pd
 import yfinance as yf
 
 from config import DAILY_DIR, US_DAILY_DIR
+from price_alerts import check_price_alerts_for_symbol
 
 MARKET_INDIA = "INDIA"
 MARKET_US = "US"
@@ -399,6 +400,19 @@ def _download_symbol_row(
             incremental=incremental,
             market=market,
         )
+        if result.get("Downloaded"):
+            try:
+                result["Alerts Triggered"] = len(
+                    check_price_alerts_for_symbol(
+                        symbol,
+                        market,
+                        stock_file=out_file,
+                    )
+                )
+            except Exception as alert_exc:
+                # Alert processing must never turn a successful market-data
+                # download into a failed download.
+                result["Alert Error"] = str(alert_exc)
         return {"Symbol": symbol, **result, "Error": ""}
     except Exception as exc:
         return {"Symbol": symbol, "Downloaded": False, "Rows Added": 0, "Status": "Failed", "Error": str(exc)}

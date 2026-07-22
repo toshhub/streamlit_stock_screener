@@ -16,6 +16,14 @@ from charting import (
 
 
 class InteractiveChartTests(unittest.TestCase):
+    def test_cursor_alert_component_relays_chart_controls_to_results_owner(self):
+        component_html = (
+            Path(__file__).parent / "cursor_alert_component" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("window.parent.parent.postMessage(message", component_html)
+        self.assertIn("message.source === \"nse-interactive-chart\"", component_html)
+
     @staticmethod
     def _price_rows(count):
         return [
@@ -139,6 +147,16 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("border-radius: 0 12px 12px 0", result)
         self.assertIn("setFundamentalsOpen(true)", result)
         self.assertIn("setFundamentalsOpen(false)", result)
+        self.assertIn('id="price-alert-at-cursor"', result)
+        self.assertIn('aria-label="Add price alert at cursor"', result)
+        self.assertIn('data-symbol="TEST"', result)
+        self.assertIn('data-market="INDIA"', result)
+        self.assertIn('action: "create-price-alert"', result)
+        self.assertIn("updateCursorPriceAlert(param)", result)
+        self.assertIn("candleSeries.coordinateToPrice(param.point.y)", result)
+        self.assertIn('priceAlertButton.style.top = safeY + "px"', result)
+        self.assertNotIn('type="number"', result)
+        self.assertNotIn('id="price-alert-dialog"', result)
         self.assertIn('event.key === "Escape"', result)
         self.assertLess(
             result.index('id="chart"'),
