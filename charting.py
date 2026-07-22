@@ -562,7 +562,7 @@ def interactive_stock_chart_html(
         valuation_state_html = (
             f'<span class="chart-valuation-status">{valuation_label}</span>'
         )
-    growth_cards_html = ""
+    fundamentals_drawer_html = ""
     cards = []
     growth_sections = (
         ("Compounded Sales Growth", "Sales growth", "sales"),
@@ -632,15 +632,27 @@ def interactive_stock_chart_html(
                     f"{''.join(rows)}</article>"
                 )
     if cards:
-        growth_cards_html = (
-            '<section class="growth-snapshot" aria-label="Growth and valuation metrics">'
-            '<div class="growth-snapshot__heading">'
+        fundamentals_drawer_html = (
+            '<div class="fundamentals-drawer" id="fundamentals-drawer">'
+            '<button class="fundamentals-toggle" id="fundamentals-toggle" type="button" '
+            'aria-controls="fundamentals-panel" aria-expanded="false" '
+            'title="Open fundamentals">'
+            '<span class="fundamentals-toggle__icon" aria-hidden="true">ƒ</span>'
+            '<span>Fundamentals</span>'
+            "</button>"
+            '<button class="fundamentals-scrim" id="fundamentals-scrim" type="button" '
+            'aria-label="Close fundamentals"></button>'
+            '<aside class="fundamentals-panel" id="fundamentals-panel" '
+            'aria-label="Growth and valuation metrics" aria-hidden="true" inert>'
+            '<div class="fundamentals-panel__header">'
             '<div><span class="growth-snapshot__eyebrow">Fundamentals</span>'
-            '<h2>Growth &amp; valuation snapshot</h2></div>'
-            '<span class="growth-snapshot__source">Source: Screener.in</span>'
+            '<h2>Growth &amp; valuation snapshot</h2>'
+            '<span class="growth-snapshot__source">Source: Screener.in</span></div>'
+            '<button class="fundamentals-close" id="fundamentals-close" type="button" '
+            'aria-label="Minimize fundamentals" title="Minimize fundamentals">&times;</button>'
             "</div>"
             f'<div class="growth-grid">{"".join(cards)}</div>'
-            "</section>"
+            "</aside></div>"
         )
     match_navigation_html = ""
     if match_position and match_total:
@@ -687,8 +699,10 @@ def interactive_stock_chart_html(
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }}
         .chart-shell {{
+          position: relative;
+          overflow: hidden;
           display: grid;
-          grid-template-rows: auto auto minmax(300px, 1fr) auto auto;
+          grid-template-rows: auto auto minmax(300px, 1fr) auto;
           height: 100vh;
           min-height: 0;
           padding: 8px;
@@ -894,8 +908,10 @@ def interactive_stock_chart_html(
           color: #334a63;
           font-size: 11px;
           font-variant-numeric: tabular-nums;
+          scrollbar-width: none;
           white-space: nowrap;
         }}
+        .chart-legend::-webkit-scrollbar {{ display: none; }}
         .legend-date {{ color: var(--muted); font-weight: 750; }}
         .legend-ohlc b {{ margin-left: 4px; color: var(--ink); }}
         .legend-gain {{ font-weight: 750; }}
@@ -937,17 +953,113 @@ def interactive_stock_chart_html(
           font-size: 10px;
         }}
         .chart-footer a {{ color: var(--brand); font-weight: 700; text-decoration: none; }}
-        .growth-snapshot {{
-          padding: 10px 0 0;
-          background: var(--surface-soft);
+        .fundamentals-drawer {{
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          pointer-events: none;
         }}
-        .growth-snapshot__heading {{
+        .fundamentals-toggle {{
+          position: absolute;
+          top: 50%;
+          left: 8px;
+          z-index: 3;
           display: flex;
-          align-items: flex-end;
+          align-items: center;
+          gap: 6px;
+          min-height: 112px;
+          padding: 10px 7px;
+          border: 1px solid #8ab5c2;
+          border-radius: 0 10px 10px 0;
+          background: linear-gradient(180deg, #176b87, #10536a);
+          box-shadow: 0 8px 22px rgba(16, 53, 76, 0.25);
+          color: #ffffff;
+          cursor: pointer;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          pointer-events: auto;
+          transform: translateY(-50%);
+          transition: opacity 0.18s ease, transform 0.18s ease;
+          writing-mode: vertical-rl;
+        }}
+        .fundamentals-toggle:hover {{
+          background: linear-gradient(180deg, #168297, #10536a);
+          transform: translateY(-50%) translateX(2px);
+        }}
+        .fundamentals-toggle:focus-visible,
+        .fundamentals-close:focus-visible {{
+          outline: 3px solid rgba(23, 107, 135, 0.24);
+          outline-offset: 2px;
+        }}
+        .fundamentals-toggle__icon {{
+          display: grid;
+          place-items: center;
+          width: 20px;
+          height: 20px;
+          border-radius: 6px;
+          background: rgba(255, 255, 255, 0.16);
+          font-family: Georgia, serif;
+          font-size: 13px;
+          writing-mode: horizontal-tb;
+        }}
+        .fundamentals-scrim {{
+          position: absolute;
+          inset: 8px;
+          z-index: 1;
+          padding: 0;
+          border: 0;
+          border-radius: 14px;
+          background: rgba(15, 35, 52, 0.30);
+          cursor: default;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.2s ease;
+        }}
+        .fundamentals-panel {{
+          position: absolute;
+          top: 8px;
+          left: 8px;
+          bottom: 8px;
+          z-index: 2;
+          width: min(430px, calc(100% - 16px));
+          padding: 14px;
+          overflow-x: hidden;
+          overflow-y: auto;
+          border: 1px solid #cbdce5;
+          border-radius: 14px;
+          background: #f6f9fb;
+          box-shadow: 12px 0 34px rgba(16, 36, 62, 0.18);
+          pointer-events: none;
+          transform: translateX(calc(-100% - 18px));
+          transition: transform 0.24s ease;
+        }}
+        .fundamentals-drawer.is-open .fundamentals-toggle {{
+          opacity: 0;
+          pointer-events: none;
+          transform: translateY(-50%) translateX(-12px);
+        }}
+        .fundamentals-drawer.is-open .fundamentals-scrim {{
+          opacity: 1;
+          pointer-events: auto;
+        }}
+        .fundamentals-drawer.is-open .fundamentals-panel {{
+          pointer-events: auto;
+          transform: translateX(0);
+        }}
+        .fundamentals-panel__header {{
+          position: sticky;
+          top: -14px;
+          z-index: 1;
+          display: flex;
+          align-items: flex-start;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 7px;
-          padding: 0 2px;
+          margin: -14px -14px 12px;
+          padding: 14px;
+          border-bottom: 1px solid #d8e4ea;
+          background: rgba(246, 249, 251, 0.96);
+          backdrop-filter: blur(10px);
         }}
         .growth-snapshot__eyebrow {{
           color: #15803d;
@@ -956,20 +1068,43 @@ def interactive_stock_chart_html(
           letter-spacing: 0.09em;
           text-transform: uppercase;
         }}
-        .growth-snapshot h2 {{
+        .fundamentals-panel h2 {{
           margin: 1px 0 0;
           color: #17334c;
           font-size: 13px;
           letter-spacing: -0.01em;
         }}
         .growth-snapshot__source {{
+          display: block;
+          margin-top: 3px;
           color: #718397;
           font-size: 8px;
           white-space: nowrap;
         }}
+        .fundamentals-close {{
+          display: grid;
+          place-items: center;
+          width: 32px;
+          height: 32px;
+          flex: 0 0 32px;
+          padding: 0;
+          border: 1px solid #cbd8e1;
+          border-radius: 9px;
+          background: #ffffff;
+          color: #40586d;
+          cursor: pointer;
+          font-size: 20px;
+          font-weight: 750;
+          line-height: 1;
+        }}
+        .fundamentals-close:hover {{
+          border-color: #8aaab8;
+          background: #eaf4f6;
+          color: #10536a;
+        }}
         .growth-grid {{
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 7px;
         }}
         .growth-card {{
@@ -1074,9 +1209,22 @@ def interactive_stock_chart_html(
             padding: 6px 8px;
             font-size: 9px;
           }}
-          .growth-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-          .growth-snapshot {{ padding-top: 7px; }}
+          .fundamentals-toggle {{ left: 0; }}
+          .fundamentals-scrim {{ inset: 0; border-radius: 0; }}
+          .fundamentals-panel {{
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: min(360px, 94%);
+            border-radius: 0 12px 12px 0;
+          }}
+          .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+          .fundamentals-toggle,
+          .fundamentals-scrim,
+          .fundamentals-panel {{ transition: none; }}
         }}
       </style>
     </head>
@@ -1109,11 +1257,11 @@ def interactive_stock_chart_html(
         <section id="chart" aria-label="{safe_symbol} interactive stock chart">
           <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
         </section>
-        {growth_cards_html}
         <footer class="chart-footer">
           <span>Scroll or pinch to zoom · drag to pan · tap and hold on mobile to inspect values</span>
           <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">Charts by TradingView</a>
         </footer>
+        {fundamentals_drawer_html}
       </main>
       <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
       <script>
@@ -1122,6 +1270,45 @@ def interactive_stock_chart_html(
           const container = document.getElementById("chart");
           const loading = document.getElementById("chart-loading");
           const legend = document.getElementById("chart-legend");
+          const fundamentalsDrawer = document.getElementById("fundamentals-drawer");
+          const fundamentalsToggle = document.getElementById("fundamentals-toggle");
+          const fundamentalsPanel = document.getElementById("fundamentals-panel");
+          const fundamentalsClose = document.getElementById("fundamentals-close");
+          const fundamentalsScrim = document.getElementById("fundamentals-scrim");
+
+          function setFundamentalsOpen(isOpen) {{
+            if (!fundamentalsDrawer || !fundamentalsToggle || !fundamentalsPanel) return;
+            fundamentalsDrawer.classList.toggle("is-open", isOpen);
+            fundamentalsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+            fundamentalsPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+            if (isOpen) {{
+              fundamentalsPanel.removeAttribute("inert");
+              if (fundamentalsClose) fundamentalsClose.focus();
+            }} else {{
+              fundamentalsPanel.setAttribute("inert", "");
+              fundamentalsToggle.focus();
+            }}
+          }}
+          if (fundamentalsToggle) {{
+            fundamentalsToggle.addEventListener("click", function() {{
+              setFundamentalsOpen(true);
+            }});
+          }}
+          if (fundamentalsClose) {{
+            fundamentalsClose.addEventListener("click", function() {{
+              setFundamentalsOpen(false);
+            }});
+          }}
+          if (fundamentalsScrim) {{
+            fundamentalsScrim.addEventListener("click", function() {{
+              setFundamentalsOpen(false);
+            }});
+          }}
+          document.addEventListener("keydown", function(event) {{
+            if (event.key === "Escape" && fundamentalsDrawer && fundamentalsDrawer.classList.contains("is-open")) {{
+              setFundamentalsOpen(false);
+            }}
+          }});
 
           function postChartMessage(message) {{
             if (window.parent) {{
@@ -1773,12 +1960,21 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         box-shadow: 0 8px 24px rgba(16, 36, 62, 0.08);
       }
       .chart-panel.interactive-mode {
-        position: relative;
-        max-height: none;
-        overflow: visible;
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100vh;
+        max-height: 100vh;
+        margin: 0;
+        overflow: hidden;
         padding: 8px;
-        scroll-margin-top: 8px;
         overflow-anchor: none;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
       }
       .chart-panel img { width: 100%; height: auto; display: block; max-height: 50vh; object-fit: contain; }
       .chart-panel .panel-placeholder {
@@ -1848,8 +2044,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       .chart-image-wrap { padding: 0 46px; }
       .chart-help-text { color: #64748b; font-size: 12px; margin-top: 5px; text-align: center; }
       .interactive-panel-header {
-        position: sticky;
-        top: 0;
+        position: relative;
+        flex: 0 0 auto;
         z-index: 20;
         display: flex;
         align-items: center;
@@ -1889,14 +2085,17 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       }
       .interactive-chart-embed {
         display: block;
+        flex: 1 1 auto;
         width: 100%;
-        height: 1100px;
+        height: auto;
+        min-height: 0;
         border: 1px solid #e0e8ee;
         border-radius: 10px;
         background: #f5f8fb;
         overflow-anchor: none;
       }
       .interactive-panel-help {
+        flex: 0 0 auto;
         padding: 6px 4px 1px;
         color: #64748b;
         font-size: 10px;
@@ -1928,13 +2127,15 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .chart-image-wrap { padding: 0 34px; }
         .chart-help-text { font-size: 11px; }
         .chart-panel.interactive-mode {
-          max-height: none;
-          overflow: visible;
+          height: 100vh;
+          max-height: 100vh;
+          overflow: hidden;
           padding: 0;
         }
         .interactive-panel-header { padding: 3px 4px 6px; }
         .interactive-chart-embed {
-          height: 1100px;
+          height: auto;
+          min-height: 0;
           border-width: 0;
           border-radius: 0;
         }
@@ -2022,6 +2223,15 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
         function revealInteractiveHeader(panel, behavior) {
           if (!panel) return;
+          try {
+            if (window.frameElement) {
+              window.frameElement.scrollIntoView({
+                behavior: behavior || 'auto',
+                block: 'start',
+                inline: 'nearest'
+              });
+            }
+          } catch (error) {}
           var header = panel.querySelector('.interactive-panel-header');
           if (!header) return;
           header.scrollIntoView({
@@ -2078,8 +2288,10 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           var items = getInteractiveItems();
           var index = items.indexOf(button);
           if (index < 0) return;
+          var availableEmbedHeight = Math.max(420, Math.floor(window.innerHeight - 70));
           var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
             'embedded=1' +
+            '&embed_height=' + encodeURIComponent(availableEmbedHeight) +
             '&position=' + encodeURIComponent(index + 1) +
             '&total=' + encodeURIComponent(items.length) +
             '&has_previous=' + (index > 0 ? '1' : '0') +

@@ -130,6 +130,21 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("padding: 0;", result)
         self.assertIn("Growth &amp; valuation snapshot", result)
         self.assertIn("Source: Screener.in", result)
+        self.assertIn('class="fundamentals-drawer"', result)
+        self.assertIn('class="fundamentals-toggle"', result)
+        self.assertIn('aria-expanded="false"', result)
+        self.assertIn('aria-hidden="true" inert', result)
+        self.assertIn('class="fundamentals-panel"', result)
+        self.assertIn("transform: translateX(calc(-100% - 18px))", result)
+        self.assertIn("border-radius: 0 12px 12px 0", result)
+        self.assertIn("setFundamentalsOpen(true)", result)
+        self.assertIn("setFundamentalsOpen(false)", result)
+        self.assertIn('event.key === "Escape"', result)
+        self.assertLess(
+            result.index('id="chart"'),
+            result.index('id="fundamentals-drawer"'),
+        )
+        self.assertNotIn('class="growth-snapshot"', result)
         self.assertIn("<strong>-9%</strong>", result)
         self.assertIn("Median P/E", result)
         self.assertIn("Median Market Cap / Sales", result)
@@ -199,6 +214,7 @@ class InteractiveChartTests(unittest.TestCase):
             )
 
         self.assertNotIn('class="growth-snapshot"', result)
+        self.assertNotIn('class="fundamentals-drawer"', result)
         self.assertNotIn("Source: Screener.in", result)
         self.assertIn('<div class="chart-title">', result)
         self.assertNotIn('<div class="chart-title valuation-favorable">', result)
@@ -389,6 +405,8 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('data-interactive-src="?', result)
         self.assertIn("embedded=1", result)
         self.assertIn("&position=", result)
+        self.assertIn("&embed_height=", result)
+        self.assertIn("availableEmbedHeight", result)
         self.assertIn("&range=", result)
         self.assertIn("activeInteractiveRange", result)
         self.assertIn("message.action === 'range-change'", result)
@@ -396,8 +414,12 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("data-interactive-close", result)
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("position: sticky", result)
-        self.assertIn("height: 1100px", result)
-        self.assertIn("max-height: none", result)
+        self.assertIn("position: fixed", result)
+        self.assertIn("height: 100vh", result)
+        self.assertIn("max-height: 100vh", result)
+        self.assertIn("flex: 1 1 auto", result)
+        self.assertIn("window.frameElement.scrollIntoView", result)
+        self.assertNotIn("height: 1100px", result)
         self.assertIn("border-width: 0", result)
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
@@ -434,6 +456,7 @@ class InteractiveChartRouteTests(unittest.TestCase):
                 "interactive_chart": stock_files[0].stem,
                 "market": "INDIA",
                 "embedded": "1",
+                "embed_height": "630",
                 "ma": "50,200",
             }
         )

@@ -71,7 +71,7 @@
   "backtest_selected_filters": [
     "50-200 Golden Cross"
   ],
-  "backtest_start_date": "2024-02-16",
+  "backtest_start_date": "2024-06-08",
   "backtest_end_date": "2026-07-21",
   "market": "INDIA",
   "download_limit_us": 1225,

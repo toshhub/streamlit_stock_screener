@@ -217,6 +217,15 @@ def run_interactive_chart_view():
     symbol = str(query_param_value("interactive_chart", "") or "").strip()
     market = normalize_market(query_param_value("market", settings.get("last_results_market", MARKET_INDIA)))
     embedded = str(query_param_value("embedded", "") or "").lower() in {"1", "true", "yes"}
+    try:
+        requested_embed_height = int(query_param_value("embed_height", 0) or 0)
+    except (TypeError, ValueError):
+        requested_embed_height = 0
+    embedded_chart_height = (
+        max(420, min(1400, requested_embed_height))
+        if embedded and requested_embed_height
+        else (1060 if embedded else 920)
+    )
     if not symbol or Path(symbol).name != symbol:
         st.error("Invalid stock symbol.")
         st.stop()
@@ -295,7 +304,7 @@ def run_interactive_chart_view():
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
             trade_overlay=trade_overlay,
-            height=1060 if embedded else 920,
+            height=embedded_chart_height,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")
@@ -418,6 +427,137 @@ st.markdown(
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20);
         color: #ffffff;
         font-size: 2rem;
+    }
+
+    /* Workflow overview */
+    .workflow-rail {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.65rem;
+        margin: -0.35rem 0 1.1rem;
+    }
+    .workflow-step {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        min-width: 0;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: var(--shadow-sm);
+    }
+    .workflow-step__number {
+        display: grid;
+        place-items: center;
+        width: 1.8rem;
+        height: 1.8rem;
+        flex: 0 0 1.8rem;
+        border-radius: 8px;
+        font-size: 0.72rem;
+        font-weight: 850;
+    }
+    .workflow-step__copy { min-width: 0; }
+    .workflow-step__title {
+        color: var(--ink-strong);
+        font-size: 0.78rem;
+        font-weight: 800;
+        line-height: 1.15;
+    }
+    .workflow-step__detail {
+        margin-top: 0.14rem;
+        overflow: hidden;
+        color: var(--ink-muted);
+        font-size: 0.68rem;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .workflow-step--data .workflow-step__number { background: #e8f2ff; color: #2563a8; }
+    .workflow-step--screen .workflow-step__number { background: #f1eafe; color: #7048b5; }
+    .workflow-step--test .workflow-step__number { background: #fff0dc; color: #b56318; }
+    .workflow-step--review .workflow-step__number { background: #e5f7ee; color: #18794e; }
+
+    /* Tab-level context banners */
+    .workspace-banner {
+        --banner-accent: #176b87;
+        --banner-soft: #e9f6f8;
+        --banner-border: #c6e3e9;
+        position: relative;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 1rem;
+        min-height: 108px;
+        margin: 0.1rem 0 1.15rem;
+        padding: 1.15rem 1.3rem;
+        border: 1px solid var(--banner-border);
+        border-left: 5px solid var(--banner-accent);
+        border-radius: 16px;
+        background: linear-gradient(112deg, #ffffff 0%, var(--banner-soft) 100%);
+        box-shadow: 0 8px 24px rgba(16, 36, 62, 0.07);
+    }
+    .workspace-banner::after {
+        content: "";
+        position: absolute;
+        right: -38px;
+        bottom: -66px;
+        width: 150px;
+        height: 150px;
+        border: 28px solid color-mix(in srgb, var(--banner-accent) 9%, transparent);
+        border-radius: 50%;
+        pointer-events: none;
+    }
+    .workspace-banner--data { --banner-accent: #2878b8; --banner-soft: #edf6fd; --banner-border: #c9e0f2; }
+    .workspace-banner--screener { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
+    .workspace-banner--backtest { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
+    .workspace-banner--results { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    .workspace-banner__icon {
+        display: grid;
+        place-items: center;
+        width: 3.2rem;
+        height: 3.2rem;
+        border: 1px solid color-mix(in srgb, var(--banner-accent) 24%, white);
+        border-radius: 13px;
+        background: #ffffff;
+        color: var(--banner-accent);
+        font-size: 1.45rem;
+        box-shadow: 0 5px 14px color-mix(in srgb, var(--banner-accent) 12%, transparent);
+    }
+    .workspace-banner__content { position: relative; z-index: 1; min-width: 0; }
+    .workspace-banner__eyebrow {
+        margin-bottom: 0.2rem;
+        color: var(--banner-accent);
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+    }
+    .workspace-banner__title {
+        margin: 0 !important;
+        color: var(--ink-strong) !important;
+        font-size: 1.45rem;
+        line-height: 1.18;
+    }
+    .workspace-banner__description {
+        max-width: 760px;
+        margin: 0.35rem 0 0;
+        color: var(--ink-muted);
+        font-size: 0.84rem;
+        line-height: 1.4;
+    }
+    .workspace-banner__badge {
+        position: relative;
+        z-index: 1;
+        padding: 0.32rem 0.68rem;
+        border: 1px solid var(--banner-border);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--banner-accent);
+        font-size: 0.7rem;
+        font-weight: 800;
+        white-space: nowrap;
     }
 
     /* Buttons */
@@ -618,6 +758,17 @@ st.markdown(
         background: var(--brand-soft);
         font-size: 1rem;
     }
+    .data-panel-heading.tone-blue span { background: #e8f2ff; color: #2563a8; }
+    .data-panel-heading.tone-violet span { background: #f1eafe; color: #7048b5; }
+    .data-panel-heading.tone-green span { background: #e5f7ee; color: #18794e; }
+    .data-panel-heading.tone-amber span { background: #fff0dc; color: #b56318; }
+    .data-panel-heading.tone-rose span { background: #fdebed; color: #b84354; }
+    .data-panel-heading.tone-slate span { background: #edf2f6; color: #526b80; }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(.data-panel-heading.tone-blue) { border-top: 3px solid #5a9bd0 !important; }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(.data-panel-heading.tone-violet) { border-top: 3px solid #9677cc !important; }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(.data-panel-heading.tone-green) { border-top: 3px solid #50a57d !important; }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(.data-panel-heading.tone-amber) { border-top: 3px solid #dc934d !important; }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(.data-panel-heading.tone-rose) { border-top: 3px solid #d87582 !important; }
     .sell-strategy-help {
         position: relative;
         display: inline-block;
@@ -969,6 +1120,20 @@ st.markdown(
         .app-hero__subtitle {
             font-size: 0.86rem;
         }
+        .workflow-rail {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .workspace-banner {
+            grid-template-columns: auto minmax(0, 1fr);
+            min-height: 96px;
+            padding: 1rem;
+        }
+        .workspace-banner__badge { display: none; }
+        .workspace-banner__icon {
+            width: 2.7rem;
+            height: 2.7rem;
+        }
+        .workspace-banner__title { font-size: 1.2rem; }
         div.stTabs [data-baseweb="tab-list"] {
             overflow-x: auto;
             justify-content: flex-start;
@@ -978,10 +1143,34 @@ st.markdown(
             padding-inline: 0.9rem;
         }
     }
+    @media (max-width: 460px) {
+        .workflow-rail { gap: 0.45rem; }
+        .workflow-step { padding: 0.55rem 0.6rem; }
+        .workflow-step__detail { display: none; }
+        .workspace-banner__icon { display: none; }
+        .workspace-banner { grid-template-columns: 1fr; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+def render_workspace_banner(tone, eyebrow, title, description, icon, badge):
+    """Render a visual-only banner that gives each workspace clear context."""
+    st.markdown(
+        f"""
+        <section class="workspace-banner workspace-banner--{html.escape(tone)}">
+            <div class="workspace-banner__icon" aria-hidden="true">{html.escape(icon)}</div>
+            <div class="workspace-banner__content">
+                <div class="workspace-banner__eyebrow">{html.escape(eyebrow)}</div>
+                <h2 class="workspace-banner__title">{html.escape(title)}</h2>
+                <p class="workspace-banner__description">{html.escape(description)}</p>
+            </div>
+            <div class="workspace-banner__badge">{html.escape(badge)}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.markdown(
     """
@@ -996,6 +1185,42 @@ st.markdown(
         </div>
         <div class="app-hero__mark" aria-hidden="true">↗</div>
     </section>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="workflow-rail" aria-label="Analysis workflow">
+        <div class="workflow-step workflow-step--data">
+            <div class="workflow-step__number">01</div>
+            <div class="workflow-step__copy">
+                <div class="workflow-step__title">Prepare data</div>
+                <div class="workflow-step__detail">Keep the market universe current</div>
+            </div>
+        </div>
+        <div class="workflow-step workflow-step--screen">
+            <div class="workflow-step__number">02</div>
+            <div class="workflow-step__copy">
+                <div class="workflow-step__title">Build a screen</div>
+                <div class="workflow-step__detail">Combine technical and custom rules</div>
+            </div>
+        </div>
+        <div class="workflow-step workflow-step--test">
+            <div class="workflow-step__number">03</div>
+            <div class="workflow-step__copy">
+                <div class="workflow-step__title">Validate strategy</div>
+                <div class="workflow-step__detail">Measure historical performance</div>
+            </div>
+        </div>
+        <div class="workflow-step workflow-step--review">
+            <div class="workflow-step__number">04</div>
+            <div class="workflow-step__copy">
+                <div class="workflow-step__title">Review results</div>
+                <div class="workflow-step__detail">Compare candidates and charts</div>
+            </div>
+        </div>
+    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -2617,7 +2842,7 @@ def switch_to_tab(tab_index):
     )
 
 
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "Backtest", "📊 Results"])
+tab1, tab2, tab3, tab4 = st.tabs(["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results"])
 
 if st.session_state.pop("switch_to_results_tab", False):
     switch_to_tab(3)
@@ -2627,15 +2852,21 @@ if st.session_state.pop("switch_to_results_tab", False):
 # TAB 1: DATA MANAGEMENT
 # =====================================================================
 with tab1:
-    st.header("📥 Data Management")
-    st.caption("Manage your market universe and refresh stock prices from one place.")
+    render_workspace_banner(
+        "data",
+        "Workspace 01 · Data foundation",
+        "Data Management",
+        "Maintain the market universe and keep price history ready for reliable screening and analysis.",
+        "▣",
+        "Prepare",
+    )
 
     market_options = [MARKET_INDIA, MARKET_US]
     market_col, status_col = st.columns(2)
     with market_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>🌐</span>Market</div>'
+                '<div class="data-panel-heading tone-blue"><span>🌐</span>Market</div>'
                 '<p class="data-panel-subtitle">Choose the stock market universe used throughout the app.</p>',
                 unsafe_allow_html=True,
             )
@@ -2651,7 +2882,7 @@ with tab1:
     with status_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>◷</span>Data Status</div>'
+                '<div class="data-panel-heading tone-green"><span>◷</span>Data Status</div>'
                 '<p class="data-panel-subtitle">The latest date currently available for the selected market.</p>',
                 unsafe_allow_html=True,
             )
@@ -2677,7 +2908,7 @@ with tab1:
     with source_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>🗂️</span>Source File</div>'
+                '<div class="data-panel-heading tone-violet"><span>🗂️</span>Source File</div>'
                 '<p class="data-panel-subtitle">Review or replace the symbol universe used for downloads.</p>',
                 unsafe_allow_html=True,
             )
@@ -2708,7 +2939,7 @@ with tab1:
     with settings_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>⚙️</span>Download Settings</div>'
+                '<div class="data-panel-heading tone-amber"><span>⚙️</span>Download Settings</div>'
                 '<p class="data-panel-subtitle">Set the universe size and choose incremental or full refresh.</p>',
                 unsafe_allow_html=True,
             )
@@ -2809,8 +3040,15 @@ with tab1:
 # TAB 2: SCREENER
 # =====================================================================
 with tab2:
-    st.header("🔍 Screener")
     current_market = normalize_market(selected_market)
+    render_workspace_banner(
+        "screener",
+        "Workspace 02 · Opportunity discovery",
+        "Screener",
+        "Build focused technical, valuation, and custom-expression rules to identify matching stocks.",
+        "⌕",
+        f"{market_label(current_market)} market",
+    )
     st.markdown(
         f'<div class="screener-market-chip">● {html.escape(market_label(current_market))} market</div>',
         unsafe_allow_html=True,
@@ -2856,7 +3094,7 @@ with tab2:
         quick_run_panel = st.container(border=True)
     with quick_run_panel:
         st.markdown(
-            '<div class="data-panel-heading"><span>⚡</span>Quick Run</div>'
+            '<div class="data-panel-heading tone-violet"><span>⚡</span>Quick Run</div>'
             '<p class="data-panel-subtitle">Choose a filter set, adjust optional checks, and start screening.</p>',
             unsafe_allow_html=True,
         )
@@ -2958,7 +3196,7 @@ with tab2:
         add_filter_panel = st.container(border=True)
     with add_filter_panel:
         st.markdown(
-            '<div class="data-panel-heading"><span>＋</span>Add a Filter</div>'
+            '<div class="data-panel-heading tone-blue"><span>＋</span>Add a Filter</div>'
             '<p class="data-panel-subtitle">Choose a technical, valuation, or custom expression rule.</p>',
             unsafe_allow_html=True,
         )
@@ -3060,7 +3298,7 @@ with tab2:
                         st.error(f"❌ {error}")
                         invalid_pattern_errors.append(f"Custom Filter {index}: {error}")
                 st.markdown(
-                    '<div class="data-panel-heading"><span>⌨️</span>Allowed Keywords</div>'
+                    '<div class="data-panel-heading tone-slate"><span>⌨️</span>Allowed Keywords</div>'
                     '<p class="data-panel-subtitle">Tap or click any keyword to see what it means.</p>'
                     + expression_keyword_reference_html(),
                     unsafe_allow_html=True,
@@ -3343,7 +3581,7 @@ with tab2:
     with save_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>💾</span>Save Current Set</div>'
+                '<div class="data-panel-heading tone-green"><span>💾</span>Save Current Set</div>'
                 '<p class="data-panel-subtitle">Store all current filters under a memorable name.</p>',
                 unsafe_allow_html=True,
             )
@@ -3364,7 +3602,7 @@ with tab2:
     with remove_col:
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>🗑️</span>Remove Saved Set</div>'
+                '<div class="data-panel-heading tone-rose"><span>🗑️</span>Remove Saved Set</div>'
                 '<p class="data-panel-subtitle">Delete a saved set without changing the filters currently on screen.</p>',
                 unsafe_allow_html=True,
             )
@@ -3488,9 +3726,15 @@ with tab2:
 # TAB 3: BACKTEST
 # =====================================================================
 with tab3:
-    st.header("Backtest")
     current_market = normalize_market(selected_market)
-    st.caption(f"Market: {market_label(current_market)}")
+    render_workspace_banner(
+        "backtest",
+        "Workspace 03 · Strategy validation",
+        "Backtest",
+        "Test saved strategies across historical market data with equal-weight performance analysis.",
+        "↻",
+        f"{market_label(current_market)} market",
+    )
 
     favorite_names = sorted(favorite_filter_sets.keys())
     if not favorite_names:
@@ -3616,7 +3860,7 @@ with tab3:
 
         with st.container(border=True):
             st.markdown(
-                '<div class="data-panel-heading"><span>🎯</span>Sell Strategy'
+                '<div class="data-panel-heading tone-amber"><span>🎯</span>Sell Strategy'
                 '<details class="sell-strategy-help">'
                 '<summary aria-label="Sell Strategy help" title="Sell Strategy help">?</summary>'
                 '<div class="sell-strategy-help__popup">'
@@ -3807,7 +4051,14 @@ with tab3:
 # TAB 4: RESULTS
 # =====================================================================
 with tab4:
-    st.header("📊 Results")
+    render_workspace_banner(
+        "results",
+        "Workspace 04 · Decision review",
+        "Results",
+        "Review matched stocks, compare key metrics, and move from summary tables into detailed charts.",
+        "▥",
+        "Analyze",
+    )
 
     live_screener_job = drain_live_screener_events()
 
