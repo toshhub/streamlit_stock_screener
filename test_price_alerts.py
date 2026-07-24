@@ -129,6 +129,12 @@ class PriceAlertTests(unittest.TestCase):
                 "TEST", "INDIA", 110, current_price=100, current_candle_date="2026-01-01"
             )
 
+    def test_guest_cannot_remove_alerts_when_accounts_are_required(self):
+        configure_cloud_alerts(object(), require_auth=True)
+
+        with self.assertRaises(PermissionError):
+            remove_price_alerts(["guest-alert"])
+
     def test_cloud_alerts_are_scoped_to_the_current_user(self):
         class FakeCloudAlerts:
             def __init__(self):

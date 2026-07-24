@@ -135,6 +135,20 @@ if cloud_startup_error:
     st.sidebar.error(cloud_startup_error)
 
 
+def render_login_prompt(message, key, error=False):
+    """Explain an account-only action and provide an immediate Google login."""
+    if error:
+        st.error(message)
+    else:
+        st.info(message)
+    st.button(
+        "Continue with Google",
+        key=key,
+        type="primary",
+        on_click=st.login,
+    )
+
+
 def query_param_value(name, default=None):
     value = st.query_params.get(name, default)
     if isinstance(value, list):
@@ -157,6 +171,9 @@ def process_price_alert_request():
         else:
             message = f"That {symbol} price alert already exists. No duplicate was added."
         st.session_state["price_alert_feedback"] = ("success", message)
+    except PermissionError as exc:
+        st.session_state["price_alert_feedback"] = ("error", str(exc))
+        st.session_state["price_alert_login_required"] = True
     except (TypeError, ValueError, OSError, RuntimeError) as exc:
         st.session_state["price_alert_feedback"] = ("error", f"Could not create alert: {exc}")
     st.session_state["switch_to_alerts_tab"] = True
@@ -1373,6 +1390,8 @@ def mark_current_filter_custom():
             active_name,
             active_name,
         )
+        if app_user is None:
+            st.session_state["_favorite_edit_login_required"] = True
     st.session_state["_active_favorite_filter_name"] = None
     update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
 
@@ -3034,6 +3053,12 @@ if price_alert_feedback:
         st.error(message)
     else:
         st.toast(message, icon="🔔")
+if st.session_state.pop("price_alert_login_required", False):
+    render_login_prompt(
+        "Sign in with Google to create and manage personal price alerts.",
+        key="price_alert_feedback_login",
+        error=True,
+    )
 
 
 # =====================================================================
@@ -3394,11 +3419,20 @@ with tab2:
             [key for key in FILTER_TYPE_LABELS if key != "green_candle_today"],
             format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
-        add_filter = st.button(
-            "➕ Add",
-            use_container_width=True,
-            help="Add the selected rule to the current filter set.",
-        )
+        add_filter_col, remove_last_filter_col = st.columns(2)
+        with add_filter_col:
+            add_filter = st.button(
+                "➕ Add",
+                use_container_width=True,
+                help="Add the selected rule to the current filter set.",
+            )
+        with remove_last_filter_col:
+            remove_last_filter = st.button(
+                "− Remove Last",
+                use_container_width=True,
+                disabled=not current_filter_set,
+                help="Remove the most recently added rule from the current filter set.",
+            )
 
     if add_filter:
         mark_current_filter_custom()
@@ -3408,6 +3442,11 @@ with tab2:
             "params": deepcopy(FILTER_TYPE_DEFAULTS[filter_type_to_add]),
         })
         st.session_state["next_filter_id"] += 1
+        st.rerun()
+
+    if remove_last_filter:
+        mark_current_filter_custom()
+        st.session_state["current_filter_set"] = current_filter_set[:-1]
         st.rerun()
 
     # Use a widget-key version so that when a favourite is loaded new widget
@@ -3759,6 +3798,13 @@ with tab2:
     })
 
     # ===== Favorite Filter Management =====
+    if st.session_state.pop("_favorite_edit_login_required", False):
+        render_login_prompt(
+            "Your filter changes are temporary in guest mode. Sign in with Google to save them as a personal favorite.",
+            key="favorite_edit_login",
+            error=True,
+        )
+
     st.markdown(
         '<div class="screener-section-heading">'
         '<div class="screener-section-heading__title">⭐ Favorite Sets</div>'
@@ -3769,7 +3815,13 @@ with tab2:
     save_col, remove_col = st.columns(2)
     personal_saves_enabled = app_user is not None and cloud_store is not None
     if not personal_saves_enabled:
-        st.info("Guest mode: sign in with Google to save or remove personal favorite sets.")
+        if app_user is None:
+            render_login_prompt(
+                "Guest mode: sign in with Google to save or remove personal favorite sets.",
+                key="favorite_guest_login",
+            )
+        else:
+            st.warning("Cloud storage is not configured, so personal favorite sets are unavailable.")
     with save_col:
         with st.container(border=True):
             st.markdown(
@@ -3786,7 +3838,6 @@ with tab2:
                 "⭐ Save Favorite",
                 type="primary",
                 use_container_width=True,
-                disabled=not personal_saves_enabled,
                 help="Use an existing name to update that favorite, or enter a new name to create one.",
             )
 
@@ -3810,16 +3861,23 @@ with tab2:
                     "Remove Favorite",
                     type="primary",
                     use_container_width=True,
-                    disabled=not personal_saves_enabled,
                 )
             else:
                 st.info("No personal favorite sets yet.")
 
     if save_fav:
-        clean_name = favorite_name.strip()
-        if not clean_name:
+        if app_user is None:
+            render_login_prompt(
+                "Sign in with Google before saving or updating a personal favorite filter.",
+                key="favorite_save_login",
+                error=True,
+            )
+        elif cloud_store is None:
+            st.error("Cloud storage is not configured, so this favorite cannot be saved.")
+        elif not favorite_name.strip():
             st.error("Enter a favorite filter name before saving.")
         else:
+            clean_name = favorite_name.strip()
             favorite_data = {
                 "ma_filter_set": filter_set,
                 "pattern": {
@@ -3841,19 +3899,30 @@ with tab2:
                 st.success(f"⭐ Saved personal favorite: {clean_name}")
                 st.rerun()
 
-    if delete_fav and del_favorite_name in personal_favorite_keys:
-        stored_name = personal_favorite_keys[del_favorite_name]
-        try:
-            cloud_store.delete_filter_set(app_user.id, stored_name)
-        except CloudStorageError as exc:
-            st.error(str(exc))
+    if delete_fav:
+        if app_user is None:
+            render_login_prompt(
+                "Sign in with Google before removing a personal favorite filter.",
+                key="favorite_remove_login",
+                error=True,
+            )
+        elif cloud_store is None:
+            st.error("Cloud storage is not configured, so this favorite cannot be removed.")
+        elif del_favorite_name not in personal_favorite_keys:
+            st.error("Select a personal favorite filter to remove.")
         else:
-            if settings.get("selected_favorite_filter_set") == del_favorite_name:
-                st.session_state["_active_favorite_filter_name"] = None
-                update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
-            st.session_state.pop("_favorite_select_widget", None)
-            st.success(f"🗑️ Removed personal favorite: {stored_name}")
-            st.rerun()
+            stored_name = personal_favorite_keys[del_favorite_name]
+            try:
+                cloud_store.delete_filter_set(app_user.id, stored_name)
+            except CloudStorageError as exc:
+                st.error(str(exc))
+            else:
+                if settings.get("selected_favorite_filter_set") == del_favorite_name:
+                    st.session_state["_active_favorite_filter_name"] = None
+                    update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
+                st.session_state.pop("_favorite_select_widget", None)
+                st.success(f"🗑️ Removed personal favorite: {stored_name}")
+                st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:
@@ -4429,7 +4498,10 @@ with tab5:
     )
 
     if app_user is None:
-        st.info("Guest mode: sign in with Google to create and manage personal price alerts.")
+        render_login_prompt(
+            "Guest mode: sign in with Google to create and manage personal price alerts.",
+            key="alerts_guest_login",
+        )
     elif cloud_store is None:
         st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
 
@@ -4491,6 +4563,16 @@ with tab5:
                 disabled=not remove_ids,
                 use_container_width=True,
             ):
-                removed = remove_price_alerts(remove_ids)
-                st.success(f"Removed {removed} price alert(s).")
-                st.rerun()
+                try:
+                    removed = remove_price_alerts(remove_ids)
+                except PermissionError as exc:
+                    render_login_prompt(
+                        str(exc),
+                        key="alert_remove_login",
+                        error=True,
+                    )
+                except (OSError, RuntimeError) as exc:
+                    st.error(f"Could not remove alerts: {exc}")
+                else:
+                    st.success(f"Removed {removed} price alert(s).")
+                    st.rerun()
