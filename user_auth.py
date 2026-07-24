@@ -1,5 +1,6 @@
 """Google OIDC helpers for optional Streamlit user accounts."""
 
+import html
 from dataclasses import dataclass
 
 
@@ -45,7 +46,7 @@ def current_user(st):
 
 
 def render_account_controls(st, user, cloud_enabled):
-    """Render the login/account area without blocking guest use."""
+    """Render compact sidebar account context without duplicating header actions."""
     with st.sidebar:
         st.markdown("### Account")
         if user:
@@ -54,10 +55,51 @@ def render_account_controls(st, user, cloud_enabled):
                 st.caption(user.email)
             if not cloud_enabled:
                 st.warning("Cloud storage is not configured. Personal saves are temporarily unavailable.")
-            st.button("Sign out", on_click=st.logout, use_container_width=True)
         elif auth_configured(st):
-            st.caption("Sign in to save personal filters and create price alerts.")
-            st.button("Continue with Google", on_click=st.login, use_container_width=True)
+            st.caption("Guest access")
+            st.caption("Use the Log in with Google button in the top banner to save favorites and alerts.")
         else:
             st.caption("Guest mode")
             st.caption("Google login becomes available after the deployment secrets are configured.")
+
+
+def render_header_account_controls(st, user, cloud_enabled):
+    """Render the primary login or account action inside the application banner."""
+    with st.container(key="hero_account_panel"):
+        if user:
+            st.markdown(
+                '<div class="hero-account__label">Signed in</div>'
+                f'<div class="hero-account__name">{html.escape(user.name)}</div>',
+                unsafe_allow_html=True,
+            )
+            if user.email:
+                st.caption(user.email)
+            if not cloud_enabled:
+                st.warning("Personal cloud saves are unavailable.")
+            st.button(
+                "Sign out",
+                key="hero_sign_out",
+                on_click=st.logout,
+                use_container_width=True,
+            )
+        elif auth_configured(st):
+            st.markdown(
+                '<div class="hero-account__label">Guest access</div>'
+                '<div class="hero-account__name">Browsing as Guest</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Log in to save favorites and alerts.")
+            st.button(
+                "Log in with Google",
+                key="hero_google_login",
+                type="primary",
+                on_click=st.login,
+                use_container_width=True,
+            )
+        else:
+            st.markdown(
+                '<div class="hero-account__label">Guest access</div>'
+                '<div class="hero-account__name">Browsing as Guest</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Google login is not configured.")

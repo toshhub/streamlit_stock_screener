@@ -81,7 +81,7 @@ from storage import (
     save_results,
     update_settings,
 )
-from user_auth import current_user, render_account_controls
+from user_auth import current_user, render_account_controls, render_header_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
@@ -458,13 +458,9 @@ st.markdown(
     }
 
     /* Product header */
-    .app-hero {
+    .st-key-app_hero_shell {
         position: relative;
         overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 2rem;
         min-height: 126px;
         margin: 0 0 1.15rem;
         padding: 1.55rem 1.8rem;
@@ -473,7 +469,7 @@ st.markdown(
         background: linear-gradient(118deg, #10243e 0%, #145a73 58%, #1c7c8f 100%);
         box-shadow: 0 16px 38px rgba(16, 53, 76, 0.20);
     }
-    .app-hero::after {
+    .st-key-app_hero_shell::after {
         content: "";
         position: absolute;
         width: 230px;
@@ -482,6 +478,11 @@ st.markdown(
         top: -105px;
         border-radius: 50%;
         border: 42px solid rgba(255, 255, 255, 0.07);
+    }
+    .st-key-app_hero_shell [data-testid="stHorizontalBlock"] {
+        position: relative;
+        z-index: 1;
+        align-items: center;
     }
     .app-hero__content {
         position: relative;
@@ -509,20 +510,42 @@ st.markdown(
         color: rgba(255, 255, 255, 0.78);
         font-size: 0.96rem;
     }
-    .app-hero__mark {
+    .st-key-hero_account_panel {
         position: relative;
         z-index: 1;
-        display: grid;
-        place-items: center;
-        width: 70px;
-        height: 70px;
-        flex: 0 0 70px;
+        padding: 0.9rem 1rem;
         border: 1px solid rgba(255, 255, 255, 0.22);
-        border-radius: 20px;
+        border-radius: 16px;
         background: rgba(255, 255, 255, 0.11);
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20);
+    }
+    .hero-account__label {
+        margin-bottom: 0.18rem;
+        color: #8de0e4;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+    }
+    .hero-account__name {
         color: #ffffff;
-        font-size: 2rem;
+        font-size: 0.98rem;
+        font-weight: 800;
+    }
+    .st-key-hero_account_panel .stCaption {
+        color: rgba(255, 255, 255, 0.72) !important;
+    }
+    .st-key-hero_account_panel .stButton > button {
+        min-height: 2.55rem;
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        background: #ffffff;
+        color: #124e67;
+        font-weight: 800;
+    }
+    .st-key-hero_account_panel .stButton > button:hover {
+        border-color: #8de0e4;
+        background: #eafcfd;
+        color: #103f55;
     }
 
     /* Workflow overview */
@@ -1206,16 +1229,19 @@ st.markdown(
         .stMainBlockContainer {
             padding-top: 0.8rem;
         }
-        .app-hero {
+        .st-key-app_hero_shell {
             min-height: 112px;
             padding: 1.25rem;
             border-radius: 17px;
         }
-        .app-hero__mark {
-            display: none;
-        }
         .app-hero__subtitle {
             font-size: 0.86rem;
+        }
+        .st-key-app_hero_shell [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+        }
+        .st-key-hero_account_panel {
+            padding: 0.75rem 0.85rem;
         }
         .workflow-rail {
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1269,22 +1295,28 @@ def render_workspace_banner(tone, eyebrow, title, description, icon, badge):
         unsafe_allow_html=True,
     )
 
-st.markdown(
-    """
-    <section class="app-hero">
-        <div class="app-hero__content">
-            <div class="app-hero__eyebrow">Market intelligence workspace</div>
-            <h1 class="app-hero__title">NSE Stock Screener</h1>
-            <p class="app-hero__subtitle">
-                Download market data, build precise screeners, validate strategies,
-                and review opportunities in one focused workspace.
-            </p>
-        </div>
-        <div class="app-hero__mark" aria-hidden="true">↗</div>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
+with st.container(key="app_hero_shell"):
+    hero_copy_col, hero_account_col = st.columns(
+        [4.2, 1.45],
+        gap="large",
+        vertical_alignment="center",
+    )
+    with hero_copy_col:
+        st.markdown(
+            """
+            <div class="app-hero__content">
+                <div class="app-hero__eyebrow">Market intelligence workspace</div>
+                <h1 class="app-hero__title">NSE Stock Screener</h1>
+                <p class="app-hero__subtitle">
+                    Download market data, build precise screeners, validate strategies,
+                    and review opportunities in one focused workspace.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hero_account_col:
+        render_header_account_controls(st, app_user, cloud_store is not None)
 
 st.markdown(
     """
