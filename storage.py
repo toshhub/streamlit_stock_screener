@@ -1,6 +1,7 @@
 
 import json
 import threading
+from contextvars import ContextVar
 from config import META_DIR
 
 SETTINGS_FILE = META_DIR / "session_settings.json"
@@ -10,16 +11,33 @@ PE_RATIOS_FILE = META_DIR / "pe_ratios.json"
 FUNDAMENTALS_FILE = META_DIR / "screener_fundamentals.json"
 RESULTS_FILE = META_DIR / "last_results.json"
 _SETTINGS_LOCK = threading.RLock()
+_USER_STORAGE_BACKEND = None
+_CURRENT_USER_ID = ContextVar("settings_user_id", default=None)
+
+
+def configure_user_storage(backend, user_id=None):
+    """Configure optional per-user settings without changing shared JSON storage."""
+    global _USER_STORAGE_BACKEND
+    _USER_STORAGE_BACKEND = backend
+    _CURRENT_USER_ID.set(str(user_id).strip() if user_id else None)
+
+
+def _load_shared_settings():
+    if SETTINGS_FILE.exists():
+        return json.loads(SETTINGS_FILE.read_text())
+    if LEGACY_SETTINGS_FILE.exists():
+        settings = json.loads(LEGACY_SETTINGS_FILE.read_text())
+        save_settings(settings)
+        return settings
+    return {}
 
 def load_settings():
     with _SETTINGS_LOCK:
-        if SETTINGS_FILE.exists():
-            return json.loads(SETTINGS_FILE.read_text())
-        if LEGACY_SETTINGS_FILE.exists():
-            settings = json.loads(LEGACY_SETTINGS_FILE.read_text())
-            save_settings(settings)
-            return settings
-        return {}
+        settings = _load_shared_settings()
+        user_id = _CURRENT_USER_ID.get()
+        if _USER_STORAGE_BACKEND is not None and user_id:
+            settings.update(_USER_STORAGE_BACKEND.load_settings(user_id))
+        return settings
 
 def save_settings(data):
     with _SETTINGS_LOCK:
@@ -27,6 +45,9 @@ def save_settings(data):
 
 def update_settings(data):
     with _SETTINGS_LOCK:
+        user_id = _CURRENT_USER_ID.get()
+        if _USER_STORAGE_BACKEND is not None and user_id:
+            return _USER_STORAGE_BACKEND.update_settings(user_id, data)
         settings = load_settings()
         settings.update(data)
         save_settings(settings)

@@ -1,6 +1,7 @@
 
-streamlit
+streamlit[auth]>=1.42,<2
 yfinance
 pandas
 openpyxl
 matplotlib
+supabase>=2.30,<3

@@ -6,15 +6,19 @@ from unittest.mock import patch
 
 from price_alerts import (
     check_price_alerts_for_symbol,
+    configure_cloud_alerts,
     create_price_alert,
     load_price_alerts,
     remove_price_alerts,
+    set_current_alert_user,
     sort_price_alerts,
 )
 
 
 class PriceAlertTests(unittest.TestCase):
     def setUp(self):
+        configure_cloud_alerts(None, require_auth=False)
+        set_current_alert_user(None)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.alert_file = Path(self.temp_dir.name) / "price_alerts.json"
         self.stock_file = Path(self.temp_dir.name) / "TEST.json"
@@ -22,6 +26,8 @@ class PriceAlertTests(unittest.TestCase):
         self.file_patch.start()
 
     def tearDown(self):
+        configure_cloud_alerts(None, require_auth=False)
+        set_current_alert_user(None)
         self.file_patch.stop()
         self.temp_dir.cleanup()
 
@@ -114,6 +120,48 @@ class PriceAlertTests(unittest.TestCase):
             [alert["id"] for alert in ordered],
             ["active-new", "active-old", "triggered-new", "triggered-old"],
         )
+
+    def test_guest_cannot_create_alert_when_accounts_are_required(self):
+        configure_cloud_alerts(object(), require_auth=True)
+
+        with self.assertRaises(PermissionError):
+            create_price_alert(
+                "TEST", "INDIA", 110, current_price=100, current_candle_date="2026-01-01"
+            )
+
+    def test_cloud_alerts_are_scoped_to_the_current_user(self):
+        class FakeCloudAlerts:
+            def __init__(self):
+                self.rows = {}
+
+            def load_alerts(self, user_id):
+                return list(self.rows.get(user_id, {}).values())
+
+            def create_alert(self, user_id, alert):
+                user_rows = self.rows.setdefault(user_id, {})
+                if alert["id"] in user_rows:
+                    return dict(user_rows[alert["id"]]), False
+                user_rows[alert["id"]] = dict(alert)
+                return dict(alert), True
+
+        backend = FakeCloudAlerts()
+        configure_cloud_alerts(backend, require_auth=True)
+        set_current_alert_user("google-user-a")
+        first, created = create_price_alert(
+            "TEST", "INDIA", 110, current_price=100, current_candle_date="2026-01-01"
+        )
+
+        set_current_alert_user("google-user-b")
+        self.assertEqual(load_price_alerts(), [])
+        second, second_created = create_price_alert(
+            "TEST", "INDIA", 110, current_price=100, current_candle_date="2026-01-01"
+        )
+
+        self.assertTrue(created)
+        self.assertTrue(second_created)
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(backend.rows["google-user-a"]), 1)
+        self.assertEqual(len(backend.rows["google-user-b"]), 1)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ from charting import (
     render_interactive_stock_chart,
     sortable_results_table,
 )
+from cloud_storage import CloudStorageError, cloud_storage_from_config
 from downloader import (
     MARKET_INDIA,
     MARKET_US,
@@ -53,9 +54,11 @@ from fundamentals import (
 )
 from pattern import evaluate_pattern_filters, validate_expression
 from price_alerts import (
+    configure_cloud_alerts,
     create_price_alert,
     load_price_alerts,
     remove_price_alerts,
+    set_current_alert_user,
     sort_price_alerts,
 )
 from screener import (
@@ -70,6 +73,7 @@ from screener import (
     screen_json_file,
 )
 from storage import (
+    configure_user_storage,
     load_favourite_filter_sets,
     load_results,
     load_settings,
@@ -77,14 +81,58 @@ from storage import (
     save_results,
     update_settings,
 )
+from user_auth import current_user, render_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
-settings = load_settings()
-favorite_filter_sets = load_favourite_filter_sets()
-if not favorite_filter_sets and settings.get("favorite_filter_sets"):
-    favorite_filter_sets = settings["favorite_filter_sets"]
-    save_favourite_filter_sets(favorite_filter_sets)
+shared_settings = load_settings()
+shared_favorite_filter_sets = load_favourite_filter_sets()
+if not shared_favorite_filter_sets and shared_settings.get("favorite_filter_sets"):
+    shared_favorite_filter_sets = shared_settings["favorite_filter_sets"]
+    save_favourite_filter_sets(shared_favorite_filter_sets)
+
+cloud_store = cloud_storage_from_config(st)
+app_user = current_user(st)
+configure_user_storage(cloud_store, app_user.id if app_user else None)
+configure_cloud_alerts(cloud_store, require_auth=True)
+set_current_alert_user(app_user.id if app_user else None)
+
+cloud_startup_error = ""
+try:
+    settings = load_settings()
+    personal_filter_sets = (
+        cloud_store.load_filter_sets(app_user.id)
+        if cloud_store is not None and app_user is not None
+        else {}
+    )
+except CloudStorageError as exc:
+    settings = dict(shared_settings)
+    personal_filter_sets = {}
+    cloud_startup_error = str(exc)
+
+
+def personal_favorite_display_name(name):
+    """Keep shared names stable and disambiguate only a colliding personal name."""
+    return f"{name} (My)" if name in shared_favorite_filter_sets else name
+
+
+def favorite_option_label(display_name):
+    if display_name in personal_favorite_keys:
+        return f"My · {personal_favorite_keys[display_name]}"
+    return f"Shared · {display_name}"
+
+
+personal_favorite_keys = {
+    personal_favorite_display_name(name): name
+    for name in personal_filter_sets
+}
+favorite_filter_sets = dict(shared_favorite_filter_sets)
+for display_name, stored_name in personal_favorite_keys.items():
+    favorite_filter_sets[display_name] = personal_filter_sets[stored_name]
+
+render_account_controls(st, app_user, cloud_store is not None)
+if cloud_startup_error:
+    st.sidebar.error(cloud_startup_error)
 
 
 def query_param_value(name, default=None):
@@ -109,7 +157,7 @@ def process_price_alert_request():
         else:
             message = f"That {symbol} price alert already exists. No duplicate was added."
         st.session_state["price_alert_feedback"] = ("success", message)
-    except (TypeError, ValueError, OSError) as exc:
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
         st.session_state["price_alert_feedback"] = ("error", f"Could not create alert: {exc}")
     st.session_state["switch_to_alerts_tab"] = True
     st.query_params.clear()
@@ -1321,7 +1369,10 @@ def mark_current_filter_custom():
         # Preserve the source name so Save Favorite can update the original
         # favorite without requiring the user to type its name again.
         st.session_state["_favorite_source_name"] = active_name
-        st.session_state["_favorite_name_to_save"] = active_name
+        st.session_state["_favorite_name_to_save"] = personal_favorite_keys.get(
+            active_name,
+            active_name,
+        )
     st.session_state["_active_favorite_filter_name"] = None
     update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
 
@@ -1360,7 +1411,10 @@ def apply_filter_selection_to_state(filter_name):
     st.session_state["pattern_reversal_pct_number"] = reversal_pct
     st.session_state["_active_favorite_filter_name"] = filter_name
     st.session_state["_favorite_source_name"] = filter_name
-    st.session_state["_favorite_name_to_save"] = filter_name
+    st.session_state["_favorite_name_to_save"] = personal_favorite_keys.get(
+        filter_name,
+        filter_name,
+    )
 
     update_settings({
         "selected_favorite_filter_set": filter_name,
@@ -3304,6 +3358,7 @@ with tab2:
                 favorite_options,
                 key="_favorite_select_widget",
                 on_change=on_favorite_filter_selected,
+                format_func=favorite_option_label,
                 help="Select a saved favorite filter set to load all of its filters.",
             )
             # Ensure the save-name field is pre-filled with the currently-selected favourite
@@ -3712,6 +3767,9 @@ with tab2:
         unsafe_allow_html=True,
     )
     save_col, remove_col = st.columns(2)
+    personal_saves_enabled = app_user is not None and cloud_store is not None
+    if not personal_saves_enabled:
+        st.info("Guest mode: sign in with Google to save or remove personal favorite sets.")
     with save_col:
         with st.container(border=True):
             st.markdown(
@@ -3728,6 +3786,7 @@ with tab2:
                 "⭐ Save Favorite",
                 type="primary",
                 use_container_width=True,
+                disabled=not personal_saves_enabled,
                 help="Use an existing name to update that favorite, or enter a new name to create one.",
             )
 
@@ -3740,26 +3799,28 @@ with tab2:
                 '<p class="data-panel-subtitle">Delete a saved set without changing the filters currently on screen.</p>',
                 unsafe_allow_html=True,
             )
-            if favorite_filter_sets:
+            if personal_favorite_keys:
                 del_favorite_name = st.selectbox(
-                    "Favorite Filter Set",
-                    sorted(favorite_filter_sets.keys()),
+                    "My Favorite Filter Set",
+                    sorted(personal_favorite_keys.keys()),
                     key="delete_favorite_select",
+                    format_func=lambda key: personal_favorite_keys[key],
                 )
                 delete_fav = st.button(
                     "Remove Favorite",
                     type="primary",
                     use_container_width=True,
+                    disabled=not personal_saves_enabled,
                 )
             else:
-                st.info("No saved favorite sets yet.")
+                st.info("No personal favorite sets yet.")
 
     if save_fav:
         clean_name = favorite_name.strip()
         if not clean_name:
             st.error("Enter a favorite filter name before saving.")
         else:
-            favorite_filter_sets[clean_name] = {
+            favorite_data = {
                 "ma_filter_set": filter_set,
                 "pattern": {
                     "lookback_days": pattern_lookback_days,
@@ -3767,23 +3828,32 @@ with tab2:
                     "expressions": custom_filter_expressions(filter_set),
                 },
             }
-            save_favourite_filter_sets(favorite_filter_sets)
-            st.session_state["_active_favorite_filter_name"] = clean_name
-            st.session_state["_favorite_source_name"] = clean_name
-            update_settings({"selected_favorite_filter_set": clean_name})
-            st.session_state.pop("_favorite_select_widget", None)
-            st.success(f"⭐ Saved favorite: {clean_name}")
-            st.rerun()
+            try:
+                cloud_store.save_filter_set(app_user.id, clean_name, favorite_data)
+            except (CloudStorageError, ValueError) as exc:
+                st.error(str(exc))
+            else:
+                display_name = personal_favorite_display_name(clean_name)
+                st.session_state["_active_favorite_filter_name"] = display_name
+                st.session_state["_favorite_source_name"] = display_name
+                update_settings({"selected_favorite_filter_set": display_name})
+                st.session_state.pop("_favorite_select_widget", None)
+                st.success(f"⭐ Saved personal favorite: {clean_name}")
+                st.rerun()
 
-    if delete_fav and del_favorite_name in favorite_filter_sets:
-        del favorite_filter_sets[del_favorite_name]
-        save_favourite_filter_sets(favorite_filter_sets)
-        if settings.get("selected_favorite_filter_set") == del_favorite_name:
-            st.session_state["_active_favorite_filter_name"] = None
-            update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
-        st.session_state.pop("_favorite_select_widget", None)
-        st.success(f"🗑️ Removed favorite: {del_favorite_name}")
-        st.rerun()
+    if delete_fav and del_favorite_name in personal_favorite_keys:
+        stored_name = personal_favorite_keys[del_favorite_name]
+        try:
+            cloud_store.delete_filter_set(app_user.id, stored_name)
+        except CloudStorageError as exc:
+            st.error(str(exc))
+        else:
+            if settings.get("selected_favorite_filter_set") == del_favorite_name:
+                st.session_state["_active_favorite_filter_name"] = None
+                update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
+            st.session_state.pop("_favorite_select_widget", None)
+            st.success(f"🗑️ Removed personal favorite: {stored_name}")
+            st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:
@@ -3961,6 +4031,7 @@ with tab3:
             "Favorite filters",
             favorite_names,
             key="backtest_selected_filters_input",
+            format_func=favorite_option_label,
             help="Select one or more saved favorite filter sets to compare.",
             on_change=persist_backtest_widget_settings,
         )
@@ -4357,6 +4428,11 @@ with tab5:
         "Monitor",
     )
 
+    if app_user is None:
+        st.info("Guest mode: sign in with Google to create and manage personal price alerts.")
+    elif cloud_store is None:
+        st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
+
     alerts = load_price_alerts()
     active_count = sum(alert.get("status") == "Active" for alert in alerts)
     triggered_count = sum(alert.get("status") == "Triggered" for alert in alerts)
@@ -4366,7 +4442,8 @@ with tab5:
     metric_total.metric("Total", len(alerts))
 
     if not alerts:
-        st.info("No price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
+        if app_user is not None and cloud_store is not None:
+            st.info("No personal price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
     else:
         sorted_alerts = sort_price_alerts(alerts)
         alert_rows = []

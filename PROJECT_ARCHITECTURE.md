@@ -516,6 +516,24 @@ Recommended schedule:
 
 ## Deployment Notes
 
+### Optional Google accounts and Supabase
+
+`user_auth.py` uses Streamlit's Google OIDC login. Guest use remains available,
+but only a verified Google user can save personal favorites or create alerts.
+`cloud_storage.py` stores personal filter sets, UI settings, and alerts in
+Supabase using the verified Google `sub` claim as the stable user ID.
+
+The existing `data/metadata/favourite_filters.json` remains the shared,
+centrally managed favorite library. Stock JSON, fundamentals, results, and
+other market-data files also remain central. Shared favorites are read-only
+from the normal user interface; logged-in users can add and remove only their
+own cloud favorites.
+
+The Supabase service-role key is server-only. Direct browser access is revoked
+by `supabase_schema.sql`, and every application query for personal data is
+filtered by the current verified user ID. See `CLOUD_SETUP.md` and
+`.streamlit/secrets.example.toml` for deployment configuration.
+
 The app can be deployed to Streamlit Community Cloud.
 
 Recommended files to commit:
