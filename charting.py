@@ -1804,7 +1804,7 @@ def render_interactive_stock_chart(
             else "That price alert already exists."
         )
         st.toast(message, icon="🔔")
-    except (TypeError, ValueError, OSError) as exc:
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
         st.toast(f"Could not create alert: {exc}", icon="⚠️")
 
 
