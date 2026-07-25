@@ -207,6 +207,28 @@ class SupabaseCloudStorage:
             raise CloudStorageError(f"Could not remove personal price alerts: {exc}") from exc
         return len(response.data or [])
 
+    def acknowledge_alerts(self, user_id, alert_ids, acknowledged_at):
+        user_id = self._require_user(user_id)
+        clean_ids = [str(item) for item in alert_ids if item]
+        if not clean_ids:
+            return 0
+        try:
+            response = (
+                self.client.table("user_alerts")
+                .update({
+                    "acknowledged": True,
+                    "acknowledged_at": str(acknowledged_at),
+                })
+                .eq("user_id", user_id)
+                .eq("status", "Triggered")
+                .eq("acknowledged", False)
+                .in_("id", clean_ids)
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not acknowledge personal price alerts: {exc}") from exc
+        return len(response.data or [])
+
     def load_active_alerts(self, symbol, market):
         """Server-only query used by the central stock download worker."""
         try:

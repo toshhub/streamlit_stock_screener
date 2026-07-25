@@ -35,8 +35,17 @@ create table if not exists public.user_alerts (
     triggered_at text not null default '',
     triggered_candle_date text not null default '',
     triggered_price numeric,
+    acknowledged boolean not null default false,
+    acknowledged_at text not null default '',
     primary key (user_id, id)
 );
+
+-- Safe migration for projects where user_alerts was created by an earlier
+-- version of this schema.
+alter table public.user_alerts
+    add column if not exists acknowledged boolean not null default false;
+alter table public.user_alerts
+    add column if not exists acknowledged_at text not null default '';
 
 create index if not exists user_alerts_active_symbol_market_idx
     on public.user_alerts (status, symbol, market);

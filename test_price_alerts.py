@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from price_alerts import (
+    acknowledge_price_alerts,
     check_price_alerts_for_symbol,
     configure_cloud_alerts,
     create_price_alert,
@@ -63,6 +64,25 @@ class PriceAlertTests(unittest.TestCase):
         self.assertEqual(second, [])
         self.assertEqual(load_price_alerts()[0]["status"], "Triggered")
         self.assertEqual(load_price_alerts()[0]["triggered_candle_date"], "2026-01-02")
+        self.assertFalse(load_price_alerts()[0]["acknowledged"])
+
+    def test_triggered_alert_can_be_acknowledged(self):
+        alert, _ = create_price_alert(
+            "TEST", "INDIA", 110, current_price=100, current_candle_date="2026-01-01"
+        )
+        self._write_candles([
+            {"Date": "2026-01-01", "Open": 98, "High": 105, "Low": 97, "Close": 100},
+            {"Date": "2026-01-02", "Open": 101, "High": 112, "Low": 100, "Close": 111},
+        ])
+        check_price_alerts_for_symbol("TEST", "INDIA", self.stock_file)
+
+        acknowledged = acknowledge_price_alerts([alert["id"]])
+        stored = load_price_alerts()[0]
+
+        self.assertEqual(acknowledged, 1)
+        self.assertTrue(stored["acknowledged"])
+        self.assertTrue(stored["acknowledged_at"])
+        self.assertEqual(acknowledge_price_alerts([alert["id"]]), 0)
 
     def test_cross_below_uses_future_candle_low(self):
         alert, created = create_price_alert(
@@ -134,6 +154,12 @@ class PriceAlertTests(unittest.TestCase):
 
         with self.assertRaises(PermissionError):
             remove_price_alerts(["guest-alert"])
+
+    def test_guest_cannot_acknowledge_alerts_when_accounts_are_required(self):
+        configure_cloud_alerts(object(), require_auth=True)
+
+        with self.assertRaises(PermissionError):
+            acknowledge_price_alerts(["guest-alert"])
 
     def test_cloud_alerts_are_scoped_to_the_current_user(self):
         class FakeCloudAlerts:

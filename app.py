@@ -54,6 +54,7 @@ from fundamentals import (
 )
 from pattern import evaluate_pattern_filters, validate_expression
 from price_alerts import (
+    acknowledge_price_alerts,
     configure_cloud_alerts,
     create_price_alert,
     load_price_alerts,
@@ -2982,7 +2983,9 @@ def switch_to_tab(tab_index):
 
 
 triggered_alert_badge_count = sum(
-    alert.get("status") == "Triggered" for alert in load_price_alerts()
+    alert.get("status") == "Triggered"
+    and not bool(alert.get("acknowledged", False))
+    for alert in load_price_alerts()
 )
 if triggered_alert_badge_count:
     st.markdown(
@@ -4538,65 +4541,163 @@ with tab5:
         st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
 
     alerts = load_price_alerts()
-    active_count = sum(alert.get("status") == "Active" for alert in alerts)
-    triggered_count = sum(alert.get("status") == "Triggered" for alert in alerts)
-    metric_active, metric_triggered, metric_total = st.columns(3)
-    metric_active.metric("Active", active_count)
-    metric_triggered.metric("Triggered", triggered_count)
-    metric_total.metric("Total", len(alerts))
+    sorted_alerts = sort_price_alerts(alerts)
+    active_alerts = [
+        alert for alert in sorted_alerts
+        if alert.get("status") == "Active"
+    ]
+    new_alerts = [
+        alert for alert in sorted_alerts
+        if alert.get("status") == "Triggered"
+        and not bool(alert.get("acknowledged", False))
+    ]
+    old_alerts = [
+        alert for alert in sorted_alerts
+        if alert.get("status") == "Triggered"
+        and bool(alert.get("acknowledged", False))
+    ]
+
+    metric_active, metric_new, metric_old = st.columns(3)
+    metric_active.metric("Active Alerts", len(active_alerts))
+    metric_new.metric("New Alerts", len(new_alerts))
+    metric_old.metric("Old Alerts", len(old_alerts))
 
     if not alerts:
         if app_user is not None and cloud_store is not None:
             st.info("No personal price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
     else:
-        sorted_alerts = sort_price_alerts(alerts)
-        alert_rows = []
-        alert_ids = []
-        for alert in sorted_alerts:
-            alert_ids.append(str(alert.get("id", "")))
-            direction = "Cross above" if alert.get("direction") == "above" else "Cross below"
-            alert_rows.append({
-                "Remove": False,
-                "Market": market_label(alert.get("market", MARKET_INDIA)),
-                "Symbol": alert.get("symbol", ""),
-                "Condition": direction,
-                "Target Price": alert.get("target_price"),
-                "Reference Price": alert.get("reference_price"),
-                "Status": alert.get("status", "Active"),
-                "Created": alert.get("created_at", ""),
-                "Date of Trigger": alert.get("triggered_candle_date", ""),
-                "Trigger Price": alert.get("triggered_price", ""),
-            })
-        alert_df = pd.DataFrame(alert_rows, index=alert_ids)
-        edited_alerts = st.data_editor(
-            alert_df,
-            use_container_width=True,
-            hide_index=True,
-            disabled=[column for column in alert_df.columns if column != "Remove"],
-            column_config={
-                "Remove": st.column_config.CheckboxColumn("Remove", help="Select alerts to remove."),
-                "Target Price": st.column_config.NumberColumn(format="%.4f"),
-                "Reference Price": st.column_config.NumberColumn(format="%.4f"),
-                "Trigger Price": st.column_config.NumberColumn(format="%.4f"),
-                "Status": st.column_config.TextColumn(width="small"),
-            },
-            key="price_alerts_table",
-        )
-        remove_ids = [
-            str(alert_id)
-            for alert_id, selected in edited_alerts["Remove"].items()
-            if bool(selected)
-        ]
+        def alert_table_frame(table_alerts, *, include_remove=False, include_acknowledged=False):
+            rows = []
+            alert_ids = []
+            for alert in table_alerts:
+                alert_ids.append(str(alert.get("id", "")))
+                direction = "Cross above" if alert.get("direction") == "above" else "Cross below"
+                row = {}
+                if include_acknowledged:
+                    row["Acknowledged"] = False
+                if include_remove:
+                    row["Remove"] = False
+                row.update({
+                    "Market": market_label(alert.get("market", MARKET_INDIA)),
+                    "Symbol": alert.get("symbol", ""),
+                    "Condition": direction,
+                    "Target Price": alert.get("target_price"),
+                    "Reference Price": alert.get("reference_price"),
+                    "Created": alert.get("created_at", ""),
+                    "Date of Trigger": alert.get("triggered_candle_date", ""),
+                    "Trigger Price": alert.get("triggered_price", ""),
+                })
+                rows.append(row)
+            return pd.DataFrame(rows, index=alert_ids)
+
+        table_column_config = {
+            "Acknowledged": st.column_config.CheckboxColumn(
+                "Acknowledge",
+                help="Tick an alert to move it to Old Alerts.",
+                width="small",
+            ),
+            "Remove": st.column_config.CheckboxColumn(
+                "Remove",
+                help="Select alerts to remove.",
+                width="small",
+            ),
+            "Target Price": st.column_config.NumberColumn(format="%.4f"),
+            "Reference Price": st.column_config.NumberColumn(format="%.4f"),
+            "Trigger Price": st.column_config.NumberColumn(format="%.4f"),
+        }
+
+        st.subheader("Active Alerts")
+        st.caption("Price conditions that are still being monitored.")
+        selected_remove_ids = []
+        if active_alerts:
+            active_df = alert_table_frame(active_alerts, include_remove=True)
+            edited_active = st.data_editor(
+                active_df,
+                use_container_width=True,
+                hide_index=True,
+                disabled=[column for column in active_df.columns if column != "Remove"],
+                column_config=table_column_config,
+                key="active_price_alerts_table",
+            )
+            selected_remove_ids.extend(
+                str(alert_id)
+                for alert_id, selected in edited_active["Remove"].items()
+                if bool(selected)
+            )
+        else:
+            st.info("No active alerts.")
+
+        st.subheader("New Alerts")
+        st.caption("Triggered alerts awaiting your acknowledgement.")
+        if new_alerts:
+            new_df = alert_table_frame(new_alerts, include_acknowledged=True)
+            edited_new = st.data_editor(
+                new_df,
+                use_container_width=True,
+                hide_index=True,
+                disabled=[
+                    column for column in new_df.columns
+                    if column != "Acknowledged"
+                ],
+                column_config=table_column_config,
+                key="new_price_alerts_table",
+            )
+            acknowledge_ids = [
+                str(alert_id)
+                for alert_id, selected in edited_new["Acknowledged"].items()
+                if bool(selected)
+            ]
+            if acknowledge_ids:
+                try:
+                    acknowledged = acknowledge_price_alerts(acknowledge_ids)
+                except PermissionError as exc:
+                    render_login_prompt(
+                        str(exc),
+                        key="alert_acknowledge_login",
+                        error=True,
+                    )
+                except (OSError, RuntimeError) as exc:
+                    st.error(f"Could not acknowledge alerts: {exc}")
+                else:
+                    if acknowledged:
+                        st.toast(
+                            f"Acknowledged {acknowledged} alert(s).",
+                            icon="✅",
+                        )
+                    st.rerun()
+        else:
+            st.info("No new alerts.")
+
+        st.subheader("Old Alerts")
+        st.caption("Triggered alerts you have already acknowledged.")
+        if old_alerts:
+            old_df = alert_table_frame(old_alerts, include_remove=True)
+            edited_old = st.data_editor(
+                old_df,
+                use_container_width=True,
+                hide_index=True,
+                disabled=[column for column in old_df.columns if column != "Remove"],
+                column_config=table_column_config,
+                key="old_price_alerts_table",
+            )
+            selected_remove_ids.extend(
+                str(alert_id)
+                for alert_id, selected in edited_old["Remove"].items()
+                if bool(selected)
+            )
+        else:
+            st.info("No old alerts.")
+
         remove_col, _ = st.columns([1, 4])
         with remove_col:
             if st.button(
                 "Remove selected",
                 type="secondary",
-                disabled=not remove_ids,
+                disabled=not selected_remove_ids,
                 use_container_width=True,
             ):
                 try:
-                    removed = remove_price_alerts(remove_ids)
+                    removed = remove_price_alerts(selected_remove_ids)
                 except PermissionError as exc:
                     render_login_prompt(
                         str(exc),

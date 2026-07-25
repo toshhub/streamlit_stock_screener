@@ -74,6 +74,14 @@ def _write_alerts_unlocked(alerts):
     temp_file.replace(PRICE_ALERTS_FILE)
 
 
+def _normalize_alert_record(alert):
+    """Add lifecycle defaults while remaining compatible with existing rows."""
+    normalized = dict(alert)
+    normalized["acknowledged"] = bool(normalized.get("acknowledged", False))
+    normalized["acknowledged_at"] = str(normalized.get("acknowledged_at") or "")
+    return normalized
+
+
 def load_price_alerts():
     if _REQUIRE_AUTH_FOR_WRITES and not _CURRENT_USER_ID.get():
         return []
@@ -81,9 +89,12 @@ def load_price_alerts():
         user_id = _CURRENT_USER_ID.get()
         if not user_id:
             return []
-        return _CLOUD_BACKEND.load_alerts(user_id)
+        return [
+            _normalize_alert_record(alert)
+            for alert in _CLOUD_BACKEND.load_alerts(user_id)
+        ]
     with _ALERTS_LOCK:
-        return [dict(alert) for alert in _read_alerts_unlocked()]
+        return [_normalize_alert_record(alert) for alert in _read_alerts_unlocked()]
 
 
 def sort_price_alerts(alerts):
@@ -179,6 +190,8 @@ def create_price_alert(
         "triggered_at": "",
         "triggered_candle_date": "",
         "triggered_price": None,
+        "acknowledged": False,
+        "acknowledged_at": "",
     }
     if _REQUIRE_AUTH_FOR_WRITES and not _CURRENT_USER_ID.get():
         raise PermissionError("Sign in with Google to create price alerts.")
@@ -251,6 +264,44 @@ def remove_price_alerts(alert_ids):
         if removed:
             _write_alerts_unlocked(kept)
         return removed
+
+
+def acknowledge_price_alerts(alert_ids):
+    """Mark triggered alerts as acknowledged for the current user."""
+    acknowledge_ids = {str(alert_id) for alert_id in alert_ids if alert_id}
+    if not acknowledge_ids:
+        return 0
+    if _REQUIRE_AUTH_FOR_WRITES and not _CURRENT_USER_ID.get():
+        raise PermissionError("Sign in with Google to acknowledge price alerts.")
+    if _REQUIRE_AUTH_FOR_WRITES and _CLOUD_BACKEND is None:
+        raise RuntimeError("Cloud alert storage is not configured.")
+
+    acknowledged_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    if _CLOUD_BACKEND is not None:
+        user_id = _CURRENT_USER_ID.get()
+        if not user_id:
+            raise PermissionError("Sign in with Google to acknowledge price alerts.")
+        return _CLOUD_BACKEND.acknowledge_alerts(
+            user_id,
+            acknowledge_ids,
+            acknowledged_at,
+        )
+
+    with _ALERTS_LOCK:
+        alerts = _read_alerts_unlocked()
+        acknowledged = 0
+        for alert in alerts:
+            if (
+                str(alert.get("id")) in acknowledge_ids
+                and alert.get("status") == "Triggered"
+                and not bool(alert.get("acknowledged", False))
+            ):
+                alert["acknowledged"] = True
+                alert["acknowledged_at"] = acknowledged_at
+                acknowledged += 1
+        if acknowledged:
+            _write_alerts_unlocked(alerts)
+        return acknowledged
 
 
 def _evaluate_alerts(alerts, candles, symbol, market):
