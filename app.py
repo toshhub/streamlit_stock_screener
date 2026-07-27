@@ -48,11 +48,10 @@ from downloader import (
     timeframe_config,
 )
 from fundamentals import (
-    enrich_result_with_growth_metrics,
     get_company_fundamentals,
-    repair_result_fundamentals,
 )
-from pattern import evaluate_pattern_filters, validate_expression
+from market_snapshots import latest_monthly_pe_values
+from pattern import evaluate_pattern_filters_from_df, validate_expression
 from price_alerts import (
     acknowledge_price_alerts,
     configure_cloud_alerts,
@@ -67,15 +66,18 @@ from screener import (
     FILTER_TYPE_DEFAULTS,
     FILTER_TYPE_LABELS,
     custom_filter_expressions,
+    filter_set_requires_pe,
+    load_price_dataframe,
     merge_legacy_expression_filters,
     normalize_filter_set,
     price_near_ma_periods,
     required_ma_periods,
-    screen_json_file,
+    screen_dataframe,
 )
 from storage import (
     configure_user_storage,
     load_favourite_filter_sets,
+    load_pe_ratios,
     load_results,
     load_settings,
     save_favourite_filter_sets,
@@ -1510,12 +1512,23 @@ def screen_stock_file_worker(
     pattern_lookback_days,
     pattern_reversal_pct,
     pattern_expressions,
+    pe_cache,
     create_charts=False,
 ):
-    result = screen_json_file(
-        stock_file,
+    del create_charts
+    price_df = load_price_dataframe(stock_file, filter_set=filter_set)
+    needs_pe = filter_set_requires_pe(filter_set, pattern_expressions)
+    cached_pe = pe_cache.get(
+        f"{normalize_market(market)}:{stock_file.stem}",
+        pe_cache.get(stock_file.stem, ""),
+    )
+    result = screen_dataframe(
+        price_df,
+        stock_file.stem,
         filter_set=filter_set,
+        include_pe=needs_pe,
         market=market,
+        pe_ratio=cached_pe,
     )
     if not result:
         return {
@@ -1531,8 +1544,8 @@ def screen_stock_file_worker(
     swings = []
     pattern_error = ""
     if pattern_expressions:
-        pattern_passed, swings, pattern_error = evaluate_pattern_filters(
-            stock_file,
+        pattern_passed, swings, pattern_error = evaluate_pattern_filters_from_df(
+            price_df,
             pattern_lookback_days,
             pattern_reversal_pct,
             pattern_expressions,
@@ -1541,18 +1554,8 @@ def screen_stock_file_worker(
 
     if pattern_passed:
         result["Market Cap Position"] = int(market_cap_position)
-        enrich_result_with_growth_metrics(result, stock_file.stem, market)
-
-    if pattern_passed and create_charts:
-        with CHART_CREATION_LOCK:
-            chart_path = create_stock_chart(
-                stock_file,
-                filter_set,
-                pe_ratio=result.get("PE Ratio"),
-            )
-        if chart_path:
-            result["ChartPath"] = chart_path
-            result["ChartSource"] = stock_file.stem
+        if result.get("PE Ratio") in ("", None):
+            result["PE Ratio"] = cached_pe
 
     return {
         "index": index,
@@ -1576,9 +1579,15 @@ def run_live_screener_job(
     create_charts,
 ):
     total = len(stock_files)
-    max_workers = min(8, max(1, total))
+    max_workers = min(
+        max(1, int(os.environ.get("SCREENER_MAX_WORKERS", "12"))),
+        max(1, total),
+    )
     matched_rows_by_index = {}
     failed_count = 0
+    pe_cache = load_pe_ratios()
+    for symbol, pe_ratio in latest_monthly_pe_values(market).items():
+        pe_cache.setdefault(f"{normalize_market(market)}:{symbol}", pe_ratio)
 
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1593,6 +1602,7 @@ def run_live_screener_job(
                     pattern_lookback_days,
                     pattern_reversal_pct,
                     pattern_expressions,
+                    pe_cache,
                     create_charts,
                 )
                 for index, stock_file in enumerate(stock_files, start=1)
@@ -1630,12 +1640,51 @@ def run_live_screener_job(
                     "matches": len(matched_rows_by_index),
                     "finished": stock_name,
                     "max_workers": max_workers,
+                    "phase": "screening",
                 })
 
         matched_rows = [
             matched_rows_by_index[index]
             for index in sorted(matched_rows_by_index)
         ]
+        if create_charts and matched_rows:
+            job_queue.put({
+                "type": "phase",
+                "phase": "charts",
+                "charts_total": len(matched_rows),
+            })
+            for chart_done, result in enumerate(matched_rows, start=1):
+                symbol = str(result.get("Symbol", "") or "")
+                stock_file = symbol_path(
+                    timeframe_config("DAY", market)["target_dir"],
+                    symbol,
+                )
+                try:
+                    with CHART_CREATION_LOCK:
+                        chart_path = create_stock_chart(
+                            stock_file,
+                            filter_set,
+                            pe_ratio=result.get("PE Ratio"),
+                        )
+                    if chart_path:
+                        result["ChartPath"] = chart_path
+                        result["ChartSource"] = symbol
+                        job_queue.put({
+                            "type": "row_update",
+                            "row": dict(result),
+                            "symbol": symbol,
+                        })
+                except Exception as exc:
+                    job_queue.put({
+                        "type": "worker_error",
+                        "message": f"{symbol} chart: {exc}",
+                    })
+                job_queue.put({
+                    "type": "phase",
+                    "phase": "charts",
+                    "charts_done": chart_done,
+                    "charts_total": len(matched_rows),
+                })
         job_queue.put({
             "type": "complete",
             "rows": matched_rows,
@@ -1663,7 +1712,10 @@ def start_live_screener_job(
 ):
     job_queue = queue.Queue()
     total = len(stock_files)
-    max_workers = min(8, max(1, total))
+    max_workers = min(
+        max(1, int(os.environ.get("SCREENER_MAX_WORKERS", "12"))),
+        max(1, total),
+    )
     thread = threading.Thread(
         target=run_live_screener_job,
         args=(
@@ -1690,6 +1742,7 @@ def start_live_screener_job(
         "max_workers": max_workers,
         "running": True,
         "error": "",
+        "phase": "screening",
         "started_at": datetime.now().strftime("%H:%M:%S"),
     }
     thread.start()
@@ -1713,12 +1766,30 @@ def drain_live_screener_events():
             rows.append(event["row"])
             job["matches"] = len(rows)
             job["last_symbol"] = event.get("symbol", "")
+        elif event_type == "row_update":
+            updated_row = event.get("row", {})
+            updated_symbol = str(event.get("symbol", "") or "")
+            for row_index, row in enumerate(rows):
+                if str(row.get("Symbol", "") or "") == updated_symbol:
+                    rows[row_index] = updated_row
+                    break
         elif event_type == "progress":
             job["done"] = event.get("done", job.get("done", 0))
             job["total"] = event.get("total", job.get("total", 0))
             job["matches"] = event.get("matches", job.get("matches", len(rows)))
             job["last_finished"] = event.get("finished", "")
             job["max_workers"] = event.get("max_workers", job.get("max_workers", 1))
+            job["phase"] = event.get("phase", job.get("phase", "screening"))
+        elif event_type == "phase":
+            job["phase"] = event.get("phase", job.get("phase", "screening"))
+            job["charts_done"] = event.get(
+                "charts_done",
+                job.get("charts_done", 0),
+            )
+            job["charts_total"] = event.get(
+                "charts_total",
+                job.get("charts_total", 0),
+            )
         elif event_type == "worker_error":
             job["failed_count"] = job.get("failed_count", 0) + 1
             job["last_error"] = event.get("message", "")
@@ -4015,6 +4086,7 @@ with tab2:
                 else ""
             ),
             "filter_conditions": filter_condition_lines + list(run_pattern_expressions),
+            "create_charts": bool(create_charts),
             "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         update_settings({"last_results_market": current_market})
@@ -4396,10 +4468,20 @@ with tab4:
         progress = done / total if total else 0
         st.progress(progress)
         if live_screener_job.get("running"):
-            st.info(
-                f"Screening live with {max_workers} workers: {done}/{total} processed, "
-                f"{matches} match(es) streamed so far."
-            )
+            if live_screener_job.get("phase") == "charts":
+                charts_done = live_screener_job.get("charts_done", 0)
+                charts_total = live_screener_job.get("charts_total", matches)
+                st.info(
+                    f"Screening complete with {matches} match(es). "
+                    f"Charts are attaching in the background: "
+                    f"{charts_done}/{charts_total}."
+                )
+            else:
+                st.info(
+                    f"Screening live with {max_workers} workers: "
+                    f"{done}/{total} processed, "
+                    f"{matches} match(es) streamed so far."
+                )
         elif live_screener_job.get("error"):
             st.error(f"Screener stopped: {live_screener_job['error']}")
         else:
@@ -4415,10 +4497,23 @@ with tab4:
             settings.get("screener_filter_set", st.session_state.get("current_filter_set", [])),
             use_default=False,
         )
-        if repair_blank_result_charts(rows, repair_filter_set, result_market_for_repair, result_timeframe_for_repair):
-            st.session_state["results"] = rows
-            persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
-        if repair_result_fundamentals(rows, result_market_for_repair):
+        result_metadata_for_repair = st.session_state.get(
+            "last_results_metadata",
+            {},
+        )
+        live_job_running = bool(
+            live_screener_job and live_screener_job.get("running")
+        )
+        if (
+            not live_job_running
+            and result_metadata_for_repair.get("create_charts")
+            and repair_blank_result_charts(
+                rows,
+                repair_filter_set,
+                result_market_for_repair,
+                result_timeframe_for_repair,
+            )
+        ):
             st.session_state["results"] = rows
             persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
 

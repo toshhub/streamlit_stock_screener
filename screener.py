@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import threading
 import urllib.parse
@@ -65,6 +66,67 @@ def custom_filter_expressions(filter_set):
         if item["type"] == "custom_expression"
         and str(item.get("params", {}).get("expression", "")).strip()
     ]
+
+
+def filter_set_requires_pe(filter_set, expressions=None):
+    normalized = normalize_filter_set(filter_set, use_default=False)
+    if any(item["type"] == "pe_less_than" for item in normalized):
+        return True
+    expression_values = list(expressions or []) + custom_filter_expressions(normalized)
+    return any(re.search(r"\bPE\b", str(value), re.IGNORECASE) for value in expression_values)
+
+
+def screening_history_start(filter_set, as_of=None):
+    """Choose the smallest safe candle window for the active rules.
+
+    ATH and arbitrary expression rules retain the full five-year screening
+    window. Ordinary MA filters load enough warm-up and lookback candles
+    without opening every annual partition.
+    """
+    normalized = normalize_filter_set(filter_set, use_default=False)
+    full_window_types = {
+        "custom_expression",
+        "hitting_all_time_high",
+        "price_near_old_ath",
+    }
+    if any(item["type"] in full_window_types for item in normalized):
+        return rolling_history_start(SCREENING_HISTORY_YEARS, as_of=as_of)
+
+    required_bars = 3
+    for item in normalized:
+        filter_type = item["type"]
+        params = item.get("params", {})
+        if filter_type == "ma_rising":
+            required_bars = max(required_bars, int(params["ma"]) + 3)
+        elif filter_type == "short_above_long":
+            required_bars = max(
+                required_bars,
+                int(params["short_ma"]) + 1,
+                int(params["long_ma"]) + 1,
+            )
+        elif filter_type == "price_near_long":
+            required_bars = max(required_bars, int(params["long_ma"]) + 2)
+        elif filter_type == "golden_cross":
+            required_bars = max(
+                required_bars,
+                int(params["long_ma"]) + int(params["lookback_units"]) + 2,
+            )
+        elif filter_type in {"long_ma_down_from_max", "long_ma_up_from_min"}:
+            required_bars = max(
+                required_bars,
+                int(params["long_ma"]) + int(params["lookback_units"]) + 2,
+            )
+
+    reference = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp.now()
+    if reference.tzinfo is not None:
+        reference = reference.tz_localize(None)
+    # Roughly 1.6 calendar days per market candle, plus a holiday buffer.
+    calendar_days = max(45, int(math.ceil(required_bars * 1.6)) + 30)
+    calculated = reference.normalize() - pd.Timedelta(days=calendar_days)
+    return max(
+        calculated,
+        rolling_history_start(SCREENING_HISTORY_YEARS, as_of=reference),
+    )
 
 
 def merge_legacy_expression_filters(filter_set, expressions):
@@ -433,9 +495,18 @@ def legacy_kwargs_to_filter_set(legacy_kwargs):
     }
 
 
-def load_price_dataframe(path, years=SCREENING_HISTORY_YEARS, as_of=None):
+def load_price_dataframe(
+    path,
+    years=SCREENING_HISTORY_YEARS,
+    as_of=None,
+    filter_set=None,
+):
     """Load only the rolling window permitted for screening calculations."""
-    start = rolling_history_start(years=years, as_of=as_of)
+    start = (
+        screening_history_start(filter_set, as_of=as_of)
+        if filter_set is not None
+        else rolling_history_start(years=years, as_of=as_of)
+    )
     df = load_stock_dataframe(path, start=start)
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -447,7 +518,14 @@ def load_price_dataframe(path, years=SCREENING_HISTORY_YEARS, as_of=None):
     return df.dropna(subset=["Close"]).reset_index(drop=True)
 
 
-def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET_INDIA):
+def screen_dataframe(
+    df,
+    symbol,
+    filter_set=None,
+    include_pe=True,
+    market=MARKET_INDIA,
+    pe_ratio=None,
+):
     filter_set = normalize_filter_set(filter_set, use_default=False)
 
     df = df.copy()
@@ -475,7 +553,7 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET
 
     result = {
         "Symbol": symbol,
-        "PE Ratio": "",
+        "PE Ratio": clean_pe_ratio(pe_ratio),
         "Price": round(price, 2),
         "MatchedFilters": ", ".join(filter_label(filter_item) for filter_item in filter_set),
     }
@@ -615,12 +693,27 @@ def screen_dataframe(df, symbol, filter_set=None, include_pe=True, market=MARKET
     return result
 
 
-def screen_json_file(path, filter_set=None, market=MARKET_INDIA, **legacy_kwargs):
+def screen_json_file(
+    path,
+    filter_set=None,
+    market=MARKET_INDIA,
+    include_pe=None,
+    **legacy_kwargs,
+):
     if not path.exists():
         return None
 
     if filter_set is None and legacy_kwargs:
         filter_set = legacy_kwargs_to_filter_set(legacy_kwargs)
 
-    df = load_price_dataframe(path)
-    return screen_dataframe(df, symbol_from_path(path), filter_set=filter_set, market=market)
+    filter_set = normalize_filter_set(filter_set, use_default=False)
+    df = load_price_dataframe(path, filter_set=filter_set)
+    if include_pe is None:
+        include_pe = filter_set_requires_pe(filter_set)
+    return screen_dataframe(
+        df,
+        symbol_from_path(path),
+        filter_set=filter_set,
+        include_pe=include_pe,
+        market=market,
+    )

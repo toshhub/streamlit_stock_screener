@@ -2,6 +2,8 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
+import pandas as pd
+
 from fundamentals import (
     _fetch_screener_page,
     _read_url_with_retries,
@@ -14,6 +16,7 @@ from fundamentals import (
     parse_screener_valuation_chart_payload,
     repair_result_fundamentals,
 )
+from market_snapshots import latest_monthly_pe_values
 from downloader import MARKET_US
 
 
@@ -269,6 +272,17 @@ class ScreenerFundamentalsTests(unittest.TestCase):
 
         self.assertFalse(_valuation_medians_complete(partial))
         self.assertTrue(_valuation_medians_complete(complete))
+
+    def test_latest_monthly_pe_snapshot_is_available_without_network(self):
+        snapshot = pd.DataFrame([
+            {"Month": "2026-06-01", "Market": "INDIA", "Symbol": "AAA", "PE": 20},
+            {"Month": "2026-07-01", "Market": "INDIA", "Symbol": "AAA", "PE": 22.345},
+            {"Month": "2026-07-01", "Market": "US", "Symbol": "AAA", "PE": 30},
+        ])
+        with patch("market_snapshots._existing_monthly", return_value=snapshot):
+            values = latest_monthly_pe_values("INDIA")
+
+        self.assertEqual(values, {"AAA": 22.34})
 
 if __name__ == "__main__":
     unittest.main()

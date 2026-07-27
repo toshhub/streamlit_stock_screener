@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
 from charting import interactive_chart_payload, interactive_stock_chart_html
-from screener import load_price_dataframe
+from screener import load_price_dataframe, screen_json_file
 
 
 def candle(date, close):
@@ -79,6 +80,65 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertEqual(payload["historyYears"], 5)
         self.assertIn('action: "load-history"', chart_html)
         self.assertIn("subscribeVisibleLogicalRangeChange", chart_html)
+
+    def test_plain_ma_screen_reads_a_smaller_window_than_five_years(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            symbol_dir = Path(temp_dir) / "TEST"
+            symbol_dir.mkdir()
+            for year in range(2021, 2027):
+                pd.DataFrame([
+                    candle(f"{year}-07-27", float(year))
+                ]).to_parquet(symbol_dir / f"{year}.parquet", index=False)
+
+            result = load_price_dataframe(
+                symbol_dir,
+                as_of="2026-07-27",
+                filter_set=[{
+                    "id": 1,
+                    "type": "price_near_long",
+                    "params": {"long_ma": 100, "threshold_pct": 5.0},
+                }],
+            )
+
+        self.assertEqual(
+            result["Date"].dt.year.unique().tolist(),
+            [2026],
+        )
+
+    def test_technical_screen_does_not_wait_for_network_pe(self):
+        dates = pd.bdate_range(end="2026-07-27", periods=260)
+        rows = [
+            candle(date, 100 + index * 0.1)
+            for index, date in enumerate(dates)
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            symbol_dir = Path(temp_dir) / "TEST"
+            symbol_dir.mkdir()
+            frame = pd.DataFrame(rows)
+            for year, year_frame in frame.groupby(frame["Date"].dt.year):
+                year_frame.to_parquet(
+                    symbol_dir / f"{year}.parquet",
+                    index=False,
+                )
+            with patch(
+                "screener.get_pe_ratio",
+                side_effect=AssertionError("network PE should not be requested"),
+            ) as get_pe:
+                result = screen_json_file(
+                    symbol_dir,
+                    filter_set=[{
+                        "id": 1,
+                        "type": "price_near_long",
+                        "params": {
+                            "long_ma": 100,
+                            "threshold_pct": 100.0,
+                        },
+                    }],
+                )
+
+        get_pe.assert_not_called()
+        self.assertIsNotNone(result)
+        self.assertEqual(result["PE Ratio"], "")
 
 
 if __name__ == "__main__":

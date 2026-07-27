@@ -150,3 +150,24 @@ def valuation_chart_payload(symbol, market):
             ),
         })
     return payload
+
+
+def latest_monthly_pe_values(market):
+    """Return the newest locally stored PE per symbol without network calls."""
+    existing = _existing_monthly()
+    if existing.empty or "PE" not in existing.columns:
+        return {}
+    rows = existing[
+        existing["Market"].astype(str).str.upper() == normalize_market(market)
+    ].copy()
+    if rows.empty:
+        return {}
+    rows["Month"] = pd.to_datetime(rows["Month"], errors="coerce")
+    rows["PE"] = pd.to_numeric(rows["PE"], errors="coerce")
+    rows = rows.dropna(subset=["Month", "PE"]).sort_values("Month")
+    rows = rows.drop_duplicates("Symbol", keep="last")
+    return {
+        str(row.Symbol).strip().upper(): round(float(row.PE), 2)
+        for row in rows.itertuples()
+        if float(row.PE) > 0
+    }
