@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from numbers import Real
 
 import pandas as pd
+from stock_data import load_stock_dataframe
 
 
 SAFE_FUNCTIONS = {
@@ -216,7 +217,7 @@ def validate_expression(expression, available_names=None):
 
 
 def load_price_data(path):
-    df = pd.DataFrame(json.loads(path.read_text()))
+    df = load_stock_dataframe(path)
     return prepare_price_dataframe(df)
 
 

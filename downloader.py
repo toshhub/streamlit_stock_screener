@@ -1,15 +1,26 @@
-import json
 import re
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from threading import Lock
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+from pandas import Timestamp as PandasTimestamp
 
 from config import DAILY_DIR, US_DAILY_DIR
 from price_alerts import check_price_alerts_for_symbol
+from stock_data import (
+    latest_stock_date,
+    list_symbol_paths,
+    load_stock_dataframe,
+    migrate_legacy_json,
+    stock_exists,
+    symbol_path,
+    write_yearly_stock_data,
+)
 
 MARKET_INDIA = "INDIA"
 MARKET_US = "US"
@@ -20,10 +31,10 @@ MARKET_LABELS = {
 
 TIMEFRAME_CONFIG = {
     MARKET_INDIA: {
-        "DAY": {"interval": "1d", "period": "5y", "target_dir": DAILY_DIR},
+        "DAY": {"interval": "1d", "period": "10y", "target_dir": DAILY_DIR},
     },
     MARKET_US: {
-        "DAY": {"interval": "1d", "period": "5y", "target_dir": US_DAILY_DIR},
+        "DAY": {"interval": "1d", "period": "10y", "target_dir": US_DAILY_DIR},
     },
 }
 
@@ -37,8 +48,8 @@ INDEX_YFINANCE_SYMBOLS = {
 YFINANCE_DOWNLOAD_LOCK = Lock()
 DOWNLOAD_JOBS_LOCK = Lock()
 DOWNLOAD_JOBS = {}
-LAST_DATE_TAIL_BYTES = 16 * 1024
-DATE_FIELD_PATTERN = re.compile(rb'"Date"\s*:\s*"([^"]+)"')
+RECENT_REFRESH_DAYS = 10
+MAX_HISTORY_YEARS = 10
 
 
 def normalize_market(market):
@@ -79,39 +90,11 @@ def _records_to_dataframe(records):
 
 
 def _load_existing_dataframe(out_file):
-    if not out_file.exists():
-        return pd.DataFrame()
-
-    try:
-        records = json.loads(out_file.read_text())
-    except Exception:
-        return pd.DataFrame()
-
-    if not isinstance(records, list):
-        return pd.DataFrame()
-
-    return _records_to_dataframe(records)
+    return load_stock_dataframe(out_file)
 
 
 def _last_saved_date(out_file):
-    """Read the latest candle date without loading the entire JSON file."""
-    try:
-        with out_file.open("rb") as file_handle:
-            file_handle.seek(0, 2)
-            file_size = file_handle.tell()
-            file_handle.seek(max(0, file_size - LAST_DATE_TAIL_BYTES))
-            tail = file_handle.read()
-    except OSError:
-        return None
-
-    for raw_date in reversed(DATE_FIELD_PATTERN.findall(tail)):
-        try:
-            parsed_date = pd.Timestamp(raw_date.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError, TypeError):
-            continue
-        if not pd.isna(parsed_date):
-            return parsed_date.normalize()
-    return None
+    return latest_stock_date(out_file)
 
 
 def data_availability_summary(directory):
@@ -124,11 +107,7 @@ def data_availability_summary(directory):
             "Stock Files": 0,
         }
 
-    stock_files = [
-        path
-        for path in directory.glob("*.json")
-        if path.stem.upper() != NIFTY_DATA_SYMBOL
-    ]
+    stock_files = list_symbol_paths(directory, include_index=False)
     latest_dates = [
         latest_date
         for path in stock_files
@@ -163,6 +142,10 @@ def _next_download_start(existing_df, interval):
     if pd.isna(latest):
         return None
 
+    if interval == "1d":
+        # Yahoo occasionally corrects recent candles. Re-fetch a small overlap
+        # and replace that range instead of assuming the last row is immutable.
+        return latest.normalize() - pd.Timedelta(days=RECENT_REFRESH_DAYS)
     return _date_after_latest(latest, interval)
 
 
@@ -183,12 +166,7 @@ def _prepare_downloaded_dataframe(data):
 
 
 def _write_records_atomic(out_file, df):
-    output_df = df.copy()
-    output_df["Date"] = pd.to_datetime(output_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    records = output_df.to_dict(orient="records")
-    tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
-    tmp_file.write_text(json.dumps(records, indent=2))
-    tmp_file.replace(out_file)
+    return write_yearly_stock_data(out_file, df, keep_years=MAX_HISTORY_YEARS)
 
 
 def _merge_price_data(existing_df, downloaded_df):
@@ -210,6 +188,25 @@ def _merge_price_data(existing_df, downloaded_df):
     return merged
 
 
+def last_reliable_completed_candle(now=None, market=MARKET_INDIA):
+    """Latest date that may safely be persisted as a final daily candle."""
+    market = normalize_market(market)
+    timezone = ZoneInfo("America/New_York" if market == MARKET_US else "Asia/Kolkata")
+    local_now = PandasTimestamp(now or datetime.now(timezone))
+    if local_now.tzinfo is None:
+        local_now = local_now.tz_localize(timezone)
+    else:
+        local_now = local_now.tz_convert(timezone)
+    # Allow time for Yahoo's official daily candle to settle after the close.
+    close_hour, close_minute = (16, 30) if market == MARKET_US else (16, 0)
+    candidate = local_now.normalize()
+    if (local_now.hour, local_now.minute) < (close_hour, close_minute):
+        candidate -= pd.Timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= pd.Timedelta(days=1)
+    return candidate.tz_localize(None).normalize()
+
+
 def download_symbol(
     symbol,
     interval,
@@ -219,12 +216,18 @@ def download_symbol(
     incremental=True,
     market=MARKET_INDIA,
 ):
+    out_file = Path(out_file)
+    if out_file.suffix.lower() == ".json":
+        out_file = out_file.with_suffix("")
     today = pd.Timestamp.today().normalize()
+    reliable_date = last_reliable_completed_candle(market=market)
+    if incremental:
+        migrate_legacy_json(out_file, keep_years=MAX_HISTORY_YEARS)
     existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
     # Each symbol can have a different last saved candle. Start immediately
     # after this file's own latest date so no already-stored history is fetched.
     download_start = _next_download_start(existing_df, interval) if incremental else None
-    if incremental and download_start is not None and download_start.normalize() > today:
+    if incremental and download_start is not None and download_start.normalize() > reliable_date:
         return {"Downloaded": True, "Rows Added": 0, "Status": "Already current"}
 
     last_error = None
@@ -257,13 +260,24 @@ def download_symbol(
                 return {"Downloaded": False, "Rows Added": 0, "Status": "Failed"}
 
             downloaded_df = _prepare_downloaded_dataframe(data)
+            downloaded_df["Date"] = pd.to_datetime(downloaded_df["Date"], errors="coerce")
+            downloaded_df = downloaded_df[downloaded_df["Date"] <= reliable_date]
+            # Downloaded duplicates win, while valid stored candles omitted
+            # from a partial Yahoo response remain intact.
             merged_df = _merge_price_data(existing_df, downloaded_df)
+            merged_df["Date"] = pd.to_datetime(merged_df["Date"], errors="coerce")
+            merged_df = merged_df[merged_df["Date"] <= reliable_date]
             rows_before = len(existing_df)
             rows_after = len(merged_df)
             rows_added = max(0, rows_after - rows_before)
-            _write_records_atomic(out_file, merged_df)
-            status = "Full download" if existing_df.empty else ("Updated" if rows_added else "Already current")
-            return {"Downloaded": True, "Rows Added": rows_added, "Status": status}
+            changed_files = _write_records_atomic(out_file, merged_df)
+            status = "Full download" if existing_df.empty else ("Updated" if changed_files else "Already current")
+            return {
+                "Downloaded": True,
+                "Rows Added": rows_added,
+                "Files Updated": len(changed_files),
+                "Status": status,
+            }
         except Exception as exc:
             last_error = str(exc)
             if attempt < max_retries:
@@ -287,6 +301,10 @@ def clear_downloaded_json_files(timeframe, market=MARKET_INDIA):
     for json_file in target_dir.glob("*.json"):
         json_file.unlink()
         deleted_count += 1
+    for stock_dir in list_symbol_paths(target_dir):
+        for parquet_file in stock_dir.glob("*.parquet"):
+            parquet_file.unlink()
+            deleted_count += 1
 
     return deleted_count
 
@@ -367,7 +385,7 @@ def load_top_symbols(symbols_file, limit=1000, market=MARKET_INDIA):
 
 
 def stock_files_for_symbols(directory, symbols):
-    """Map symbols to existing JSON files while preserving source order."""
+    """Map symbols to canonical stock paths while preserving source order."""
     if not directory or not directory.exists():
         return []
 
@@ -377,8 +395,8 @@ def stock_files_for_symbols(directory, symbols):
         clean = str(symbol).strip()
         if not clean or clean in seen or clean.upper() == NIFTY_DATA_SYMBOL:
             continue
-        stock_file = directory / f"{clean}.json"
-        if stock_file.exists():
+        stock_file = symbol_path(directory, clean)
+        if stock_exists(stock_file):
             files.append(stock_file)
             seen.add(clean)
     return files
@@ -390,7 +408,7 @@ def _download_symbol_row(
     incremental=True,
     market=MARKET_INDIA,
 ):
-    out_file = config["target_dir"] / f"{symbol}.json"
+    out_file = symbol_path(config["target_dir"], symbol)
     try:
         result = download_symbol(
             symbol,
@@ -425,7 +443,7 @@ def download_nifty_index(timeframe, incremental=True, market=MARKET_INDIA):
     config = timeframe_config(timeframe, market)
     target_dir = config["target_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
-    out_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json"
+    out_file = symbol_path(target_dir, NIFTY_DATA_SYMBOL)
     try:
         result = download_symbol(
             NIFTY_DATA_SYMBOL,

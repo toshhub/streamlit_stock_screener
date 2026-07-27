@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config import DAILY_DIR, META_DIR, US_DAILY_DIR
+from stock_data import load_stock_dataframe, stock_exists, symbol_path
 
 
 PRICE_ALERTS_FILE = META_DIR / "price_alerts.json"
@@ -120,20 +121,18 @@ def sort_price_alerts(alerts):
 
 def _stock_file(market, symbol):
     directory = US_DAILY_DIR if _normalize_market(market) == "US" else DAILY_DIR
-    return directory / f"{_normalize_symbol(symbol)}.json"
+    return symbol_path(directory, _normalize_symbol(symbol))
 
 
 def _load_candles(stock_file):
     path = Path(stock_file)
-    if not path.exists():
+    if not stock_exists(path):
         return []
-    try:
-        rows = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    df = load_stock_dataframe(path)
+    if df.empty:
         return []
-    if not isinstance(rows, list):
-        return []
-    valid_rows = [row for row in rows if isinstance(row, dict) and row.get("Date")]
+    rows = df.assign(Date=df["Date"].dt.strftime("%Y-%m-%d")).to_dict(orient="records")
+    valid_rows = [row for row in rows if row.get("Date")]
     return sorted(valid_rows, key=lambda row: str(row.get("Date")))
 
 
@@ -317,6 +316,9 @@ def _evaluate_alerts(alerts, candles, symbol, market):
             continue
         changed = False
         target = _normalize_price(alert.get("target_price"))
+        # The creation boundary is the market candle visible when the user
+        # created the alert. This remains correct when the local dataset is a
+        # day behind the wall clock because of a holiday or delayed update.
         created_date = str(alert.get("created_candle_date") or "")
         candidate_rows = [
             row for row in candles if str(row.get("Date") or "") > created_date
@@ -327,12 +329,12 @@ def _evaluate_alerts(alerts, candles, symbol, market):
             if alert.get("direction") == "above":
                 high = _row_price(row, "High")
                 if high is not None and high >= target:
-                    hit_row, hit_price = row, target
+                    hit_row, hit_price = row, high
                     break
             else:
                 low = _row_price(row, "Low")
                 if low is not None and low <= target:
-                    hit_row, hit_price = row, target
+                    hit_row, hit_price = row, low
                     break
         latest_date = str(candles[-1].get("Date") or "")
         if alert.get("last_checked_date") != latest_date:
@@ -344,6 +346,8 @@ def _evaluate_alerts(alerts, candles, symbol, market):
                 "triggered_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "triggered_candle_date": str(hit_row.get("Date") or ""),
                 "triggered_price": round(float(hit_price), 8),
+                "acknowledged": False,
+                "acknowledged_at": "",
             })
             triggered.append(dict(alert))
             changed = True

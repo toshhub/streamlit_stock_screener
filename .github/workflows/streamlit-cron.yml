@@ -1,121 +1,53 @@
-name: Streamlit Cron
+name: Daily stock data update
 
 on:
   schedule:
-    # Ping every 6 hours to reduce Streamlit hibernation risk
-    - cron: "0 */6 * * *"
-
-    # 5:00 AM IST = 11:30 PM UTC previous day
-    - cron: "30 23 * * *"
-
-    # 5:00 PM IST = 11:30 AM UTC
-    - cron: "30 11 * * *"
-
+    # 5:00 PM IST, after the Indian close. The downloader independently
+    # excludes any US intraday candle until it is final.
+    - cron: "30 11 * * 1-5"
+    # 5:00 AM IST catches the completed US session and any corrected candles.
+    - cron: "30 23 * * 1-5"
   workflow_dispatch:
-    inputs:
-      task:
-        description: "Task to run"
-        required: true
-        default: "ping"
-        type: choice
-        options:
-          - ping
-          - download
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-stock-data-update
+  cancel-in-progress: false
 
 jobs:
-  call-streamlit:
+  update-stock-data:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-
     steps:
-      - name: Decide URL
-        id: url
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update candles, snapshots, valuations, and alerts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python daily_update.py
+
+      - name: Commit updated Parquet data
         run: |
-          TASK="${{ github.event.inputs.task }}"
-
-          if [ -z "$TASK" ]; then
-            if [ "${{ github.event.schedule }}" = "0 */6 * * *" ]; then
-              TASK="ping"
-            else
-              TASK="download"
-            fi
-          fi
-
-          echo "Task: $TASK"
-
-          if [ "$TASK" = "ping" ]; then
-            echo "url=https://stockscreener09219.streamlit.app/?ping=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- data
+          if git diff --cached --quiet; then
+            echo "No Parquet changes to commit."
           else
-            echo "url=https://stockscreener09219.streamlit.app/?scheduled_download=1&token=${{ secrets.SCHEDULED_DOWNLOAD_TOKEN }}&market=ALL&timeframe=DAY&all_stocks=1" >> "$GITHUB_OUTPUT"
+            git commit -m "data: refresh daily stock parquet files"
+            git pull --rebase
+            git push
           fi
-
-      - name: Call Streamlit app with browser
-        run: |
-          npm init -y
-          npm install playwright
-          npx playwright install chromium
-          node <<'NODE'
-          const { chromium } = require('playwright');
-
-          function sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-          }
-
-          (async () => {
-            const url = "${{ steps.url.outputs.url }}";
-            console.log("Opening:", url.replace(/token=[^&]+/, "token=***"));
-
-            const browser = await chromium.launch();
-            const page = await browser.newPage();
-
-            const response = await page.goto(url, {
-              waitUntil: "domcontentloaded",
-              timeout: 300000
-            });
-
-            console.log("HTTP status:", response && response.status());
-
-            let finalText = "";
-            // Full India + US incremental refresh can take longer than the
-            // interactive subset, so keep the browser session alive.
-            const deadline = Date.now() + 165 * 60 * 1000;
-
-            while (Date.now() < deadline) {
-              const texts = [];
-
-              for (const frame of page.frames()) {
-                try {
-                  const bodyText = await frame.locator("body").innerText({ timeout: 3000 });
-                  if (bodyText) texts.push(bodyText);
-                } catch (e) {
-                  // Frame not ready yet.
-                }
-              }
-
-              finalText = texts.join("\n\n");
-
-              if (
-                finalText.includes("pong") ||
-                finalText.includes("Scheduled download complete") ||
-                finalText.includes("Unauthorized scheduled task request")
-              ) {
-                break;
-              }
-
-              await sleep(3000);
-            }
-
-            console.log("Page text preview:");
-            console.log(finalText.slice(0, 3000));
-
-            await browser.close();
-
-            if (finalText.includes("Unauthorized scheduled task request")) {
-              throw new Error("Streamlit token was rejected.");
-            }
-
-            if (!finalText.includes("pong") && !finalText.includes("Scheduled download complete")) {
-              throw new Error("Expected ping/download response was not found.");
-            }
-          })();
-          NODE

@@ -1,5 +1,6 @@
 
 import json
+import hashlib
 import threading
 from contextvars import ContextVar
 from config import META_DIR
@@ -77,12 +78,44 @@ def load_fundamentals():
 def save_fundamentals(data):
     FUNDAMENTALS_FILE.write_text(json.dumps(data, indent=2))
 
-def save_results(rows):
-    """Persist screener results to disk so they survive app restarts."""
-    RESULTS_FILE.write_text(json.dumps(rows, indent=2, default=str))
+def save_results(rows, metadata=None):
+    """Persist results only inside the current authenticated user's namespace."""
+    user_id = _CURRENT_USER_ID.get()
+    if _USER_STORAGE_BACKEND is not None:
+        if not user_id:
+            return []
+        _USER_STORAGE_BACKEND.save_results(user_id, rows, metadata or {})
+        return rows
+    if not user_id:
+        return rows
+    # Local development fallback remains isolated by a non-identifying hash.
+    local_file = _local_results_file(user_id)
+    local_file.write_text(json.dumps({"rows": rows, "metadata": metadata or {}}, indent=2, default=str))
+    return rows
 
-def load_results():
-    """Load persisted screener results. Returns empty list if not found."""
-    if RESULTS_FILE.exists():
-        return json.loads(RESULTS_FILE.read_text())
-    return []
+def load_results(include_metadata=False):
+    """Load only the current user's persisted screener results."""
+    user_id = _CURRENT_USER_ID.get()
+    if _USER_STORAGE_BACKEND is not None:
+        if not user_id:
+            return ([], {}) if include_metadata else []
+        payload = _USER_STORAGE_BACKEND.load_results(user_id)
+        rows = payload.get("rows", [])
+        metadata = payload.get("metadata", {})
+        return (rows, metadata) if include_metadata else rows
+    if not user_id:
+        return ([], {}) if include_metadata else []
+    local_file = _local_results_file(user_id)
+    if local_file.exists():
+        payload = json.loads(local_file.read_text())
+        if isinstance(payload, list):  # legacy local format
+            return (payload, {}) if include_metadata else payload
+        rows = payload.get("rows", [])
+        metadata = payload.get("metadata", {})
+        return (rows, metadata) if include_metadata else rows
+    return ([], {}) if include_metadata else []
+
+
+def _local_results_file(user_id):
+    digest = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:24]
+    return META_DIR / f"last_results_{digest}.json"

@@ -7,6 +7,7 @@ from copy import deepcopy
 from functools import lru_cache
 
 import pandas as pd
+from stock_data import load_stock_dataframe, symbol_from_path
 import yfinance as yf
 
 from downloader import MARKET_INDIA, normalize_market, yfinance_symbol
@@ -428,7 +429,7 @@ def legacy_kwargs_to_filter_set(legacy_kwargs):
 
 
 def load_price_dataframe(path):
-    df = pd.DataFrame(json.loads(path.read_text()))
+    df = load_stock_dataframe(path)
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.sort_values("Date")
@@ -615,4 +616,4 @@ def screen_json_file(path, filter_set=None, market=MARKET_INDIA, **legacy_kwargs
         filter_set = legacy_kwargs_to_filter_set(legacy_kwargs)
 
     df = load_price_dataframe(path)
-    return screen_dataframe(df, path.stem, filter_set=filter_set, market=market)
+    return screen_dataframe(df, symbol_from_path(path), filter_set=filter_set, market=market)

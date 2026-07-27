@@ -1,2 +1,3 @@
 # Treat all JSON files as binary so Git/GitHub do not render line-by-line diffs.
 *.json binary
+*.parquet binary

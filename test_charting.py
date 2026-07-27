@@ -464,7 +464,10 @@ class InteractiveChartTests(unittest.TestCase):
 
 class InteractiveChartRouteTests(unittest.TestCase):
     def test_embedded_interactive_chart_route_renders_without_exception(self):
-        stock_files = sorted(Path("data/daily").glob("*.json"))
+        stock_files = sorted(
+            path for path in Path("data/daily").iterdir()
+            if path.is_dir() and any(path.glob("*.parquet"))
+        )
         if not stock_files:
             self.skipTest("No daily stock fixture is available.")
 

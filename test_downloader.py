@@ -19,6 +19,7 @@ from downloader import (
     start_background_download,
     stock_files_for_symbols,
 )
+from stock_data import load_stock_dataframe
 
 
 class IncrementalDownloaderTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
         check_alerts.assert_called_once_with(
             "TEST",
             MARKET_INDIA,
-            stock_file=config["target_dir"] / "TEST.json",
+            stock_file=config["target_dir"] / "TEST",
         )
 
     def test_stock_files_follow_selected_source_order_and_limit(self):
@@ -140,8 +141,8 @@ class IncrementalDownloaderTests(unittest.TestCase):
                 download_symbol("FIRST", "1d", "5y", first_file, incremental=True)
                 download_symbol("SECOND", "1d", "5y", second_file, incremental=True)
 
-            self.assertEqual(yf_download.call_args_list[0].kwargs["start"], "2026-07-17")
-            self.assertEqual(yf_download.call_args_list[1].kwargs["start"], "2026-07-20")
+            self.assertEqual(yf_download.call_args_list[0].kwargs["start"], "2026-07-06")
+            self.assertEqual(yf_download.call_args_list[1].kwargs["start"], "2026-07-07")
 
     def test_download_starts_after_latest_saved_date_and_appends_new_candle(self):
         existing_records = [
@@ -185,17 +186,19 @@ class IncrementalDownloaderTests(unittest.TestCase):
                 )
 
             kwargs = yf_download.call_args.kwargs
-            self.assertEqual(kwargs["start"], "2026-07-17")
+            self.assertEqual(kwargs["start"], "2026-07-06")
             self.assertEqual(kwargs["end"], "2026-07-20")
             self.assertNotIn("period", kwargs)
             self.assertEqual(result["Rows Added"], 1)
             self.assertEqual(result["Status"], "Updated")
+            migrated = load_stock_dataframe(out_file.with_suffix(""))
             self.assertEqual(
-                [row["Date"] for row in json.loads(out_file.read_text())],
+                migrated["Date"].dt.strftime("%Y-%m-%d").tolist(),
                 ["2026-07-16", "2026-07-17"],
             )
+            self.assertFalse(out_file.exists())
 
-    def test_current_file_skips_yahoo_request_and_is_not_rewritten(self):
+    def test_current_file_refreshes_recent_range_and_migrates_to_parquet(self):
         existing_records = [{"Date": "2026-07-19", "Close": 103.0}]
         fixed_today = pd.Timestamp("2026-07-19")
 
@@ -218,10 +221,11 @@ class IncrementalDownloaderTests(unittest.TestCase):
                     market=MARKET_INDIA,
                 )
 
-            yf_download.assert_not_called()
+            yf_download.assert_called_once()
             self.assertEqual(result["Rows Added"], 0)
             self.assertEqual(result["Status"], "Already current")
-            self.assertEqual(out_file.read_text(), original_text)
+            self.assertFalse(out_file.exists())
+            self.assertTrue((out_file.with_suffix("") / "2026.parquet").exists())
 
 
 if __name__ == "__main__":

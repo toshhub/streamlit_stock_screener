@@ -9,6 +9,8 @@ from urllib.parse import quote, urlencode
 
 from matplotlib.figure import Figure
 import pandas as pd
+from stock_data import load_stock_dataframe
+from market_snapshots import valuation_chart_payload
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -36,7 +38,7 @@ _CURSOR_ALERT_COMPONENT = components.declare_component(
 
 
 def load_price_data(path):
-    df = pd.DataFrame(json.loads(path.read_text()))
+    df = load_stock_dataframe(path)
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.sort_values("Date")
@@ -396,7 +398,7 @@ def normalize_interactive_ma_periods(periods):
 
 def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
     json_path = Path(json_path)
-    df = pd.DataFrame(json.loads(json_path.read_text(encoding="utf-8")))
+    df = load_stock_dataframe(json_path)
     required_columns = ["Date", "Open", "High", "Low", "Close"]
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
@@ -519,6 +521,8 @@ def interactive_stock_chart_html(
     alert_market="INDIA",
 ):
     payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
+    monthly_valuations = valuation_chart_payload(symbol, alert_market)
+    payload["monthlyValuations"] = monthly_valuations
     normalized_overlay = {}
     if isinstance(trade_overlay, dict):
         for key in ("buyDate", "exitDate", "windowStart", "windowEnd"):
@@ -540,6 +544,14 @@ def interactive_stock_chart_html(
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
     safe_alert_market = html.escape(str(alert_market or "INDIA").strip().upper(), quote=True)
+    screener_chart_link_html = ""
+    if str(alert_market or "").strip().upper() == "INDIA":
+        screener_href = f"https://www.screener.in/company/{quote(str(symbol).upper(), safe='')}/"
+        screener_chart_link_html = (
+            f'<a class="chart-screener-link" href="{html.escape(screener_href, quote=True)}" '
+            'target="_blank" rel="noopener noreferrer" title="Open on Screener.in" '
+            'aria-label="Open company on Screener.in">S</a>'
+        )
     latest_close = None
     if payload.get("candles"):
         try:
@@ -669,6 +681,28 @@ def interactive_stock_chart_html(
             "</div>"
             f'<div class="growth-grid">{"".join(cards)}</div>'
             "</aside></div>"
+        )
+    valuation_drawer_html = ""
+    if monthly_valuations:
+        valuation_drawer_html = (
+            '<div class="valuation-drawer" id="valuation-drawer">'
+            '<button class="valuation-toggle" id="valuation-toggle" type="button" '
+            'aria-controls="valuation-panel" aria-expanded="false" '
+            'title="Open monthly valuation chart"><span aria-hidden="true">◫</span>'
+            '<span>Valuation</span></button>'
+            '<button class="valuation-scrim" id="valuation-scrim" type="button" '
+            'aria-label="Close valuation chart"></button>'
+            '<aside class="valuation-panel" id="valuation-panel" aria-hidden="true" inert>'
+            '<div class="valuation-panel__header"><div>'
+            '<span class="growth-snapshot__eyebrow">Monthly history</span>'
+            '<h2>Valuation trend</h2>'
+            '<span class="growth-snapshot__source">PE line · Market Cap / Sales bars</span>'
+            '</div><button class="fundamentals-close" id="valuation-close" type="button" '
+            'aria-label="Close valuation chart">&times;</button></div>'
+            '<div class="valuation-chart-wrap"><svg id="valuation-chart" role="img" '
+            f'aria-label="{safe_symbol} monthly valuation chart"></svg></div>'
+            '<div class="valuation-legend"><span>■ Market Cap / Sales</span>'
+            '<span>━ PE ratio</span></div></aside></div>'
         )
     price_alert_html = (
         '<div class="chart-price-alert-form">'
@@ -1013,12 +1047,44 @@ def interactive_stock_chart_html(
           font-size: 10px;
         }}
         .chart-footer a {{ color: var(--brand); font-weight: 700; text-decoration: none; }}
+        .chart-screener-link {{
+          display:inline-grid; place-items:center; width:24px; height:24px;
+          border:1px solid #b9c9d4; border-radius:7px; background:#fff;
+          color:#176b87; font-size:11px; font-weight:900; text-decoration:none;
+        }}
         .fundamentals-drawer {{
           position: absolute;
           inset: 0;
           z-index: 20;
           pointer-events: none;
         }}
+        .valuation-drawer {{ position: absolute; inset: 0; z-index: 21; pointer-events: none; }}
+        .valuation-toggle {{
+          position: absolute; top: 70%; left: 8px; z-index: 3;
+          display: flex; align-items: center; gap: 6px; min-height: 108px;
+          padding: 10px 7px; border: 1px solid #8b82db; border-radius: 0 10px 10px 0;
+          background: linear-gradient(180deg, #6558d9, #4f46b8); color: #fff;
+          box-shadow: 0 8px 22px rgba(79,70,184,.25); cursor: pointer;
+          font-size: 10px; font-weight: 800; letter-spacing: .04em;
+          writing-mode: vertical-rl; pointer-events: auto;
+        }}
+        .valuation-scrim {{ position:absolute; inset:8px; border:0; border-radius:14px;
+          background:rgba(15,35,52,.30); opacity:0; pointer-events:none; }}
+        .valuation-panel {{ position:absolute; inset:8px auto 8px 8px; z-index:2;
+          width:min(760px,calc(100% - 16px)); padding:14px; overflow:auto;
+          border:1px solid #d8d5f2; border-radius:14px; background:#fff;
+          box-shadow:12px 0 34px rgba(16,36,62,.18); pointer-events:none;
+          transform:translateX(calc(-100% - 18px)); transition:transform .24s ease; }}
+        .valuation-panel__header {{ display:flex; justify-content:space-between; gap:10px;
+          padding-bottom:10px; border-bottom:1px solid #e5e7eb; }}
+        .valuation-panel h2 {{ margin:1px 0 0; color:#17334c; font-size:15px; }}
+        .valuation-drawer.is-open .valuation-toggle {{ opacity:0; pointer-events:none; }}
+        .valuation-drawer.is-open .valuation-scrim {{ opacity:1; pointer-events:auto; }}
+        .valuation-drawer.is-open .valuation-panel {{ pointer-events:auto; transform:translateX(0); }}
+        .valuation-chart-wrap {{ min-height:300px; margin-top:12px; }}
+        #valuation-chart {{ width:100%; height:300px; overflow:visible; }}
+        .valuation-legend {{ display:flex; justify-content:center; gap:22px; color:#53657a;
+          font-size:11px; font-weight:700; }}
         .fundamentals-toggle {{
           position: absolute;
           top: 50%;
@@ -1270,6 +1336,7 @@ def interactive_stock_chart_html(
             font-size: 9px;
           }}
           .fundamentals-toggle {{ left: 0; }}
+          .valuation-toggle {{ left: 0; top: 72%; }}
           .fundamentals-scrim {{ inset: 0; border-radius: 0; }}
           .fundamentals-panel {{
             top: 0;
@@ -1278,6 +1345,9 @@ def interactive_stock_chart_html(
             width: min(360px, 94%);
             border-radius: 0 12px 12px 0;
           }}
+          .valuation-scrim {{ inset:0; border-radius:0; }}
+          .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
+          .valuation-chart-wrap, #valuation-chart {{ min-height:240px; height:calc(100dvh - 150px); }}
           .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
         }}
@@ -1298,6 +1368,7 @@ def interactive_stock_chart_html(
               <strong>{safe_symbol}</strong>
               {pe_badge_html}
               {valuation_state_html}
+              {screener_chart_link_html}
             </div>
             <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles</span>
           </div>
@@ -1324,6 +1395,7 @@ def interactive_stock_chart_html(
           <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noopener">Charts by TradingView</a>
         </footer>
         {fundamentals_drawer_html}
+        {valuation_drawer_html}
       </main>
       <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
       <script>
@@ -1338,6 +1410,42 @@ def interactive_stock_chart_html(
           const fundamentalsClose = document.getElementById("fundamentals-close");
           const fundamentalsScrim = document.getElementById("fundamentals-scrim");
           const priceAlertButton = document.getElementById("price-alert-at-cursor");
+          const valuationDrawer = document.getElementById("valuation-drawer");
+          const valuationToggle = document.getElementById("valuation-toggle");
+          const valuationPanel = document.getElementById("valuation-panel");
+          const valuationClose = document.getElementById("valuation-close");
+          const valuationScrim = document.getElementById("valuation-scrim");
+
+          function drawValuationChart() {{
+            const svg = document.getElementById("valuation-chart");
+            const rows = payload.monthlyValuations || [];
+            if (!svg || !rows.length) return;
+            const width = Math.max(360, svg.clientWidth || 700), height = Math.max(240, svg.clientHeight || 300);
+            const pad = {{l:42,r:42,t:18,b:34}}, plotW=width-pad.l-pad.r, plotH=height-pad.t-pad.b;
+            const peMax = Math.max(1, ...rows.map(r => Number(r.pe)||0));
+            const salesMax = Math.max(1, ...rows.map(r => Number(r.marketCapToSales)||0));
+            const step = plotW / Math.max(1, rows.length);
+            const points = rows.map((r,i) => {{
+              const x=pad.l+step*(i+.5), y=pad.t+plotH-(Number(r.pe)||0)/peMax*plotH;
+              return `${{x.toFixed(1)}},${{y.toFixed(1)}}`;
+            }}).join(" ");
+            const bars = rows.map((r,i) => {{
+              const value=Number(r.marketCapToSales)||0, h=value/salesMax*plotH;
+              return `<rect x="${{(pad.l+step*i+2).toFixed(1)}}" y="${{(pad.t+plotH-h).toFixed(1)}}" width="${{Math.max(2,step-4).toFixed(1)}}" height="${{h.toFixed(1)}}" fill="rgba(101,184,230,.55)"><title>${{r.time}} · MCap/Sales ${{value.toFixed(2)}}</title></rect>`;
+            }}).join("");
+            svg.setAttribute("viewBox",`0 0 ${{width}} ${{height}}`);
+            svg.innerHTML = `<line x1="${{pad.l}}" y1="${{pad.t+plotH}}" x2="${{width-pad.r}}" y2="${{pad.t+plotH}}" stroke="#cbd5e1"/>${{bars}}<polyline points="${{points}}" fill="none" stroke="#6558ff" stroke-width="2.5"/>`;
+          }}
+          function setValuationOpen(open) {{
+            if (!valuationDrawer || !valuationPanel) return;
+            valuationDrawer.classList.toggle("is-open", open);
+            valuationPanel.toggleAttribute("inert", !open);
+            valuationPanel.setAttribute("aria-hidden", open ? "false" : "true");
+            if (open) requestAnimationFrame(drawValuationChart);
+          }}
+          if (valuationToggle) valuationToggle.addEventListener("click", () => setValuationOpen(true));
+          if (valuationClose) valuationClose.addEventListener("click", () => setValuationOpen(false));
+          if (valuationScrim) valuationScrim.addEventListener("click", () => setValuationOpen(false));
 
           if (priceAlertButton) {{
             priceAlertButton.addEventListener("click", function(event) {{
@@ -2263,10 +2371,16 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .chart-image-wrap { padding: 0 34px; }
         .chart-help-text { font-size: 11px; }
         .chart-panel.interactive-mode {
-          height: 100vh;
-          max-height: 100vh;
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          height: 100dvh;
+          max-height: 100dvh;
           overflow: hidden;
           padding: 0;
+          border: 0;
+          border-radius: 0;
+          background: #fff;
         }
         .interactive-panel-header { padding: 3px 4px 6px; }
         .interactive-chart-embed {
@@ -2281,6 +2395,14 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
       @media screen and (max-width: 600px) and (orientation: landscape) {
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
+        .chart-panel.interactive-mode {
+          position: fixed; inset: 0; z-index: 9999; height: 100dvh;
+          max-height: 100dvh; overflow: hidden; padding: 0; border: 0;
+          border-radius: 0; background: #fff;
+        }
+        .interactive-panel-header { padding: 2px 4px; }
+        .interactive-chart-embed { min-height: 0; border: 0; border-radius: 0; }
+        .interactive-panel-help { display: none; }
       }
     </style>
     <script>

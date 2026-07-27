@@ -156,6 +156,124 @@ class SupabaseCloudStorage:
             raise CloudStorageError(f"Could not remove the personal favorite filter: {exc}") from exc
         return len(response.data or [])
 
+    def load_results(self, user_id):
+        user_id = self._require_user(user_id)
+        try:
+            response = (
+                self.client.table("user_results")
+                .select("rows,metadata")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not load personal screener results: {exc}") from exc
+        if not response.data:
+            return {"rows": [], "metadata": {}}
+        row = response.data[0]
+        return {
+            "rows": row.get("rows") if isinstance(row.get("rows"), list) else [],
+            "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
+        }
+
+    def save_results(self, user_id, rows, metadata):
+        user_id = self._require_user(user_id)
+        try:
+            (
+                self.client.table("user_results")
+                .upsert(
+                    {"user_id": user_id, "rows": list(rows), "metadata": dict(metadata)},
+                    on_conflict="user_id",
+                )
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not save personal screener results: {exc}") from exc
+
+    def load_watchlists(self, user_id):
+        user_id = self._require_user(user_id)
+        try:
+            response = (
+                self.client.table("user_watchlists")
+                .select("id,name,position,user_watchlist_items(symbol,market,note,position)")
+                .eq("user_id", user_id)
+                .order("position")
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not load personal watchlists: {exc}") from exc
+        watchlists = []
+        for row in response.data or []:
+            items = sorted(
+                row.get("user_watchlist_items") or [],
+                key=lambda item: int(item.get("position", 0)),
+            )
+            watchlists.append({**row, "items": items})
+            watchlists[-1].pop("user_watchlist_items", None)
+        return watchlists
+
+    def save_watchlist(self, user_id, watchlist_id, name, position=0):
+        user_id = self._require_user(user_id)
+        row = {
+            "user_id": user_id,
+            "id": str(watchlist_id),
+            "name": str(name).strip(),
+            "position": int(position),
+        }
+        if not row["name"]:
+            raise ValueError("Watchlist name is required.")
+        try:
+            self.client.table("user_watchlists").upsert(
+                row, on_conflict="user_id,id"
+            ).execute()
+        except Exception as exc:
+            raise CloudStorageError(f"Could not save the personal watchlist: {exc}") from exc
+        return row
+
+    def delete_watchlist(self, user_id, watchlist_id):
+        user_id = self._require_user(user_id)
+        try:
+            response = (
+                self.client.table("user_watchlists").delete()
+                .eq("user_id", user_id).eq("id", str(watchlist_id)).execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not delete the personal watchlist: {exc}") from exc
+        return len(response.data or [])
+
+    def save_watchlist_item(self, user_id, watchlist_id, symbol, market, note="", position=0):
+        user_id = self._require_user(user_id)
+        row = {
+            "user_id": user_id,
+            "watchlist_id": str(watchlist_id),
+            "symbol": str(symbol).strip().upper(),
+            "market": str(market).strip().upper(),
+            "note": str(note or ""),
+            "position": int(position),
+        }
+        try:
+            self.client.table("user_watchlist_items").upsert(
+                row, on_conflict="user_id,watchlist_id,symbol,market"
+            ).execute()
+        except Exception as exc:
+            raise CloudStorageError(f"Could not save the watchlist stock: {exc}") from exc
+        return row
+
+    def delete_watchlist_items(self, user_id, watchlist_id, symbols):
+        user_id = self._require_user(user_id)
+        clean_symbols = [str(symbol).upper() for symbol in symbols if symbol]
+        if not clean_symbols:
+            return 0
+        try:
+            response = (
+                self.client.table("user_watchlist_items").delete()
+                .eq("user_id", user_id).eq("watchlist_id", str(watchlist_id))
+                .in_("symbol", clean_symbols).execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(f"Could not remove watchlist stocks: {exc}") from exc
+        return len(response.data or [])
+
     def load_alerts(self, user_id):
         user_id = self._require_user(user_id)
         try:

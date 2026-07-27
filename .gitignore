@@ -8,11 +8,21 @@ env/
 .idea/
 .vs/
 
-data/daily/
+data/daily/*
+!data/daily/*/
+data/daily/*/*
+!data/daily/*/*.parquet
 data/weekly/
 data/monthly/
-data/us/
+data/us/*
+!data/us/daily/
+data/us/daily/*
+!data/us/daily/*/
+data/us/daily/*/*
+!data/us/daily/*/*.parquet
 data/charts/
-data/metadata/
+data/metadata/*
+!data/metadata/latest_stock_values.parquet
+!data/metadata/monthly_valuations.parquet
 
 .streamlit/secrets.toml

@@ -82,6 +82,7 @@ from storage import (
     save_results,
     update_settings,
 )
+from stock_data import list_symbol_paths, stock_exists, symbol_path
 from user_auth import current_user, render_account_controls, render_header_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
@@ -148,6 +149,15 @@ def render_login_prompt(message, key, error=False):
         type="primary",
         on_click=st.login,
     )
+
+
+def persist_user_results(rows, metadata=None):
+    """Keep the UI usable while a deployment is awaiting the SQL migration."""
+    try:
+        return save_results(rows, metadata)
+    except CloudStorageError as exc:
+        st.session_state["results_storage_error"] = str(exc)
+        return rows
 
 
 def query_param_value(name, default=None):
@@ -327,8 +337,8 @@ def run_interactive_chart_view():
         st.stop()
 
     target_dir = timeframe_config("DAY", market)["target_dir"].resolve()
-    stock_file = (target_dir / f"{symbol}.json").resolve()
-    if stock_file.parent != target_dir or not stock_file.exists():
+    stock_file = symbol_path(target_dir, symbol).resolve()
+    if stock_file.parent != target_dir or not stock_exists(stock_file):
         st.error(f"Daily chart data is unavailable for {symbol}.")
         st.stop()
 
@@ -429,6 +439,19 @@ st.markdown(
         --shadow-sm: 0 1px 2px rgba(16, 36, 62, 0.05);
         --shadow-md: 0 10px 30px rgba(16, 36, 62, 0.09);
     }
+    .results-run-heading {
+        margin: 0.4rem 0 1rem;
+        padding: 1rem 1.1rem;
+        border: 1px solid #d8e6ee;
+        border-left: 5px solid #176b87;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #ffffff, #f2f9fb);
+        box-shadow: var(--shadow-sm);
+    }
+    .results-run-heading h3 { margin: 0 0 0.55rem; color: var(--ink-strong); }
+    .results-run-heading__metrics { display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; color: var(--ink); }
+    .results-run-heading details { margin-top: 0.65rem; color: var(--ink); }
+    .results-run-heading ul { margin-bottom: 0; }
 
     /* App shell */
     .stApp {
@@ -1484,7 +1507,7 @@ def is_stock_data_file(path):
 def stock_data_files(directory):
     if not directory or not directory.exists():
         return []
-    return sorted(path for path in directory.glob("*.json") if is_stock_data_file(path))
+    return list_symbol_paths(directory, include_index=False)
 
 
 CHART_CREATION_LOCK = threading.RLock()
@@ -1625,7 +1648,6 @@ def run_live_screener_job(
             matched_rows_by_index[index]
             for index in sorted(matched_rows_by_index)
         ]
-        save_results(matched_rows)
         job_queue.put({
             "type": "complete",
             "rows": matched_rows,
@@ -1714,6 +1736,10 @@ def drain_live_screener_events():
             job["last_error"] = event.get("message", "")
         elif event_type == "complete":
             st.session_state["results"] = event.get("rows", rows)
+            persist_user_results(
+                st.session_state["results"],
+                st.session_state.get("last_results_metadata", {}),
+            )
             job["done"] = event.get("total", job.get("total", 0))
             job["total"] = event.get("total", job.get("total", 0))
             job["matches"] = event.get("matches", len(st.session_state["results"]))
@@ -1753,8 +1779,8 @@ def repair_blank_result_charts(rows, filter_set, market, timeframe):
         if not symbol:
             continue
 
-        stock_file = target_dir / f"{symbol}.json"
-        if not stock_file.exists():
+        stock_file = symbol_path(target_dir, symbol)
+        if not stock_exists(stock_file):
             continue
 
         with CHART_CREATION_LOCK:
@@ -3072,12 +3098,14 @@ st.button(
     on_click=mark_alerts_refresh_requested,
 )
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results", "🔔 Alerts"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results", "⭐ Watchlists", "🔔 Alerts"]
+)
 
 if st.session_state.pop("switch_to_results_tab", False):
     switch_to_tab(3)
 if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
-    switch_to_tab(4)
+    switch_to_tab(5)
 
 refresh_alerts_when_tab_is_clicked()
 
@@ -4015,6 +4043,29 @@ with tab2:
             st.rerun()
 
         st.session_state["results"] = []
+        active_name = st.session_state.get("_active_favorite_filter_name")
+        result_filter_name = (
+            active_name
+            if active_name and active_name in favorite_filter_sets
+            else CUSTOM_FILTER_NAME
+        )
+        latest_summary = data_availability_summary(target_dir)
+        filter_condition_lines = [
+            f"{FILTER_TYPE_LABELS.get(item['type'], item['type'])}: "
+            + ", ".join(f"{key}={value}" for key, value in item.get("params", {}).items())
+            for item in run_filter_set
+        ]
+        st.session_state["last_results_metadata"] = {
+            "filter_name": result_filter_name,
+            "market": current_market,
+            "latest_data_date": (
+                latest_summary["Latest Date"].strftime("%Y-%m-%d")
+                if latest_summary.get("Latest Date") is not None
+                else ""
+            ),
+            "filter_conditions": filter_condition_lines + list(run_pattern_expressions),
+            "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
         update_settings({"last_results_market": current_market})
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
@@ -4052,7 +4103,7 @@ with tab3:
 
         target_dir = timeframe_config(backtest_tf, current_market)["target_dir"]
         stock_files = stock_data_files(target_dir)
-        benchmark_file = target_dir / f"{NIFTY_DATA_SYMBOL}.json" if current_market == MARKET_INDIA else None
+        benchmark_file = symbol_path(target_dir, NIFTY_DATA_SYMBOL) if current_market == MARKET_INDIA else None
         available_dates = cached_backtest_calendar_dates(stock_file_signatures(stock_files))
 
         selected_start_date = None
@@ -4373,7 +4424,17 @@ with tab4:
 
     # Load persisted results if session state is empty
     if "results" not in st.session_state:
-        st.session_state["results"] = load_results()
+        try:
+            loaded_rows, loaded_metadata = load_results(include_metadata=True)
+        except CloudStorageError as exc:
+            loaded_rows, loaded_metadata = [], {}
+            st.warning(
+                "Personal results storage is awaiting the Supabase schema update. "
+                "Run supabase_schema.sql to enable it."
+            )
+            st.caption(str(exc))
+        st.session_state["results"] = loaded_rows
+        st.session_state["last_results_metadata"] = loaded_metadata
 
     rows = st.session_state.get("results", [])
     if live_screener_job:
@@ -4405,24 +4466,34 @@ with tab4:
         )
         if repair_blank_result_charts(rows, repair_filter_set, result_market_for_repair, result_timeframe_for_repair):
             st.session_state["results"] = rows
-            save_results(rows)
+            persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
         if repair_result_fundamentals(rows, result_market_for_repair):
             st.session_state["results"] = rows
-            save_results(rows)
+            persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
 
     if rows:
         # Determine heading: favorite filter name or the edited working set.
-        selected_filter_name = settings.get("selected_favorite_filter_set", CUSTOM_FILTER_NAME)
-        heading_label = (
-            selected_filter_name
-            if selected_filter_name in favorite_filter_sets
-            else CUSTOM_FILTER_NAME
+        result_metadata = st.session_state.get("last_results_metadata", {})
+        heading_label = result_metadata.get("filter_name") or CUSTOM_FILTER_NAME
+        result_market = normalize_market(
+            result_metadata.get("market", settings.get("last_results_market", selected_market))
         )
-
-        result_market = normalize_market(settings.get("last_results_market", selected_market))
-        st.info(
-            f"📌 Showing last screener run results — {len(rows)} stock(s) matched | "
-            f"**{heading_label}** | **{market_label(result_market)}**"
+        latest_data_date = result_metadata.get("latest_data_date") or "Unavailable"
+        conditions = result_metadata.get("filter_conditions") or []
+        conditions_html = "".join(
+            f"<li>{html.escape(str(condition))}</li>" for condition in conditions
+        ) or "<li>No conditions recorded</li>"
+        st.markdown(
+            '<section class="results-run-heading">'
+            f"<h3>{html.escape(str(heading_label))}</h3>"
+            '<div class="results-run-heading__metrics">'
+            f"<span><b>Market</b> {html.escape(market_label(result_market))}</span>"
+            f"<span><b>Results</b> {len(rows)}</span>"
+            f"<span><b>Latest data</b> {html.escape(str(latest_data_date))}</span>"
+            "</div>"
+            f"<details><summary>Filter conditions used</summary><ul>{conditions_html}</ul></details>"
+            "</section>",
+            unsafe_allow_html=True,
         )
         if result_market != normalize_market(selected_market):
             st.warning(
@@ -4523,6 +4594,163 @@ with tab4:
 # TAB 5: PRICE ALERTS
 # =====================================================================
 with tab5:
+    render_workspace_banner(
+        "watchlists",
+        "Workspace 05 · Personal tracking",
+        "Watchlists",
+        "Create private lists, keep notes, set your preferred order, and open a stock chart directly.",
+        "⭐",
+        "Organize",
+    )
+    if app_user is None:
+        render_login_prompt(
+            "Sign in with Google to create private watchlists.",
+            key="watchlists_login",
+        )
+    elif cloud_store is None:
+        st.warning("Cloud storage is not configured, so personal watchlists are unavailable.")
+    else:
+        try:
+            personal_watchlists = cloud_store.load_watchlists(app_user.id)
+        except CloudStorageError as exc:
+            st.error(str(exc))
+            personal_watchlists = []
+
+        with st.form("create_watchlist_form", clear_on_submit=True):
+            new_watchlist_name = st.text_input(
+                "New watchlist name",
+                max_chars=120,
+                placeholder="e.g. Quality compounders",
+            )
+            create_watchlist_clicked = st.form_submit_button("Create watchlist", type="primary")
+        if create_watchlist_clicked:
+            try:
+                cloud_store.save_watchlist(
+                    app_user.id,
+                    uuid.uuid4().hex,
+                    new_watchlist_name,
+                    len(personal_watchlists),
+                )
+            except (CloudStorageError, ValueError) as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
+
+        if not personal_watchlists:
+            st.info("No watchlists yet. Create your first list above.")
+        for watchlist in personal_watchlists:
+            watchlist_id = str(watchlist["id"])
+            with st.expander(
+                f"⭐ {watchlist['name']} · {len(watchlist.get('items', []))} stock(s)",
+                expanded=True,
+            ):
+                with st.form(f"watchlist_add_{watchlist_id}", clear_on_submit=True):
+                    add_market = st.selectbox(
+                        "Market", [MARKET_INDIA, MARKET_US],
+                        format_func=market_label,
+                        key=f"watchlist_market_{watchlist_id}",
+                    )
+                    add_symbol = st.text_input(
+                        "Stock symbol",
+                        key=f"watchlist_symbol_{watchlist_id}",
+                        placeholder="RELIANCE or AAPL",
+                    )
+                    add_note = st.text_input(
+                        "Personal note (optional)",
+                        key=f"watchlist_note_{watchlist_id}",
+                    )
+                    add_clicked = st.form_submit_button("Add stock")
+                if add_clicked:
+                    clean_symbol = str(add_symbol).strip().upper()
+                    if not re.fullmatch(r"[A-Z0-9._-]+", clean_symbol):
+                        st.error("Enter a valid stock symbol.")
+                    else:
+                        try:
+                            cloud_store.save_watchlist_item(
+                                app_user.id,
+                                watchlist_id,
+                                clean_symbol,
+                                add_market,
+                                add_note,
+                                len(watchlist.get("items", [])),
+                            )
+                        except CloudStorageError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+
+                items = watchlist.get("items", [])
+                if items:
+                    item_rows = []
+                    for item in items:
+                        params = urlencode({
+                            "interactive_chart": item["symbol"],
+                            "market": item["market"],
+                        })
+                        item_rows.append({
+                            "Remove": False,
+                            "Order": int(item.get("position", 0)) + 1,
+                            "Market": item["market"],
+                            "Symbol": item["symbol"],
+                            "Note": item.get("note", ""),
+                            "Chart": f"?{params}",
+                        })
+                    edited_items = st.data_editor(
+                        pd.DataFrame(item_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "Remove": st.column_config.CheckboxColumn(),
+                            "Order": st.column_config.NumberColumn(min_value=1, step=1),
+                            "Market": st.column_config.TextColumn(disabled=True),
+                            "Symbol": st.column_config.TextColumn(disabled=True),
+                            "Note": st.column_config.TextColumn(),
+                            "Chart": st.column_config.LinkColumn(
+                                "Interactive chart",
+                                display_text="Open chart ↗",
+                            ),
+                        },
+                        key=f"watchlist_editor_{watchlist_id}",
+                    )
+                    save_col, delete_col = st.columns([3, 1])
+                    if save_col.button("Save order and notes", key=f"save_watchlist_{watchlist_id}"):
+                        try:
+                            remove_symbols = edited_items.loc[
+                                edited_items["Remove"], "Symbol"
+                            ].tolist()
+                            cloud_store.delete_watchlist_items(
+                                app_user.id, watchlist_id, remove_symbols
+                            )
+                            kept = edited_items.loc[~edited_items["Remove"]].sort_values("Order")
+                            for position, row in enumerate(kept.to_dict(orient="records")):
+                                cloud_store.save_watchlist_item(
+                                    app_user.id,
+                                    watchlist_id,
+                                    row["Symbol"],
+                                    row["Market"],
+                                    row["Note"],
+                                    position,
+                                )
+                        except CloudStorageError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+                    if delete_col.button(
+                        "Delete list",
+                        key=f"delete_watchlist_{watchlist_id}",
+                        type="secondary",
+                    ):
+                        try:
+                            cloud_store.delete_watchlist(app_user.id, watchlist_id)
+                        except CloudStorageError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+                else:
+                    st.caption("This watchlist is empty.")
+
+
+with tab6:
     render_workspace_banner(
         "alerts",
         "Workspace 05 · Price monitoring",
