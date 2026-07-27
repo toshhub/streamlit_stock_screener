@@ -37,6 +37,12 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
             "on_remove=request_saved_strategy_removal",
             self.app_source,
         )
+        self.assertIn('@st.dialog("Remove saved strategy?")', self.app_source)
+        self.assertIn('"Remove strategy"', self.app_source)
+        self.assertIn(
+            "This saved filter setup cannot be recovered.",
+            self.app_source,
+        )
 
         proxy_source = (
             Path(__file__).parent / "streamlit_filter_proxy.py"

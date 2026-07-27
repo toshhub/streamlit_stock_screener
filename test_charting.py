@@ -188,10 +188,21 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertIn('data-valuation-metric="pe"', result)
         self.assertIn('data-valuation-metric="sales"', result)
-        self.assertIn('data-valuation-years="10"', result)
+        self.assertIn('data-valuation-months="1"', result)
+        self.assertIn('data-valuation-months="6"', result)
+        self.assertIn('data-valuation-months="120"', result)
         self.assertIn("TTM EPS", result)
         self.assertIn("TTM Sales", result)
         self.assertIn("medianMarketCapToSales", result)
+        self.assertIn("sortedLineValues", result)
+        self.assertIn("Median PE", result)
+        self.assertIn('id="valuation-crosshair"', result)
+        self.assertIn('id="valuation-cursor-dot"', result)
+        self.assertIn("svg.onpointermove", result)
+        self.assertIn("svg.onpointerdown", result)
+        self.assertIn("cursorIndexFromPointer", result)
+        self.assertIn("valuation-tooltip__date", result)
+        self.assertIn('event.key === "ArrowRight"', result)
         self.assertIn("requestAnimationFrame(drawValuationChart)", result)
 
     def test_interactive_trade_overlay_adds_levels_markers_and_window(self):
@@ -444,12 +455,19 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('class="stock-symbol-label valuation-favorable"', result)
         self.assertIn('class="stock-symbol-label valuation-unfavorable"', result)
         self.assertIn('class="stock-symbol-label">NEUTRAL</span>', result)
+        self.assertIn('<tr class="valuation-favorable"', result)
+        self.assertIn('<tr class="valuation-unfavorable"', result)
+        self.assertIn("tbody tr.valuation-favorable", result)
+        self.assertIn("tbody tr.valuation-unfavorable", result)
         self.assertNotIn("<th>ValuationMedians</th>", result)
         self.assertIn('data-interactive-src="?', result)
         self.assertIn("embedded=1", result)
         self.assertIn("&position=", result)
         self.assertIn("&embed_height=", result)
+        self.assertIn("&compact_landscape=", result)
         self.assertIn("availableEmbedHeight", result)
+        self.assertIn("(orientation: landscape) and (max-height: 600px)", result)
+        self.assertIn("window.visualViewport", result)
         self.assertIn("&range=", result)
         self.assertIn("activeInteractiveRange", result)
         self.assertIn("message.action === 'range-change'", result)
@@ -503,6 +521,7 @@ class InteractiveChartRouteTests(unittest.TestCase):
                 "market": "INDIA",
                 "embedded": "1",
                 "embed_height": "630",
+                "compact_landscape": "1",
                 "ma": "50,200",
             }
         )

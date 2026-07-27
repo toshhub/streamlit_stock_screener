@@ -57,6 +57,43 @@ class MonthlyValuationTests(unittest.TestCase):
         self.assertIn("EPS", stored.columns)
         self.assertIn("Sales", stored.columns)
 
+    def test_local_pe_medians_support_result_table_coloring(self):
+        rows = pd.DataFrame([
+            {
+                "Month": month,
+                "Market": MARKET_INDIA,
+                "Symbol": "TEST",
+                "PE": pe,
+            }
+            for month, pe in (
+                ("2017-01-01", 8.0),
+                ("2022-01-01", 10.0),
+                ("2024-01-01", 20.0),
+                ("2026-01-01", 30.0),
+            )
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "monthly.parquet"
+            rows.to_parquet(output, index=False)
+            with patch.object(
+                market_snapshots,
+                "MONTHLY_VALUATIONS_FILE",
+                output,
+            ):
+                medians = market_snapshots.historical_pe_medians_by_symbol(
+                    MARKET_INDIA,
+                    as_of="2026-07-01",
+                )
+
+        self.assertEqual(
+            medians["TEST"]["Median PE"],
+            {
+                "3 Years": 25.0,
+                "5 Years": 20.0,
+                "10 Years": 15.0,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

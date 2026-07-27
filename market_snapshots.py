@@ -223,3 +223,46 @@ def latest_monthly_pe_values(market):
         for row in rows.itertuples()
         if float(row.PE) > 0
     }
+
+
+def historical_pe_medians_by_symbol(market, as_of=None):
+    """Return local 3Y/5Y/10Y PE medians in the table-coloring format."""
+    existing = _existing_monthly()
+    if existing.empty or "PE" not in existing.columns:
+        return {}
+    rows = existing[
+        existing["Market"].astype(str).str.upper() == normalize_market(market)
+    ].copy()
+    if rows.empty:
+        return {}
+    rows["Month"] = pd.to_datetime(rows["Month"], errors="coerce")
+    rows["PE"] = pd.to_numeric(rows["PE"], errors="coerce")
+    rows = rows.dropna(subset=["Month", "PE"])
+    rows = rows[rows["PE"] > 0]
+    if rows.empty:
+        return {}
+    reference = pd.Timestamp(as_of or datetime.now()).normalize()
+    period_years = {
+        "3 Years": 3,
+        "5 Years": 5,
+        "10 Years": 10,
+    }
+    result = {}
+    for symbol, symbol_rows in rows.groupby(
+        rows["Symbol"].astype(str).str.strip().str.upper()
+    ):
+        period_values = {}
+        for period, years in period_years.items():
+            values = symbol_rows.loc[
+                (
+                    symbol_rows["Month"]
+                    >= reference - pd.DateOffset(years=years)
+                )
+                & (symbol_rows["Month"] <= reference),
+                "PE",
+            ]
+            if not values.empty:
+                period_values[period] = round(float(values.median()), 4)
+        if len(period_values) == len(period_years):
+            result[symbol] = {"Median PE": period_values}
+    return result

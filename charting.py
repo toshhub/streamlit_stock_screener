@@ -761,18 +761,20 @@ def interactive_stock_chart_html(
             '<button class="is-active" type="button" data-valuation-metric="pe">PE Ratio</button>'
             '<button type="button" data-valuation-metric="sales">Market Cap / Sales</button>'
             '</div><div class="valuation-ranges">'
-            '<button type="button" data-valuation-years="1">1Y</button>'
-            '<button type="button" data-valuation-years="3">3Y</button>'
-            '<button class="is-active" type="button" data-valuation-years="5">5Y</button>'
-            '<button type="button" data-valuation-years="10">10Y</button>'
-            '<button type="button" data-valuation-years="all">Max</button>'
+            '<button type="button" data-valuation-months="1">1M</button>'
+            '<button type="button" data-valuation-months="6">6M</button>'
+            '<button type="button" data-valuation-months="12">1Yr</button>'
+            '<button type="button" data-valuation-months="36">3Yr</button>'
+            '<button class="is-active" type="button" data-valuation-months="60">5Yr</button>'
+            '<button type="button" data-valuation-months="120">10Yr</button>'
+            '<button type="button" data-valuation-months="all">Max</button>'
             '</div></div>'
             '<div class="valuation-chart-wrap"><svg id="valuation-chart" role="img" '
-            f'aria-label="{safe_symbol} monthly valuation chart"></svg></div>'
+            f'tabindex="0" aria-label="{safe_symbol} monthly valuation chart"></svg>'
+            '<div class="valuation-tooltip" id="valuation-tooltip" hidden></div></div>'
             '<div class="valuation-legend"><span id="valuation-bar-legend">■ TTM EPS</span>'
             '<span id="valuation-median-legend">┄ Median PE</span>'
             '<span id="valuation-line-legend">━ PE ratio</span></div>'
-            '<div class="valuation-tooltip" id="valuation-tooltip" hidden></div>'
             '</aside></div>'
         )
     price_alert_html = (
@@ -1153,7 +1155,9 @@ def interactive_stock_chart_html(
         .valuation-drawer.is-open .valuation-scrim {{ opacity:1; pointer-events:auto; }}
         .valuation-drawer.is-open .valuation-panel {{ pointer-events:auto; transform:translateX(0); }}
         .valuation-chart-wrap {{ min-height:300px; margin-top:12px; }}
-        #valuation-chart {{ width:100%; height:300px; overflow:visible; }}
+        #valuation-chart {{ width:100%; height:300px; overflow:visible; touch-action:none;
+          outline:none; }}
+        #valuation-chart:focus-visible {{ outline:2px solid #6558ff; outline-offset:3px; }}
         .valuation-controls {{ display:flex; align-items:center; justify-content:space-between;
           gap:10px; margin-top:12px; flex-wrap:wrap; }}
         .valuation-metrics, .valuation-ranges {{ display:flex; border:1px solid #d4d8df;
@@ -1172,7 +1176,9 @@ def interactive_stock_chart_html(
         .valuation-tooltip {{ position:absolute; z-index:4; min-width:145px; padding:8px 10px;
           border:1px solid #dce2ea; border-radius:8px; background:rgba(255,255,255,.97);
           box-shadow:0 8px 24px rgba(31,48,68,.16); color:#334155;
-          font-size:11px; line-height:1.55; pointer-events:none; }}
+          font-size:12px; line-height:1.55; pointer-events:none; }}
+        .valuation-tooltip__date {{ color:#697586; font-size:11px; }}
+        .valuation-tooltip strong {{ color:#202939; font-size:14px; }}
         .fundamentals-toggle {{
           position: absolute;
           top: 50%;
@@ -1444,6 +1450,45 @@ def interactive_stock_chart_html(
           .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
         }}
+        @media (orientation: landscape) and (max-height: 600px) {{
+          body {{ overflow:hidden; }}
+          .chart-shell {{
+            height:100dvh;
+            padding:0;
+            grid-template-rows:auto auto minmax(0,1fr);
+          }}
+          .chart-header {{
+            grid-template-columns:minmax(190px,1fr) auto auto;
+            gap:4px;
+            padding:3px;
+            border-radius:0;
+          }}
+          .chart-title {{ padding:4px 7px; border-radius:7px; }}
+          .chart-title strong {{ font-size:13px; }}
+          .chart-title .chart-section-label,
+          .chart-subtitle {{ display:none; }}
+          .chart-title__row {{ gap:4px; }}
+          .chart-title .chart-pe-badge,
+          .chart-valuation-status {{ min-height:20px; padding:2px 5px; font-size:8px !important; }}
+          .chart-control-section {{
+            padding:3px 5px;
+            border-radius:7px;
+            flex-direction:row;
+            align-items:center;
+            gap:3px;
+          }}
+          .chart-control-section .chart-section-label {{ display:none; }}
+          .chart-match-nav, .chart-close {{ width:25px; height:25px; }}
+          .chart-toolbar {{ gap:4px; }}
+          .chart-action {{ height:25px; min-width:28px; padding-inline:6px; font-size:9px; }}
+          .chart-legend {{ min-height:24px; padding:3px 8px; font-size:9px; }}
+          #chart {{ min-height:0; }}
+          .chart-footer {{ display:none; }}
+          .fundamentals-toggle {{ top:42%; left:0; min-height:78px; padding:7px 5px; }}
+          .valuation-toggle {{ top:70%; left:0; min-height:78px; padding:7px 5px; }}
+          .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
+          .valuation-chart-wrap, #valuation-chart {{ min-height:180px; height:calc(100dvh - 118px); }}
+        }}
         @media (prefers-reduced-motion: reduce) {{
           .fundamentals-toggle,
           .fundamentals-scrim,
@@ -1509,21 +1554,22 @@ def interactive_stock_chart_html(
           const valuationClose = document.getElementById("valuation-close");
           const valuationScrim = document.getElementById("valuation-scrim");
           let valuationMetric = "pe";
-          let valuationYears = 5;
+          let valuationMonths = 60;
+          let valuationCursorIndex = null;
 
           function drawValuationChart() {{
             const svg = document.getElementById("valuation-chart");
+            const tooltip = document.getElementById("valuation-tooltip");
             const allRows = (payload.monthlyValuations || []).filter(r => r && r.time);
             if (!svg || !allRows.length) return;
             const newest = new Date(allRows[allRows.length - 1].time + "T00:00:00");
-            const cutoff = valuationYears === "all" ? null : new Date(
-              newest.getFullYear() - Number(valuationYears), newest.getMonth(), newest.getDate()
+            const cutoff = valuationMonths === "all" ? null : new Date(
+              newest.getFullYear(), newest.getMonth() - Number(valuationMonths), newest.getDate()
             );
             const rows = allRows.filter(r => !cutoff || new Date(r.time + "T00:00:00") >= cutoff);
             const isPe = valuationMetric === "pe";
             const lineKey = isPe ? "pe" : "marketCapToSales";
             const barKey = isPe ? "eps" : "sales";
-            const medianKey = isPe ? "medianPe" : "medianMarketCapToSales";
             const lineLabel = isPe ? "PE ratio" : "Market Cap / Sales";
             const barLabel = isPe ? "TTM EPS" : "TTM Sales";
             const width = Math.max(320, svg.clientWidth || 700);
@@ -1568,10 +1614,15 @@ def interactive_stock_chart_html(
               path += `${{drawing ? "L" : "M"}}${{x.toFixed(1)}},${{y.toFixed(1)}} `;
               drawing=true;
             }});
-            const median = rows.map(r => finite(r[medianKey])).find(v => v !== null);
-            const medianLine = median === undefined ? "" :
+            const sortedLineValues = [...lineValues].sort((a,b) => a-b);
+            const medianMiddle = Math.floor(sortedLineValues.length/2);
+            const median = !sortedLineValues.length ? null :
+              (sortedLineValues.length % 2
+                ? sortedLineValues[medianMiddle]
+                : (sortedLineValues[medianMiddle-1]+sortedLineValues[medianMiddle])/2);
+            const medianLine = median === null ? "" :
               `<line x1="${{pad.l}}" y1="${{lineY(median)}}" x2="${{width-pad.r}}" y2="${{lineY(median)}}" `
-              + `stroke="#a5acb8" stroke-width="1.2" stroke-dasharray="5 5"><title>Median ${{median.toFixed(2)}}</title></line>`;
+              + `stroke="#a5acb8" stroke-width="1.5" stroke-dasharray="6 6"><title>Median ${{median.toFixed(2)}}</title></line>`;
             const labelIndexes = Array.from(new Set([0, Math.floor((rows.length-1)/3),
               Math.floor((rows.length-1)*2/3), rows.length-1])).filter(i => i >= 0);
             const dateLabels = labelIndexes.map(i => {{
@@ -1580,20 +1631,94 @@ def interactive_stock_chart_html(
               const label=date.toLocaleDateString(undefined,{{month:"short",year:"numeric"}});
               return `<text x="${{x}}" y="${{height-12}}" text-anchor="middle" fill="#64748b" font-size="10">${{label}}</text>`;
             }}).join("");
-            const hitAreas = rows.map((r,i) => {{
-              const lineValue=finite(r[lineKey]), barValue=finite(r[barKey]);
-              return `<rect x="${{pad.l+step*i}}" y="${{pad.t}}" width="${{Math.max(2,step)}}" height="${{plotH}}" fill="transparent">`
-                + `<title>${{r.time}} · ${{lineLabel}} ${{lineValue === null ? "—" : lineValue.toFixed(2)}} · `
-                + `${{barLabel}} ${{barValue === null ? "—" : barValue.toFixed(2)}}</title></rect>`;
-            }}).join("");
             svg.setAttribute("viewBox",`0 0 ${{width}} ${{height}}`);
             svg.innerHTML = `${{grid}}${{bars}}${{medianLine}}`
               + `<path d="${{path}}" fill="none" stroke="#6558ff" stroke-width="2.4" stroke-linejoin="round"/>`
-              + `${{hitAreas}}${{dateLabels}}`
+              + `<line id="valuation-crosshair" x1="0" y1="${{pad.t}}" x2="0" y2="${{pad.t+plotH}}" `
+              + `stroke="#aab2bf" stroke-width="1" visibility="hidden"/>`
+              + `<circle id="valuation-cursor-dot" r="5" fill="#5145e5" stroke="#fff" stroke-width="2" visibility="hidden"/>`
+              + `<rect x="${{pad.l}}" y="${{pad.t}}" width="${{plotW}}" height="${{plotH}}" fill="transparent"/>`
+              + `${{dateLabels}}`
               + `<text x="13" y="${{pad.t+plotH/2}}" fill="#64748b" font-size="10" text-anchor="middle" `
               + `transform="rotate(-90 13 ${{pad.t+plotH/2}})">${{barLabel}}</text>`
               + `<text x="${{width-12}}" y="${{pad.t+plotH/2}}" fill="#64748b" font-size="10" text-anchor="middle" `
               + `transform="rotate(90 ${{width-12}} ${{pad.t+plotH/2}})">${{lineLabel}}</text>`;
+            const medianLegend = document.getElementById("valuation-median-legend");
+            if (medianLegend) {{
+              const medianName = isPe ? "Median PE" : "Median MCap / Sales";
+              medianLegend.textContent = `┄ ${{medianName}}${{median === null ? "" : " = " + median.toFixed(1)}}`;
+            }}
+
+            function showValuationCursor(index, clientX=null, clientY=null) {{
+              index = Math.max(0,Math.min(rows.length-1,index));
+              valuationCursorIndex = index;
+              const row=rows[index], lineValue=finite(row[lineKey]), barValue=finite(row[barKey]);
+              const x=pad.l+step*(index+.5);
+              const crosshair=svg.querySelector("#valuation-crosshair");
+              const dot=svg.querySelector("#valuation-cursor-dot");
+              if (crosshair) {{
+                crosshair.setAttribute("x1",x); crosshair.setAttribute("x2",x);
+                crosshair.setAttribute("visibility","visible");
+              }}
+              if (dot && lineValue !== null) {{
+                dot.setAttribute("cx",x); dot.setAttribute("cy",lineY(lineValue));
+                dot.setAttribute("visibility","visible");
+              }} else if (dot) dot.setAttribute("visibility","hidden");
+              if (!tooltip) return;
+              const date=new Date(row.time+"T00:00:00");
+              const dateLabel=date.toLocaleDateString(undefined,{{day:"numeric",month:"short",year:"2-digit"}});
+              tooltip.innerHTML = `<div class="valuation-tooltip__date">${{dateLabel}}</div>`
+                + `<div><strong>${{lineLabel}}: ${{lineValue === null ? "—" : lineValue.toFixed(2)}}</strong></div>`
+                + `<div>${{barLabel}}: ${{barValue === null ? "—" : barValue.toFixed(2)}}</div>`;
+              tooltip.hidden=false;
+              const wrap=svg.parentElement, wrapRect=wrap.getBoundingClientRect();
+              const svgRect=svg.getBoundingClientRect();
+              const anchorX=clientX === null
+                ? svgRect.left + x/width*svgRect.width
+                : clientX;
+              const anchorY=clientY === null
+                ? svgRect.top + (lineValue === null ? pad.t+plotH/2 : lineY(lineValue))/height*svgRect.height
+                : clientY;
+              const maxLeft=Math.max(8,wrapRect.width-tooltip.offsetWidth-8);
+              const left=Math.max(8,Math.min(maxLeft,anchorX-wrapRect.left+12));
+              let top=anchorY-wrapRect.top-tooltip.offsetHeight-12;
+              if (top < 8) top=anchorY-wrapRect.top+14;
+              tooltip.style.left=left+"px";
+              tooltip.style.top=Math.max(8,Math.min(top,wrapRect.height-tooltip.offsetHeight-8))+"px";
+            }}
+            function hideValuationCursor() {{
+              const crosshair=svg.querySelector("#valuation-crosshair");
+              const dot=svg.querySelector("#valuation-cursor-dot");
+              if (crosshair) crosshair.setAttribute("visibility","hidden");
+              if (dot) dot.setAttribute("visibility","hidden");
+              if (tooltip) tooltip.hidden=true;
+              valuationCursorIndex=null;
+            }}
+            function cursorIndexFromPointer(event) {{
+              const rect=svg.getBoundingClientRect();
+              const x=(event.clientX-rect.left)*width/rect.width;
+              return Math.round((x-pad.l)/step-.5);
+            }}
+            svg.onpointerdown = event => {{
+              event.preventDefault();
+              if (svg.setPointerCapture) svg.setPointerCapture(event.pointerId);
+              showValuationCursor(cursorIndexFromPointer(event),event.clientX,event.clientY);
+            }};
+            svg.onpointermove = event => {{
+              if (event.pointerType === "touch" && event.buttons === 0) return;
+              showValuationCursor(cursorIndexFromPointer(event),event.clientX,event.clientY);
+            }};
+            svg.onpointerleave = event => {{
+              if (event.pointerType !== "touch") hideValuationCursor();
+            }};
+            svg.onkeydown = event => {{
+              if (!["ArrowLeft","ArrowRight"].includes(event.key)) return;
+              event.preventDefault();
+              const next=valuationCursorIndex === null
+                ? rows.length-1
+                : valuationCursorIndex+(event.key === "ArrowRight" ? 1 : -1);
+              showValuationCursor(next);
+            }};
           }}
           document.querySelectorAll("[data-valuation-metric]").forEach(button => {{
             button.addEventListener("click", () => {{
@@ -1612,10 +1737,10 @@ def interactive_stock_chart_html(
               drawValuationChart();
             }});
           }});
-          document.querySelectorAll("[data-valuation-years]").forEach(button => {{
+          document.querySelectorAll("[data-valuation-months]").forEach(button => {{
             button.addEventListener("click", () => {{
-              valuationYears = button.dataset.valuationYears;
-              document.querySelectorAll("[data-valuation-years]").forEach(item =>
+              valuationMonths = button.dataset.valuationMonths;
+              document.querySelectorAll("[data-valuation-months]").forEach(item =>
                 item.classList.toggle("is-active", item === button));
               drawValuationChart();
             }});
@@ -2300,6 +2425,20 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         background: #edf7f9;
         box-shadow: inset 3px 0 0 var(--brand);
       }
+      .hover-results-table tbody tr.valuation-favorable {
+        background: #edf9f0;
+      }
+      .hover-results-table tbody tr.valuation-unfavorable {
+        background: #fff1f1;
+      }
+      .hover-results-table tbody tr.valuation-favorable:hover {
+        background: #ddf3e3;
+        box-shadow: inset 3px 0 0 #2d9852;
+      }
+      .hover-results-table tbody tr.valuation-unfavorable:hover {
+        background: #ffe2e2;
+        box-shadow: inset 3px 0 0 #c75c5c;
+      }
       .hover-results-table tbody tr:last-child td { border-bottom: none; }
       .hover-results-table td:first-child { font-weight: 750; }
       .hover-results-table th:first-child,
@@ -2640,7 +2779,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         .interactive-panel-help { font-size: 9px; }
       }
       /* Mobile landscape */
-      @media screen and (max-width: 600px) and (orientation: landscape) {
+      @media screen and (orientation: landscape) and (max-height: 600px) {
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
         .chart-panel.interactive-mode {
@@ -2794,10 +2933,27 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
           var items = getInteractiveItems();
           var index = items.indexOf(button);
           if (index < 0) return;
-          var availableEmbedHeight = Math.max(420, Math.floor(window.innerHeight - 70));
+          var compactLandscape = window.matchMedia(
+            '(orientation: landscape) and (max-height: 600px)'
+          ).matches;
+          var viewportHeight = window.visualViewport
+            ? window.visualViewport.height
+            : window.innerHeight;
+          try {
+            if (window.top && window.top.innerHeight) {
+              viewportHeight = Math.min(viewportHeight, window.top.innerHeight);
+            }
+          } catch (error) {
+            // Sandboxed components may not read the parent viewport.
+          }
+          var availableEmbedHeight = Math.max(
+            compactLandscape ? 240 : 420,
+            Math.floor(viewportHeight - (compactLandscape ? 2 : 70))
+          );
           var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
             'embedded=1' +
             '&embed_height=' + encodeURIComponent(availableEmbedHeight) +
+            '&compact_landscape=' + (compactLandscape ? '1' : '0') +
             '&position=' + encodeURIComponent(index + 1) +
             '&total=' + encodeURIComponent(items.length) +
             '&has_previous=' + (index > 0 ? '1' : '0') +
@@ -2997,6 +3153,13 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             if valuation_medians_series is not None
             else None
         )
+        row_valuation_state = historical_pe_valuation_state(
+            row.get("PE Ratio"),
+            valuation_medians,
+        )
+        row_valuation_class = (
+            f" valuation-{row_valuation_state}" if row_valuation_state else ""
+        )
         chart_html = ""
         data_uri = ""
         if chart_path and _row_chart_matches_symbol(row.get("Symbol"), chart_path, chart_source):
@@ -3014,13 +3177,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
             if column == "Symbol":
-                valuation_state = historical_pe_valuation_state(
-                    row.get("PE Ratio"),
-                    valuation_medians,
-                )
-                valuation_class = (
-                    f" valuation-{valuation_state}" if valuation_state else ""
-                )
+                valuation_state = row_valuation_state
+                valuation_class = row_valuation_class
                 valuation_title = ""
                 if valuation_state == "favorable":
                     valuation_title = (
@@ -3101,7 +3259,8 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             sort_value = html.escape(value, quote=True)
             cells.append(f'<td data-sort-value="{sort_value}">{escaped_value}</td>')
         rows.append(
-            f'<tr data-original-index="{original_index}">{"".join(cells)}</tr>'
+            f'<tr class="{row_valuation_class.strip()}" '
+            f'data-original-index="{original_index}">{"".join(cells)}</tr>'
         )
 
     script = r"""

@@ -50,7 +50,10 @@ from downloader import (
 from fundamentals import (
     get_company_fundamentals,
 )
-from market_snapshots import latest_monthly_pe_values
+from market_snapshots import (
+    historical_pe_medians_by_symbol,
+    latest_monthly_pe_values,
+)
 from pattern import evaluate_pattern_filters_from_df, validate_expression
 from price_alerts import (
     acknowledge_price_alerts,
@@ -329,8 +332,11 @@ def run_interactive_chart_view():
         requested_embed_height = int(query_param_value("embed_height", 0) or 0)
     except (TypeError, ValueError):
         requested_embed_height = 0
+    compact_landscape = str(
+        query_param_value("compact_landscape", "") or ""
+    ).lower() in {"1", "true", "yes"}
     embedded_chart_height = (
-        max(420, min(1400, requested_embed_height))
+        max(240 if compact_landscape else 420, min(1400, requested_embed_height))
         if embedded and requested_embed_height
         else (1060 if embedded else 920)
     )
@@ -3521,18 +3527,32 @@ with tab2:
         None,
     )
     if remove_saved_strategy:
-        stored_name = personal_favorite_keys.get(remove_saved_strategy)
-        if app_user is None:
-            render_login_prompt(
-                "Sign in with Google before removing a personal saved strategy.",
-                key="saved_strategy_remove_login",
-                error=True,
+        st.session_state["_remove_saved_strategy_pending"] = remove_saved_strategy
+
+    @st.dialog("Remove saved strategy?")
+    def confirm_saved_strategy_removal(display_name, stored_name):
+        st.warning(
+            f'You are about to permanently remove "{stored_name}". '
+            "This saved filter setup cannot be recovered."
+        )
+        confirm_col, cancel_col = st.columns(2)
+        with confirm_col:
+            confirmed = st.button(
+                "Remove strategy",
+                type="primary",
+                use_container_width=True,
+                key="confirm_saved_strategy_remove",
             )
-        elif cloud_store is None:
-            st.error("Cloud storage is not configured, so this strategy cannot be removed.")
-        elif not stored_name:
-            st.error("Only personal saved strategies can be removed.")
-        else:
+        with cancel_col:
+            cancelled = st.button(
+                "Cancel",
+                use_container_width=True,
+                key="cancel_saved_strategy_remove",
+            )
+        if cancelled:
+            st.session_state.pop("_remove_saved_strategy_pending", None)
+            st.rerun()
+        if confirmed:
             try:
                 cloud_store.delete_filter_set(app_user.id, stored_name)
             except CloudStorageError as exc:
@@ -3544,9 +3564,34 @@ with tab2:
                 ):
                     st.session_state["_active_favorite_filter_name"] = None
                     update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
+                st.session_state.pop("_remove_saved_strategy_pending", None)
                 st.session_state.pop("_favorite_select_widget", None)
                 st.toast(f"Removed saved strategy: {stored_name}", icon="🗑️")
                 st.rerun()
+
+    pending_saved_strategy_removal = st.session_state.get(
+        "_remove_saved_strategy_pending"
+    )
+    if pending_saved_strategy_removal:
+        stored_name = personal_favorite_keys.get(pending_saved_strategy_removal)
+        if app_user is None:
+            st.session_state.pop("_remove_saved_strategy_pending", None)
+            render_login_prompt(
+                "Sign in with Google before removing a personal saved strategy.",
+                key="saved_strategy_remove_login",
+                error=True,
+            )
+        elif cloud_store is None:
+            st.session_state.pop("_remove_saved_strategy_pending", None)
+            st.error("Cloud storage is not configured, so this strategy cannot be removed.")
+        elif not stored_name:
+            st.session_state.pop("_remove_saved_strategy_pending", None)
+            st.error("Only personal saved strategies can be removed.")
+        else:
+            confirm_saved_strategy_removal(
+                pending_saved_strategy_removal,
+                stored_name,
+            )
 
     with quick_run_panel:
         quick_run_action = st.container(key="quick_run_action")
@@ -4562,6 +4607,7 @@ with tab4:
             for position, symbol in enumerate(ranked_symbols, start=1)
         }
         display_rows = []
+        local_valuation_medians = historical_pe_medians_by_symbol(result_market)
         for row in rows:
             display_row = dict(row)
             symbol = str(display_row.get("Symbol", ""))
@@ -4569,6 +4615,11 @@ with tab4:
                 symbol,
                 display_row.get("Market Cap Position", ""),
             )
+            if not display_row.get("ValuationMedians"):
+                display_row["ValuationMedians"] = local_valuation_medians.get(
+                    symbol.strip().upper(),
+                    {},
+                )
             display_rows.append(display_row)
         display_rows.sort(
             key=lambda row: (

@@ -470,6 +470,19 @@ def _inject_styles(force=False):
         }
 
         div[class*="st-key-favorite_filter_card_tone_"]
+            div[class*="st-key-favorite_filter_remove_"] button p {
+            display: block !important;
+            width: 100% !important;
+            margin: 0 !important;
+            color: inherit !important;
+            font-size: 1rem !important;
+            font-weight: 900 !important;
+            line-height: 1 !important;
+            text-align: center !important;
+            white-space: nowrap !important;
+        }
+
+        div[class*="st-key-favorite_filter_card_tone_"]
             div[class*="st-key-favorite_filter_remove_"] button:hover {
             border-color: #dc2626 !important;
             background: #fee2e2 !important;
