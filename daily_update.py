@@ -11,7 +11,7 @@ from downloader import (
     download_top_stocks,
     load_top_symbols,
 )
-from market_snapshots import collect_monthly_valuations, refresh_latest_stock_values
+from market_snapshots import refresh_latest_stock_values
 from price_alerts import configure_cloud_alerts
 from app_paths import symbols_file_for_market
 
@@ -82,11 +82,7 @@ def main():
                 "Error": str(exc),
             })
     refresh_latest_stock_values({MARKET_INDIA: DAILY_DIR, MARKET_US: US_DAILY_DIR})
-    _, valuation_failures = collect_monthly_valuations(symbols_by_market)
-    print(
-        f"Daily update complete. Candle failures: {len(failures)}; "
-        f"valuation failures: {len(valuation_failures)}"
-    )
+    print(f"Daily update complete. Candle failures: {len(failures)}")
     for summary in market_summaries:
         print(
             "{Market}: {Symbols} symbols; {Updated} updated; "
@@ -103,7 +99,6 @@ def main():
     return {
         "markets": market_summaries,
         "candle_failures": failures,
-        "valuation_failures": valuation_failures,
     }
 
 

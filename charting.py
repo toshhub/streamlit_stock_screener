@@ -751,15 +751,29 @@ def interactive_stock_chart_html(
             'aria-label="Close valuation chart"></button>'
             '<aside class="valuation-panel" id="valuation-panel" aria-hidden="true" inert>'
             '<div class="valuation-panel__header"><div>'
-            '<span class="growth-snapshot__eyebrow">Monthly history</span>'
-            '<h2>Valuation trend</h2>'
-            '<span class="growth-snapshot__source">PE line · Market Cap / Sales bars</span>'
+            '<span class="growth-snapshot__eyebrow">Screener.in history</span>'
+            '<h2 id="valuation-chart-title">PE Ratio</h2>'
+            '<span class="growth-snapshot__source">Monthly, stored locally</span>'
             '</div><button class="fundamentals-close" id="valuation-close" type="button" '
             'aria-label="Close valuation chart">&times;</button></div>'
+            '<div class="valuation-controls" aria-label="Valuation chart controls">'
+            '<div class="valuation-metrics">'
+            '<button class="is-active" type="button" data-valuation-metric="pe">PE Ratio</button>'
+            '<button type="button" data-valuation-metric="sales">Market Cap / Sales</button>'
+            '</div><div class="valuation-ranges">'
+            '<button type="button" data-valuation-years="1">1Y</button>'
+            '<button type="button" data-valuation-years="3">3Y</button>'
+            '<button class="is-active" type="button" data-valuation-years="5">5Y</button>'
+            '<button type="button" data-valuation-years="10">10Y</button>'
+            '<button type="button" data-valuation-years="all">Max</button>'
+            '</div></div>'
             '<div class="valuation-chart-wrap"><svg id="valuation-chart" role="img" '
             f'aria-label="{safe_symbol} monthly valuation chart"></svg></div>'
-            '<div class="valuation-legend"><span>■ Market Cap / Sales</span>'
-            '<span>━ PE ratio</span></div></aside></div>'
+            '<div class="valuation-legend"><span id="valuation-bar-legend">■ TTM EPS</span>'
+            '<span id="valuation-median-legend">┄ Median PE</span>'
+            '<span id="valuation-line-legend">━ PE ratio</span></div>'
+            '<div class="valuation-tooltip" id="valuation-tooltip" hidden></div>'
+            '</aside></div>'
         )
     price_alert_html = (
         '<div class="chart-price-alert-form">'
@@ -1140,8 +1154,25 @@ def interactive_stock_chart_html(
         .valuation-drawer.is-open .valuation-panel {{ pointer-events:auto; transform:translateX(0); }}
         .valuation-chart-wrap {{ min-height:300px; margin-top:12px; }}
         #valuation-chart {{ width:100%; height:300px; overflow:visible; }}
-        .valuation-legend {{ display:flex; justify-content:center; gap:22px; color:#53657a;
-          font-size:11px; font-weight:700; }}
+        .valuation-controls {{ display:flex; align-items:center; justify-content:space-between;
+          gap:10px; margin-top:12px; flex-wrap:wrap; }}
+        .valuation-metrics, .valuation-ranges {{ display:flex; border:1px solid #d4d8df;
+          border-radius:7px; overflow:hidden; background:#fff; }}
+        .valuation-controls button {{ min-height:34px; padding:6px 11px; border:0;
+          border-right:1px solid #e4e7ec; background:#fff; color:#44556a;
+          font-size:11px; font-weight:750; cursor:pointer; }}
+        .valuation-controls button:last-child {{ border-right:0; }}
+        .valuation-controls button.is-active {{ color:#6257ed; background:#f1efff; }}
+        .valuation-chart-wrap {{ position:relative; }}
+        .valuation-legend {{ display:flex; justify-content:center; flex-wrap:wrap; gap:18px;
+          color:#53657a; font-size:11px; font-weight:700; }}
+        #valuation-bar-legend {{ color:#6abbe7; }}
+        #valuation-line-legend {{ color:#6558ff; }}
+        #valuation-median-legend {{ color:#8b94a3; }}
+        .valuation-tooltip {{ position:absolute; z-index:4; min-width:145px; padding:8px 10px;
+          border:1px solid #dce2ea; border-radius:8px; background:rgba(255,255,255,.97);
+          box-shadow:0 8px 24px rgba(31,48,68,.16); color:#334155;
+          font-size:11px; line-height:1.55; pointer-events:none; }}
         .fundamentals-toggle {{
           position: absolute;
           top: 50%;
@@ -1404,7 +1435,12 @@ def interactive_stock_chart_html(
           }}
           .valuation-scrim {{ inset:0; border-radius:0; }}
           .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
-          .valuation-chart-wrap, #valuation-chart {{ min-height:240px; height:calc(100dvh - 150px); }}
+          .valuation-controls {{ align-items:stretch; }}
+          .valuation-metrics {{ width:100%; }}
+          .valuation-metrics button {{ flex:1; }}
+          .valuation-ranges {{ width:100%; }}
+          .valuation-ranges button {{ flex:1; padding-inline:6px; }}
+          .valuation-chart-wrap, #valuation-chart {{ min-height:260px; height:calc(100dvh - 245px); }}
           .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
         }}
@@ -1472,27 +1508,118 @@ def interactive_stock_chart_html(
           const valuationPanel = document.getElementById("valuation-panel");
           const valuationClose = document.getElementById("valuation-close");
           const valuationScrim = document.getElementById("valuation-scrim");
+          let valuationMetric = "pe";
+          let valuationYears = 5;
 
           function drawValuationChart() {{
             const svg = document.getElementById("valuation-chart");
-            const rows = payload.monthlyValuations || [];
-            if (!svg || !rows.length) return;
-            const width = Math.max(360, svg.clientWidth || 700), height = Math.max(240, svg.clientHeight || 300);
-            const pad = {{l:42,r:42,t:18,b:34}}, plotW=width-pad.l-pad.r, plotH=height-pad.t-pad.b;
-            const peMax = Math.max(1, ...rows.map(r => Number(r.pe)||0));
-            const salesMax = Math.max(1, ...rows.map(r => Number(r.marketCapToSales)||0));
+            const allRows = (payload.monthlyValuations || []).filter(r => r && r.time);
+            if (!svg || !allRows.length) return;
+            const newest = new Date(allRows[allRows.length - 1].time + "T00:00:00");
+            const cutoff = valuationYears === "all" ? null : new Date(
+              newest.getFullYear() - Number(valuationYears), newest.getMonth(), newest.getDate()
+            );
+            const rows = allRows.filter(r => !cutoff || new Date(r.time + "T00:00:00") >= cutoff);
+            const isPe = valuationMetric === "pe";
+            const lineKey = isPe ? "pe" : "marketCapToSales";
+            const barKey = isPe ? "eps" : "sales";
+            const medianKey = isPe ? "medianPe" : "medianMarketCapToSales";
+            const lineLabel = isPe ? "PE ratio" : "Market Cap / Sales";
+            const barLabel = isPe ? "TTM EPS" : "TTM Sales";
+            const width = Math.max(320, svg.clientWidth || 700);
+            const height = Math.max(260, svg.clientHeight || 320);
+            const pad = {{l:52,r:54,t:18,b:42}}, plotW=width-pad.l-pad.r, plotH=height-pad.t-pad.b;
+            const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+            const lineValues = rows.map(r => finite(r[lineKey])).filter(v => v !== null);
+            const barValues = rows.map(r => finite(r[barKey])).filter(v => v !== null);
+            if (!lineValues.length && !barValues.length) {{
+              svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#64748b">No valuation history available</text>';
+              return;
+            }}
+            const lineMin = Math.min(0, ...lineValues), lineMax = Math.max(1, ...lineValues) * 1.08;
+            const barMin = Math.min(0, ...barValues), barMaxRaw = Math.max(1, ...barValues);
+            const barMax = barMaxRaw === barMin ? barMin + 1 : barMaxRaw * 1.08;
+            const lineY = value => pad.t + plotH - (value-lineMin)/(lineMax-lineMin)*plotH;
+            const barY = value => pad.t + plotH - (value-barMin)/(barMax-barMin)*plotH;
+            const zeroY = barY(0);
             const step = plotW / Math.max(1, rows.length);
-            const points = rows.map((r,i) => {{
-              const x=pad.l+step*(i+.5), y=pad.t+plotH-(Number(r.pe)||0)/peMax*plotH;
-              return `${{x.toFixed(1)}},${{y.toFixed(1)}}`;
-            }}).join(" ");
+            const tickCount = 4;
+            const grid = Array.from({{length:tickCount+1}}, (_,i) => {{
+              const y=pad.t+plotH*i/tickCount;
+              const left=(barMax-(barMax-barMin)*i/tickCount).toFixed(1).replace(".0","");
+              const right=(lineMax-(lineMax-lineMin)*i/tickCount).toFixed(1).replace(".0","");
+              return `<line x1="${{pad.l}}" y1="${{y}}" x2="${{width-pad.r}}" y2="${{y}}" stroke="#e5e7eb"/>`
+                + `<text x="${{pad.l-8}}" y="${{y+4}}" text-anchor="end" fill="#64748b" font-size="10">${{left}}</text>`
+                + `<text x="${{width-pad.r+8}}" y="${{y+4}}" fill="#64748b" font-size="10">${{right}}</text>`;
+            }}).join("");
             const bars = rows.map((r,i) => {{
-              const value=Number(r.marketCapToSales)||0, h=value/salesMax*plotH;
-              return `<rect x="${{(pad.l+step*i+2).toFixed(1)}}" y="${{(pad.t+plotH-h).toFixed(1)}}" width="${{Math.max(2,step-4).toFixed(1)}}" height="${{h.toFixed(1)}}" fill="rgba(101,184,230,.55)"><title>${{r.time}} · MCap/Sales ${{value.toFixed(2)}}</title></rect>`;
+              const value=finite(r[barKey]);
+              if (value === null) return "";
+              const y=barY(value), h=Math.max(1,Math.abs(zeroY-y));
+              return `<rect x="${{(pad.l+step*i+1).toFixed(1)}}" y="${{Math.min(y,zeroY).toFixed(1)}}" `
+                + `width="${{Math.max(1,step-2).toFixed(1)}}" height="${{h.toFixed(1)}}" fill="rgba(101,184,230,.58)">`
+                + `<title>${{r.time}} · ${{barLabel}} ${{value.toFixed(2)}}</title></rect>`;
+            }}).join("");
+            let path = "", drawing = false;
+            rows.forEach((r,i) => {{
+              const value=finite(r[lineKey]);
+              if (value === null) {{ drawing=false; return; }}
+              const x=pad.l+step*(i+.5), y=lineY(value);
+              path += `${{drawing ? "L" : "M"}}${{x.toFixed(1)}},${{y.toFixed(1)}} `;
+              drawing=true;
+            }});
+            const median = rows.map(r => finite(r[medianKey])).find(v => v !== null);
+            const medianLine = median === undefined ? "" :
+              `<line x1="${{pad.l}}" y1="${{lineY(median)}}" x2="${{width-pad.r}}" y2="${{lineY(median)}}" `
+              + `stroke="#a5acb8" stroke-width="1.2" stroke-dasharray="5 5"><title>Median ${{median.toFixed(2)}}</title></line>`;
+            const labelIndexes = Array.from(new Set([0, Math.floor((rows.length-1)/3),
+              Math.floor((rows.length-1)*2/3), rows.length-1])).filter(i => i >= 0);
+            const dateLabels = labelIndexes.map(i => {{
+              const x=pad.l+step*(i+.5);
+              const date=new Date(rows[i].time+"T00:00:00");
+              const label=date.toLocaleDateString(undefined,{{month:"short",year:"numeric"}});
+              return `<text x="${{x}}" y="${{height-12}}" text-anchor="middle" fill="#64748b" font-size="10">${{label}}</text>`;
+            }}).join("");
+            const hitAreas = rows.map((r,i) => {{
+              const lineValue=finite(r[lineKey]), barValue=finite(r[barKey]);
+              return `<rect x="${{pad.l+step*i}}" y="${{pad.t}}" width="${{Math.max(2,step)}}" height="${{plotH}}" fill="transparent">`
+                + `<title>${{r.time}} · ${{lineLabel}} ${{lineValue === null ? "—" : lineValue.toFixed(2)}} · `
+                + `${{barLabel}} ${{barValue === null ? "—" : barValue.toFixed(2)}}</title></rect>`;
             }}).join("");
             svg.setAttribute("viewBox",`0 0 ${{width}} ${{height}}`);
-            svg.innerHTML = `<line x1="${{pad.l}}" y1="${{pad.t+plotH}}" x2="${{width-pad.r}}" y2="${{pad.t+plotH}}" stroke="#cbd5e1"/>${{bars}}<polyline points="${{points}}" fill="none" stroke="#6558ff" stroke-width="2.5"/>`;
+            svg.innerHTML = `${{grid}}${{bars}}${{medianLine}}`
+              + `<path d="${{path}}" fill="none" stroke="#6558ff" stroke-width="2.4" stroke-linejoin="round"/>`
+              + `${{hitAreas}}${{dateLabels}}`
+              + `<text x="13" y="${{pad.t+plotH/2}}" fill="#64748b" font-size="10" text-anchor="middle" `
+              + `transform="rotate(-90 13 ${{pad.t+plotH/2}})">${{barLabel}}</text>`
+              + `<text x="${{width-12}}" y="${{pad.t+plotH/2}}" fill="#64748b" font-size="10" text-anchor="middle" `
+              + `transform="rotate(90 ${{width-12}} ${{pad.t+plotH/2}})">${{lineLabel}}</text>`;
           }}
+          document.querySelectorAll("[data-valuation-metric]").forEach(button => {{
+            button.addEventListener("click", () => {{
+              valuationMetric = button.dataset.valuationMetric;
+              document.querySelectorAll("[data-valuation-metric]").forEach(item =>
+                item.classList.toggle("is-active", item === button));
+              const isPe = valuationMetric === "pe";
+              const title = document.getElementById("valuation-chart-title");
+              const barLegend = document.getElementById("valuation-bar-legend");
+              const medianLegend = document.getElementById("valuation-median-legend");
+              const lineLegend = document.getElementById("valuation-line-legend");
+              if (title) title.textContent = isPe ? "PE Ratio" : "Market Cap / Sales";
+              if (barLegend) barLegend.textContent = isPe ? "■ TTM EPS" : "■ TTM Sales";
+              if (medianLegend) medianLegend.textContent = isPe ? "┄ Median PE" : "┄ Median MCap / Sales";
+              if (lineLegend) lineLegend.textContent = isPe ? "━ PE ratio" : "━ Market Cap / Sales";
+              drawValuationChart();
+            }});
+          }});
+          document.querySelectorAll("[data-valuation-years]").forEach(button => {{
+            button.addEventListener("click", () => {{
+              valuationYears = button.dataset.valuationYears;
+              document.querySelectorAll("[data-valuation-years]").forEach(item =>
+                item.classList.toggle("is-active", item === button));
+              drawValuationChart();
+            }});
+          }});
           function setValuationOpen(open) {{
             if (!valuationDrawer || !valuationPanel) return;
             valuationDrawer.classList.toggle("is-open", open);
@@ -1503,6 +1630,9 @@ def interactive_stock_chart_html(
           if (valuationToggle) valuationToggle.addEventListener("click", () => setValuationOpen(true));
           if (valuationClose) valuationClose.addEventListener("click", () => setValuationOpen(false));
           if (valuationScrim) valuationScrim.addEventListener("click", () => setValuationOpen(false));
+          window.addEventListener("resize", () => {{
+            if (valuationDrawer && valuationDrawer.classList.contains("is-open")) drawValuationChart();
+          }});
 
           if (priceAlertButton) {{
             priceAlertButton.addEventListener("click", function(event) {{

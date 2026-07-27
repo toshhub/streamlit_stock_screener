@@ -310,6 +310,111 @@ def parse_screener_valuation_chart_payload(payload):
     return medians
 
 
+def parse_screener_valuation_history_payload(payload):
+    """Convert Screener.in chart datasets into compact monthly observations."""
+    datasets = payload.get("datasets", []) if isinstance(payload, dict) else []
+    metric_columns = {
+        "Price to Earning": "PE",
+        "Market Cap to Sales": "MarketCapToSales",
+        "EPS": "EPS",
+        "Sales": "Sales",
+    }
+    median_columns = {
+        "Median PE": "MedianPE",
+        "Median Market Cap to Sales": "MedianMarketCapToSales",
+    }
+    monthly = {}
+    medians = {}
+    for dataset in datasets:
+        if not isinstance(dataset, dict):
+            continue
+        metric = dataset.get("metric")
+        if metric in median_columns:
+            for point in dataset.get("values", []):
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                try:
+                    medians[median_columns[metric]] = float(point[1])
+                    break
+                except (TypeError, ValueError):
+                    continue
+            continue
+        column = metric_columns.get(metric)
+        if not column:
+            continue
+        for point in dataset.get("values", []):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            try:
+                point_date = datetime.fromisoformat(str(point[0])[:10])
+                value = float(point[1])
+            except (TypeError, ValueError):
+                continue
+            month = point_date.strftime("%Y-%m-01")
+            current = monthly.setdefault(month, {})
+            # Screener's ratio series is weekly. Keep the latest observation
+            # from each month so the Git-tracked file remains small.
+            if point_date >= current.get(f"_{column}Date", datetime.min):
+                current[column] = value
+                current[f"_{column}Date"] = point_date
+
+    rows = []
+    latest_eps = None
+    latest_sales = None
+    for month in sorted(monthly):
+        values = monthly[month]
+        if values.get("EPS") is not None:
+            latest_eps = values["EPS"]
+        if values.get("Sales") is not None:
+            latest_sales = values["Sales"]
+        rows.append({
+            "Month": month,
+            "PE": values.get("PE"),
+            "MarketCapToSales": values.get("MarketCapToSales"),
+            "EPS": latest_eps,
+            "Sales": latest_sales,
+            **medians,
+        })
+    return rows
+
+
+def fetch_screener_valuation_history(symbol, days=3652):
+    """Fetch the native Screener.in PE and Market Cap/Sales chart series."""
+    page_html = _fetch_screener_page(symbol)
+    context = parse_screener_company_chart_context(page_html)
+    if not context:
+        raise ValueError(f"Screener.in company chart is unavailable for {symbol}")
+    query = (
+        "Price to Earning-Median PE-EPS-"
+        "Market Cap to Sales-Median Market Cap to Sales-Sales"
+    )
+    params = {"q": query, "days": int(days)}
+    if context["consolidated"]:
+        params["consolidated"] = "true"
+    url = (
+        f"https://www.screener.in/api/company/{context['company_id']}/chart/?"
+        f"{urllib.parse.urlencode(params)}"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; NSEStockScreener/1.0)",
+            "Accept": "application/json",
+            "Referer": (
+                f"https://www.screener.in/company/"
+                f"{urllib.parse.quote(str(symbol).upper(), safe='')}/"
+            ),
+        },
+    )
+    payload = json.loads(
+        _read_url_with_retries(request).decode("utf-8", errors="ignore")
+    )
+    rows = parse_screener_valuation_history_payload(payload)
+    if not rows:
+        raise ValueError(f"Screener.in returned no valuation history for {symbol}")
+    return rows
+
+
 def _fetch_valuation_medians(page_html, symbol):
     context = parse_screener_company_chart_context(page_html)
     if not context:

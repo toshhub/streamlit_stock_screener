@@ -21,6 +21,22 @@ class DailyUpdateWorkflowTests(unittest.TestCase):
         self.assertIn("git add -- data", workflow)
         self.assertIn("git push", workflow)
 
+    def test_monthly_workflow_scrapes_and_commits_one_valuation_file(self):
+        workflow = (
+            Path(__file__).parent
+            / ".github"
+            / "workflows"
+            / "monthly-valuations.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('- cron: "15 2 2 * *"', workflow)
+        self.assertIn("python monthly_valuation_update.py", workflow)
+        self.assertIn(
+            "git add -- data/metadata/monthly_valuations.parquet",
+            workflow,
+        )
+        self.assertIn("git push", workflow)
+
     def test_one_market_failure_does_not_stop_the_other_market(self):
         def symbols_for_market(_path, limit, market):
             return ["INDIA1"] if market == MARKET_INDIA else ["US1"]
@@ -46,10 +62,6 @@ class DailyUpdateWorkflowTests(unittest.TestCase):
             patch("daily_update.load_top_symbols", side_effect=symbols_for_market),
             patch("daily_update.download_top_stocks", side_effect=download_for_market) as download,
             patch("daily_update.refresh_latest_stock_values"),
-            patch(
-                "daily_update.collect_monthly_valuations",
-                return_value=([], []),
-            ),
         ):
             result = daily_update.main()
 

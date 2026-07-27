@@ -14,6 +14,7 @@ from fundamentals import (
     parse_screener_company_chart_context,
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
+    parse_screener_valuation_history_payload,
     repair_result_fundamentals,
 )
 from market_snapshots import latest_monthly_pe_values
@@ -145,6 +146,38 @@ class ScreenerFundamentalsTests(unittest.TestCase):
 
     def test_us_market_skips_screener_fundamentals(self):
         self.assertEqual(get_company_fundamentals("AAPL", MARKET_US), ({}, {}))
+
+    def test_screener_valuation_history_is_compacted_to_months(self):
+        rows = parse_screener_valuation_history_payload({
+            "datasets": [
+                {
+                    "metric": "Price to Earning",
+                    "values": [
+                        ["2026-01-02", 12.0],
+                        ["2026-01-30", 13.5],
+                        ["2026-02-06", 14.0],
+                    ],
+                },
+                {"metric": "EPS", "values": [["2026-01-15", 4.2]]},
+                {
+                    "metric": "Market Cap to Sales",
+                    "values": [["2026-01-30", 1.8], ["2026-02-27", 2.0]],
+                },
+                {"metric": "Sales", "values": [["2026-01-15", 640.0]]},
+                {"metric": "Median PE", "values": [["2026-01-01", "11.7"]]},
+                {
+                    "metric": "Median Market Cap to Sales",
+                    "values": [["2026-01-01", "1.5"]],
+                },
+            ]
+        })
+
+        self.assertEqual([row["Month"] for row in rows], ["2026-01-01", "2026-02-01"])
+        self.assertEqual(rows[0]["PE"], 13.5)
+        self.assertEqual(rows[1]["EPS"], 4.2)
+        self.assertEqual(rows[1]["Sales"], 640.0)
+        self.assertEqual(rows[1]["MedianPE"], 11.7)
+        self.assertEqual(rows[1]["MedianMarketCapToSales"], 1.5)
 
     def test_transient_screener_error_is_retried(self):
         throttled = urllib.error.HTTPError(

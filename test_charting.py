@@ -170,6 +170,30 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("valuation-favorable", result)
         self.assertIn("Below historical median", result)
 
+    def test_valuation_drawer_has_screener_style_metric_and_range_controls(self):
+        valuation_rows = [{
+            "time": "2026-01-01",
+            "pe": 18.2,
+            "marketCapToSales": 2.4,
+            "eps": 5.1,
+            "sales": 720.0,
+            "medianPe": 16.0,
+            "medianMarketCapToSales": 2.0,
+        }]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(300)), encoding="utf-8")
+            with patch("charting.valuation_chart_payload", return_value=valuation_rows):
+                result = interactive_stock_chart_html("TEST", path)
+
+        self.assertIn('data-valuation-metric="pe"', result)
+        self.assertIn('data-valuation-metric="sales"', result)
+        self.assertIn('data-valuation-years="10"', result)
+        self.assertIn("TTM EPS", result)
+        self.assertIn("TTM Sales", result)
+        self.assertIn("medianMarketCapToSales", result)
+        self.assertIn("requestAnimationFrame(drawValuationChart)", result)
+
     def test_interactive_trade_overlay_adds_levels_markers_and_window(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "TEST.json"

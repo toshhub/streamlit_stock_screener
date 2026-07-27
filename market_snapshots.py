@@ -7,10 +7,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
-import yfinance as yf
 
 from config import META_DIR
-from downloader import MARKET_INDIA, MARKET_US, normalize_market, yfinance_symbol
+from downloader import MARKET_INDIA, normalize_market
+from fundamentals import fetch_screener_valuation_history
 from stock_data import latest_stock_row, stock_exists
 
 
@@ -58,20 +58,43 @@ def _existing_monthly():
         return pd.DataFrame()
 
 
-def collect_monthly_valuations(symbols_by_market, month=None):
-    """Append one valuation observation per stock for the requested month.
+def _merge_valuation_rows(existing, new_rows):
+    merged = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
+    merged["Month"] = pd.to_datetime(merged["Month"], errors="coerce")
+    merged = merged.dropna(subset=["Month", "Market", "Symbol"])
+    merged = merged.drop_duplicates(["Month", "Market", "Symbol"], keep="last")
+    return merged.sort_values(["Market", "Symbol", "Month"]).reset_index(drop=True)
 
-    Individual quote failures are returned and never abort the remaining
-    symbols, matching the daily candle update's recovery behavior.
+
+def collect_monthly_valuations(symbols_by_market, month=None):
+    """Refresh ten years of native Screener.in valuation history each month.
+
+    The consolidated Parquet contains every Indian stock. Individual failures
+    never abort other symbols, and successful symbols are checkpointed while
+    the all-stock pass is still running.
     """
     month_date = pd.Timestamp(month or datetime.now()).to_period("M").to_timestamp()
     existing = _existing_monthly()
     completed = set()
     if not existing.empty:
+        source = (
+            existing["Source"].astype(str)
+            if "Source" in existing.columns
+            else pd.Series("", index=existing.index)
+        )
+        collected_month = (
+            pd.to_datetime(existing["CollectedAt"], errors="coerce", utc=True)
+            .dt.tz_convert(None)
+            .dt.to_period("M")
+            .dt.to_timestamp()
+            if "CollectedAt" in existing.columns
+            else pd.Series(pd.NaT, index=existing.index)
+        )
         completed = {
             (str(row.Market), str(row.Symbol))
             for row in existing[
-                pd.to_datetime(existing["Month"], errors="coerce") == month_date
+                (collected_month == month_date)
+                & source.eq("Screener.in")
             ].itertuples()
         }
     new_rows = []
@@ -79,6 +102,10 @@ def collect_monthly_valuations(symbols_by_market, month=None):
     pending = []
     for market, symbols in symbols_by_market.items():
         market = normalize_market(market)
+        if market != MARKET_INDIA:
+            # Screener.in has no US-company chart source. Existing US rows are
+            # preserved for backward compatibility but are not fabricated.
+            continue
         for symbol in symbols:
             symbol = str(symbol).strip().upper()
             if (market, symbol) in completed:
@@ -87,43 +114,48 @@ def collect_monthly_valuations(symbols_by_market, month=None):
 
     def fetch_one(market_symbol):
         market, symbol = market_symbol
-        info = yf.Ticker(yfinance_symbol(symbol, market)).get_info()
-        pe = pd.to_numeric(info.get("trailingPE"), errors="coerce")
-        market_cap = pd.to_numeric(info.get("marketCap"), errors="coerce")
-        revenue = pd.to_numeric(info.get("totalRevenue"), errors="coerce")
-        market_cap_to_sales = (
-            float(market_cap / revenue)
-            if pd.notna(market_cap) and pd.notna(revenue) and revenue > 0
-            else None
-        )
-        return {
-            "Month": month_date,
+        collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        rows = fetch_screener_valuation_history(symbol)
+        return [{
+            **row,
+            "Month": pd.Timestamp(row["Month"]),
             "Market": market,
             "Symbol": symbol,
-            "PE": float(pe) if pd.notna(pe) else None,
-            "MarketCapToSales": market_cap_to_sales,
-            "CollectedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
-        }
+            "Source": "Screener.in",
+            "CollectedAt": collected_at,
+        } for row in rows]
 
-    # Fundamentals endpoints are much slower than candle downloads. A bounded
-    # pool keeps the monthly all-stock pass practical without flooding Yahoo.
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    # Match fundamentals.py's bounded request policy and avoid hammering the
+    # public Screener.in endpoint.
+    checkpoint_rows = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
             executor.submit(fetch_one, item): item
             for item in pending
         }
+        processed = 0
         for future in as_completed(futures):
             market, symbol = futures[future]
             try:
-                new_rows.append(future.result())
+                symbol_rows = future.result()
+                new_rows.extend(symbol_rows)
+                checkpoint_rows.extend(symbol_rows)
+                if len(checkpoint_rows) >= 5_000:
+                    existing = _merge_valuation_rows(existing, checkpoint_rows)
+                    _write_atomic(existing, MONTHLY_VALUATIONS_FILE)
+                    checkpoint_rows.clear()
             except Exception as exc:
                 failures.append({"Market": market, "Symbol": symbol, "Error": str(exc)})
-    if new_rows:
-        merged = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
-        merged["Month"] = pd.to_datetime(merged["Month"], errors="coerce")
-        merged = merged.drop_duplicates(["Month", "Market", "Symbol"], keep="last")
-        merged = merged.sort_values(["Market", "Symbol", "Month"]).reset_index(drop=True)
-        _write_atomic(merged, MONTHLY_VALUATIONS_FILE)
+            processed += 1
+            if processed % 100 == 0 or processed == len(futures):
+                print(
+                    f"Valuation sync progress: {processed}/{len(futures)} symbols; "
+                    f"{len(failures)} failures.",
+                    flush=True,
+                )
+    if checkpoint_rows:
+        existing = _merge_valuation_rows(existing, checkpoint_rows)
+        _write_atomic(existing, MONTHLY_VALUATIONS_FILE)
     return new_rows, failures
 
 
@@ -147,6 +179,26 @@ def valuation_chart_payload(symbol, market):
             "marketCapToSales": (
                 None if pd.isna(row.MarketCapToSales)
                 else round(float(row.MarketCapToSales), 4)
+            ),
+            "eps": (
+                None if not hasattr(row, "EPS") or pd.isna(row.EPS)
+                else round(float(row.EPS), 4)
+            ),
+            "sales": (
+                None if not hasattr(row, "Sales") or pd.isna(row.Sales)
+                else round(float(row.Sales), 4)
+            ),
+            "medianPe": (
+                None if not hasattr(row, "MedianPE") or pd.isna(row.MedianPE)
+                else round(float(row.MedianPE), 4)
+            ),
+            "medianMarketCapToSales": (
+                None
+                if (
+                    not hasattr(row, "MedianMarketCapToSales")
+                    or pd.isna(row.MedianMarketCapToSales)
+                )
+                else round(float(row.MedianMarketCapToSales), 4)
             ),
         })
     return payload
