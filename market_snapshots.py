@@ -11,6 +11,7 @@ import pandas as pd
 from config import META_DIR
 from downloader import MARKET_INDIA, normalize_market
 from fundamentals import fetch_screener_valuation_history
+from storage import load_fundamentals, load_pe_ratios
 from stock_data import latest_stock_row, stock_exists
 
 
@@ -204,9 +205,9 @@ def valuation_chart_payload(symbol, market):
     return payload
 
 
-def latest_monthly_pe_values(market):
+def latest_monthly_pe_values(market, existing=None):
     """Return the newest locally stored PE per symbol without network calls."""
-    existing = _existing_monthly()
+    existing = _existing_monthly() if existing is None else existing
     if existing.empty or "PE" not in existing.columns:
         return {}
     rows = existing[
@@ -225,9 +226,9 @@ def latest_monthly_pe_values(market):
     }
 
 
-def historical_pe_medians_by_symbol(market, as_of=None):
+def historical_pe_medians_by_symbol(market, as_of=None, existing=None):
     """Return local 3Y/5Y/10Y PE medians in the table-coloring format."""
-    existing = _existing_monthly()
+    existing = _existing_monthly() if existing is None else existing
     if existing.empty or "PE" not in existing.columns:
         return {}
     rows = existing[
@@ -266,3 +267,42 @@ def historical_pe_medians_by_symbol(market, as_of=None):
         if len(period_values) == len(period_years):
             result[symbol] = {"Median PE": period_values}
     return result
+
+
+def hydrate_result_valuations(rows, market):
+    """Fill result PE and median fields from local data without network calls."""
+    market = normalize_market(market)
+    pe_values = load_pe_ratios()
+    fundamentals = load_fundamentals()
+    monthly_rows = _existing_monthly()
+    for symbol, pe_ratio in latest_monthly_pe_values(
+        market,
+        existing=monthly_rows,
+    ).items():
+        pe_values.setdefault(f"{market}:{symbol}", pe_ratio)
+    monthly_medians = historical_pe_medians_by_symbol(
+        market,
+        existing=monthly_rows,
+    )
+
+    hydrated = []
+    for row in rows:
+        display_row = dict(row)
+        symbol = str(display_row.get("Symbol", "") or "").strip().upper()
+        if display_row.get("PE Ratio") in ("", None):
+            display_row["PE Ratio"] = pe_values.get(
+                f"{market}:{symbol}",
+                pe_values.get(symbol, ""),
+            )
+        if not display_row.get("ValuationMedians"):
+            fundamentals_entry = fundamentals.get(f"{market}:{symbol}", {})
+            display_row["ValuationMedians"] = (
+                monthly_medians.get(symbol)
+                or (
+                    fundamentals_entry.get("valuation_medians", {})
+                    if isinstance(fundamentals_entry, dict)
+                    else {}
+                )
+            )
+        hydrated.append(display_row)
+    return hydrated

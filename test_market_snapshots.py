@@ -94,6 +94,44 @@ class MonthlyValuationTests(unittest.TestCase):
             },
         )
 
+    def test_result_valuation_hydration_uses_local_pe_and_cached_medians(self):
+        cached_medians = {
+            "Median PE": {
+                "3 Years": 30.0,
+                "5 Years": 28.0,
+                "10 Years": 25.0,
+            }
+        }
+        with (
+            patch(
+                "market_snapshots.load_pe_ratios",
+                return_value={"TEST": 21.5},
+            ),
+            patch(
+                "market_snapshots.latest_monthly_pe_values",
+                return_value={},
+            ),
+            patch(
+                "market_snapshots.historical_pe_medians_by_symbol",
+                return_value={},
+            ),
+            patch(
+                "market_snapshots.load_fundamentals",
+                return_value={
+                    "INDIA:TEST": {
+                        "valuation_medians": cached_medians,
+                    }
+                },
+            ),
+        ):
+            hydrated = market_snapshots.hydrate_result_valuations(
+                [{"Symbol": "test", "PE Ratio": ""}],
+                MARKET_INDIA,
+            )
+
+        self.assertEqual(hydrated[0]["PE Ratio"], 21.5)
+        self.assertEqual(hydrated[0]["ValuationMedians"], cached_medians)
+
 
 if __name__ == "__main__":
     unittest.main()

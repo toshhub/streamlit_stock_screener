@@ -51,7 +51,7 @@ from fundamentals import (
     get_company_fundamentals,
 )
 from market_snapshots import (
-    historical_pe_medians_by_symbol,
+    hydrate_result_valuations,
     latest_monthly_pe_values,
 )
 from pattern import evaluate_pattern_filters_from_df, validate_expression
@@ -4510,8 +4510,6 @@ with tab4:
         done = live_screener_job.get("done", 0)
         matches = live_screener_job.get("matches", len(rows))
         max_workers = live_screener_job.get("max_workers", 1)
-        progress = done / total if total else 0
-        st.progress(progress)
         if live_screener_job.get("running"):
             if live_screener_job.get("phase") == "charts":
                 charts_done = live_screener_job.get("charts_done", 0)
@@ -4607,19 +4605,12 @@ with tab4:
             for position, symbol in enumerate(ranked_symbols, start=1)
         }
         display_rows = []
-        local_valuation_medians = historical_pe_medians_by_symbol(result_market)
-        for row in rows:
-            display_row = dict(row)
-            symbol = str(display_row.get("Symbol", ""))
+        for display_row in hydrate_result_valuations(rows, result_market):
+            symbol = str(display_row.get("Symbol", "")).strip().upper()
             display_row["Market Cap Position"] = market_cap_positions.get(
                 symbol,
                 display_row.get("Market Cap Position", ""),
             )
-            if not display_row.get("ValuationMedians"):
-                display_row["ValuationMedians"] = local_valuation_medians.get(
-                    symbol.strip().upper(),
-                    {},
-                )
             display_rows.append(display_row)
         display_rows.sort(
             key=lambda row: (
@@ -4657,6 +4648,19 @@ with tab4:
         table_df = display_df.copy()
         if "ValuationMedians" in df.columns:
             table_df["ValuationMedians"] = df["ValuationMedians"]
+
+        if (
+            live_screener_job
+            and live_screener_job.get("running")
+            and live_screener_job.get("phase") == "screening"
+        ):
+            st.progress(
+                min(1.0, done / total) if total else 0.0,
+                text=(
+                    f"Screening {done:,} of {total:,} stocks · "
+                    f"{matches:,} matches found"
+                ),
+            )
 
         if "ChartPath" in df.columns:
             chart_df = table_df.copy()
