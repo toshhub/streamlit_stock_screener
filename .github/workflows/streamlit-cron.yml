@@ -4,9 +4,9 @@ on:
   schedule:
     # 5:00 PM IST, after the Indian close. The downloader independently
     # excludes any US intraday candle until it is final.
-    - cron: "30 11 * * 1-5"
+    - cron: "30 11 * * *"
     # 5:00 AM IST catches the completed US session and any corrected candles.
-    - cron: "30 23 * * 1-5"
+    - cron: "30 23 * * *"
   workflow_dispatch:
 
 permissions:

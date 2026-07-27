@@ -48,7 +48,7 @@ INDEX_YFINANCE_SYMBOLS = {
 YFINANCE_DOWNLOAD_LOCK = Lock()
 DOWNLOAD_JOBS_LOCK = Lock()
 DOWNLOAD_JOBS = {}
-RECENT_REFRESH_DAYS = 10
+RECENT_RECONCILIATION_SESSIONS = 5
 MAX_HISTORY_YEARS = 10
 
 # GitHub runners and sandboxed deployments may not have a writable user cache.
@@ -149,9 +149,12 @@ def _next_download_start(existing_df, interval):
         return None
 
     if interval == "1d":
-        # Yahoo occasionally corrects recent candles. Re-fetch a small overlap
-        # and replace that range instead of assuming the last row is immutable.
-        return latest.normalize() - pd.Timedelta(days=RECENT_REFRESH_DAYS)
+        # Always reconcile five prior market weekdays. A candle first saved
+        # during trading hours is therefore replaced by Yahoo's settled daily
+        # candle on a later run, as are other recent corrections.
+        return latest.normalize() - pd.offsets.BDay(
+            RECENT_RECONCILIATION_SESSIONS
+        )
     return _date_after_latest(latest, interval)
 
 
@@ -213,6 +216,21 @@ def last_reliable_completed_candle(now=None, market=MARKET_INDIA):
     return candidate.tz_localize(None).normalize()
 
 
+def _confirmed_daily_candles(downloaded_df, reliable_date):
+    """Keep only usable candles no later than the completed-session cutoff."""
+    if downloaded_df.empty or "Date" not in downloaded_df.columns:
+        return pd.DataFrame(columns=downloaded_df.columns)
+    confirmed = downloaded_df.copy()
+    confirmed["Date"] = pd.to_datetime(confirmed["Date"], errors="coerce")
+    confirmed = confirmed.dropna(subset=["Date"])
+    confirmed["Date"] = confirmed["Date"].dt.tz_localize(None).dt.normalize()
+    confirmed = confirmed[confirmed["Date"] <= PandasTimestamp(reliable_date)]
+    if "Close" in confirmed.columns:
+        confirmed["Close"] = pd.to_numeric(confirmed["Close"], errors="coerce")
+        confirmed = confirmed.dropna(subset=["Close"])
+    return confirmed.sort_values("Date").drop_duplicates("Date", keep="last")
+
+
 def download_symbol(
     symbol,
     interval,
@@ -248,7 +266,13 @@ def download_symbol(
             }
             if download_start is not None:
                 download_kwargs["start"] = download_start.strftime("%Y-%m-%d")
-                download_kwargs["end"] = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+                # Yahoo's end date is exclusive. Do not even request an
+                # in-progress session; this prevents an intraday daily bar
+                # from entering the reconciliation data.
+                request_through = min(today, reliable_date)
+                download_kwargs["end"] = (
+                    request_through + timedelta(days=1)
+                ).strftime("%Y-%m-%d")
             else:
                 download_kwargs["period"] = period
 
@@ -266,8 +290,10 @@ def download_symbol(
                 return {"Downloaded": False, "Rows Added": 0, "Status": "Failed"}
 
             downloaded_df = _prepare_downloaded_dataframe(data)
-            downloaded_df["Date"] = pd.to_datetime(downloaded_df["Date"], errors="coerce")
-            downloaded_df = downloaded_df[downloaded_df["Date"] <= reliable_date]
+            downloaded_df = _confirmed_daily_candles(
+                downloaded_df,
+                reliable_date,
+            )
             # Downloaded duplicates win, while valid stored candles omitted
             # from a partial Yahoo response remain intact.
             merged_df = _merge_price_data(existing_df, downloaded_df)
@@ -278,10 +304,22 @@ def download_symbol(
             rows_added = max(0, rows_after - rows_before)
             changed_files = _write_records_atomic(out_file, merged_df)
             status = "Full download" if existing_df.empty else ("Updated" if changed_files else "Already current")
+            latest_confirmed = (
+                pd.to_datetime(downloaded_df["Date"], errors="coerce").max()
+                if not downloaded_df.empty else None
+            )
             return {
                 "Downloaded": True,
                 "Rows Added": rows_added,
                 "Files Updated": len(changed_files),
+                "Reconciled From": (
+                    download_start.strftime("%Y-%m-%d")
+                    if download_start is not None else ""
+                ),
+                "Latest Confirmed Candle": (
+                    PandasTimestamp(latest_confirmed).strftime("%Y-%m-%d")
+                    if pd.notna(latest_confirmed) else ""
+                ),
                 "Status": status,
             }
         except Exception as exc:

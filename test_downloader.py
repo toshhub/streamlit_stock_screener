@@ -11,8 +11,11 @@ from downloader import (
     DOWNLOAD_JOBS,
     DOWNLOAD_JOBS_LOCK,
     MARKET_INDIA,
+    MARKET_US,
+    _confirmed_daily_candles,
     _download_symbol_row,
     _date_after_latest,
+    last_reliable_completed_candle,
     data_availability_summary,
     background_download_snapshot,
     download_symbol,
@@ -141,8 +144,8 @@ class IncrementalDownloaderTests(unittest.TestCase):
                 download_symbol("FIRST", "1d", "5y", first_file, incremental=True)
                 download_symbol("SECOND", "1d", "5y", second_file, incremental=True)
 
-            self.assertEqual(yf_download.call_args_list[0].kwargs["start"], "2026-07-06")
-            self.assertEqual(yf_download.call_args_list[1].kwargs["start"], "2026-07-07")
+            self.assertEqual(yf_download.call_args_list[0].kwargs["start"], "2026-07-09")
+            self.assertEqual(yf_download.call_args_list[1].kwargs["start"], "2026-07-10")
 
     def test_download_starts_after_latest_saved_date_and_appends_new_candle(self):
         existing_records = [
@@ -186,7 +189,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
                 )
 
             kwargs = yf_download.call_args.kwargs
-            self.assertEqual(kwargs["start"], "2026-07-06")
+            self.assertEqual(kwargs["start"], "2026-07-09")
             self.assertEqual(kwargs["end"], "2026-07-20")
             self.assertNotIn("period", kwargs)
             self.assertEqual(result["Rows Added"], 1)
@@ -226,6 +229,97 @@ class IncrementalDownloaderTests(unittest.TestCase):
             self.assertEqual(result["Status"], "Already current")
             self.assertFalse(out_file.exists())
             self.assertTrue((out_file.with_suffix("") / "2026.parquet").exists())
+
+    def test_market_hours_candle_is_not_considered_completed(self):
+        self.assertEqual(
+            last_reliable_completed_candle(
+                now="2026-07-27 15:45:00+05:30",
+                market=MARKET_INDIA,
+            ),
+            pd.Timestamp("2026-07-24"),
+        )
+        self.assertEqual(
+            last_reliable_completed_candle(
+                now="2026-07-27 16:05:00+05:30",
+                market=MARKET_INDIA,
+            ),
+            pd.Timestamp("2026-07-27"),
+        )
+        self.assertEqual(
+            last_reliable_completed_candle(
+                now="2026-07-27 15:59:00-04:00",
+                market=MARKET_US,
+            ),
+            pd.Timestamp("2026-07-24"),
+        )
+        self.assertEqual(
+            last_reliable_completed_candle(
+                now="2026-07-27 16:31:00-04:00",
+                market=MARKET_US,
+            ),
+            pd.Timestamp("2026-07-27"),
+        )
+
+    def test_confirmed_candles_exclude_intraday_and_invalid_rows(self):
+        downloaded = pd.DataFrame([
+            {"Date": "2026-07-24", "Close": 100.0},
+            {"Date": "2026-07-27", "Close": 105.0},
+            {"Date": "2026-07-28", "Close": 999.0},
+            {"Date": "2026-07-25", "Close": None},
+        ])
+
+        confirmed = _confirmed_daily_candles(
+            downloaded,
+            pd.Timestamp("2026-07-27"),
+        )
+
+        self.assertEqual(
+            confirmed["Date"].dt.strftime("%Y-%m-%d").tolist(),
+            ["2026-07-24", "2026-07-27"],
+        )
+
+    def test_reconciliation_replaces_a_previously_intraday_close(self):
+        existing_records = [{
+            "Date": "2026-07-27",
+            "Open": 100.0,
+            "High": 104.0,
+            "Low": 99.0,
+            "Close": 101.0,
+            "Volume": 500,
+        }]
+        settled = pd.DataFrame(
+            {
+                "Open": [100.0],
+                "High": [108.0],
+                "Low": [99.0],
+                "Close": [107.0],
+                "Volume": [1500],
+            },
+            index=pd.DatetimeIndex(["2026-07-27"], name="Date"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_file = Path(temp_dir) / "TEST.json"
+            out_file.write_text(json.dumps(existing_records))
+            with (
+                patch(
+                    "downloader.last_reliable_completed_candle",
+                    return_value=pd.Timestamp("2026-07-27"),
+                ),
+                patch("downloader.yf.download", return_value=settled),
+            ):
+                result = download_symbol(
+                    "TEST",
+                    "1d",
+                    "10y",
+                    out_file,
+                    incremental=True,
+                    market=MARKET_INDIA,
+                )
+            stored = load_stock_dataframe(out_file.with_suffix(""))
+
+        self.assertEqual(float(stored.iloc[-1]["Close"]), 107.0)
+        self.assertEqual(float(stored.iloc[-1]["Volume"]), 1500.0)
+        self.assertEqual(result["Latest Confirmed Candle"], "2026-07-27")
 
 
 if __name__ == "__main__":
