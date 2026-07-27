@@ -23,6 +23,10 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
             self.assertNotIn(retired_label, self.app_source)
 
     def test_custom_save_and_personal_strategy_remove_are_inline(self):
+        self.assertIn(
+            'with st.popover(\n                    "Save Filters"',
+            self.app_source,
+        )
         self.assertIn('key="save_custom_strategy_popover"', self.app_source)
         self.assertIn('key="save_custom_strategy"', self.app_source)
         self.assertIn(

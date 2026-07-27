@@ -3869,7 +3869,7 @@ with tab2:
         with save_strategy_col:
             if not active_favorite_name:
                 with st.popover(
-                    "＋",
+                    "Save Filters",
                     key="save_custom_strategy_popover",
                     use_container_width=True,
                     disabled=not active_filter_count,
