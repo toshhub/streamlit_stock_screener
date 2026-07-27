@@ -16,6 +16,15 @@ import pyarrow.parquet as pq
 
 
 PRICE_COLUMNS = ("Date", "Open", "High", "Low", "Close", "Adj Close", "Volume")
+SCREENING_HISTORY_YEARS = 5
+
+
+def rolling_history_start(years=SCREENING_HISTORY_YEARS, as_of=None):
+    """Return the inclusive calendar cutoff for a rolling history window."""
+    reference = PandasTimestamp(as_of) if as_of is not None else PandasTimestamp.now()
+    if reference.tzinfo is not None:
+        reference = reference.tz_localize(None)
+    return reference.normalize() - pd.DateOffset(years=max(1, int(years)))
 
 
 def symbol_path(directory, symbol):
@@ -146,6 +155,33 @@ def latest_stock_date(path):
     if df.empty:
         return None
     return PandasTimestamp(df["Date"].max()).normalize()
+
+
+def earliest_stock_date(path):
+    """Return the oldest candle date while avoiding full-history reads."""
+    path = Path(path)
+    if path.is_dir():
+        for parquet_file in sorted(path.glob("*.parquet")):
+            try:
+                parquet = pq.ParquetFile(parquet_file)
+                date_index = parquet.schema.names.index("Date")
+                minima = []
+                for group_index in range(parquet.metadata.num_row_groups):
+                    stats = parquet.metadata.row_group(group_index).column(date_index).statistics
+                    if stats is not None and stats.has_min_max:
+                        minima.append(stats.min)
+                earliest = min(minima) if minima else None
+                if earliest is None:
+                    dates = pd.read_parquet(parquet_file, columns=["Date"])["Date"]
+                    earliest = pd.to_datetime(dates, errors="coerce").min()
+            except (OSError, ValueError, KeyError, IndexError):
+                continue
+            if pd.notna(earliest):
+                return PandasTimestamp(earliest).normalize()
+    df = load_stock_dataframe(path)
+    if df.empty:
+        return None
+    return PandasTimestamp(df["Date"].min()).normalize()
 
 
 def latest_stock_row(path):

@@ -7,7 +7,12 @@ from copy import deepcopy
 from functools import lru_cache
 
 import pandas as pd
-from stock_data import load_stock_dataframe, symbol_from_path
+from stock_data import (
+    SCREENING_HISTORY_YEARS,
+    load_stock_dataframe,
+    rolling_history_start,
+    symbol_from_path,
+)
 import yfinance as yf
 
 from downloader import MARKET_INDIA, normalize_market, yfinance_symbol
@@ -428,8 +433,10 @@ def legacy_kwargs_to_filter_set(legacy_kwargs):
     }
 
 
-def load_price_dataframe(path):
-    df = load_stock_dataframe(path)
+def load_price_dataframe(path, years=SCREENING_HISTORY_YEARS, as_of=None):
+    """Load only the rolling window permitted for screening calculations."""
+    start = rolling_history_start(years=years, as_of=as_of)
+    df = load_stock_dataframe(path, start=start)
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.sort_values("Date")

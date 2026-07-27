@@ -8,7 +8,13 @@ from datetime import datetime
 from pathlib import Path
 
 from config import DAILY_DIR, META_DIR, US_DAILY_DIR
-from stock_data import load_stock_dataframe, stock_exists, symbol_path
+from stock_data import (
+    SCREENING_HISTORY_YEARS,
+    load_stock_dataframe,
+    rolling_history_start,
+    stock_exists,
+    symbol_path,
+)
 
 
 PRICE_ALERTS_FILE = META_DIR / "price_alerts.json"
@@ -128,7 +134,10 @@ def _load_candles(stock_file):
     path = Path(stock_file)
     if not stock_exists(path):
         return []
-    df = load_stock_dataframe(path)
+    df = load_stock_dataframe(
+        path,
+        start=rolling_history_start(SCREENING_HISTORY_YEARS),
+    )
     if df.empty:
         return []
     rows = df.assign(Date=df["Date"].dt.strftime("%Y-%m-%d")).to_dict(orient="records")

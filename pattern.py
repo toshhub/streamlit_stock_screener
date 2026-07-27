@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from numbers import Real
 
 import pandas as pd
-from stock_data import load_stock_dataframe
+from stock_data import SCREENING_HISTORY_YEARS, load_stock_dataframe, rolling_history_start
 
 
 SAFE_FUNCTIONS = {
@@ -217,7 +217,10 @@ def validate_expression(expression, available_names=None):
 
 
 def load_price_data(path):
-    df = load_stock_dataframe(path)
+    df = load_stock_dataframe(
+        path,
+        start=rolling_history_start(SCREENING_HISTORY_YEARS),
+    )
     return prepare_price_dataframe(df)
 
 

@@ -9,7 +9,13 @@ from urllib.parse import quote, urlencode
 
 from matplotlib.figure import Figure
 import pandas as pd
-from stock_data import load_stock_dataframe
+from stock_data import (
+    SCREENING_HISTORY_YEARS,
+    earliest_stock_date,
+    latest_stock_date,
+    load_stock_dataframe,
+    rolling_history_start,
+)
 from market_snapshots import valuation_chart_payload
 import streamlit as st
 import streamlit.components.v1 as components
@@ -38,7 +44,10 @@ _CURSOR_ALERT_COMPONENT = components.declare_component(
 
 
 def load_price_data(path):
-    df = load_stock_dataframe(path)
+    df = load_stock_dataframe(
+        path,
+        start=rolling_history_start(SCREENING_HISTORY_YEARS),
+    )
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.sort_values("Date")
@@ -396,9 +405,26 @@ def normalize_interactive_ma_periods(periods):
     return sorted(normalized) or list(INTERACTIVE_CHART_DEFAULT_MAS)
 
 
-def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
+def interactive_chart_payload(
+    json_path,
+    ma_periods=None,
+    max_points=None,
+    history_years=None,
+):
     json_path = Path(json_path)
-    df = load_stock_dataframe(json_path)
+    ma_periods = normalize_interactive_ma_periods(ma_periods)
+    latest_available = latest_stock_date(json_path)
+    display_start = (
+        rolling_history_start(history_years, as_of=latest_available)
+        if history_years is not None
+        else None
+    )
+    # Read a small warm-up period so moving averages are already valid at the
+    # left edge, but send only the requested display window to the browser.
+    read_start = display_start
+    if display_start is not None and ma_periods:
+        read_start = display_start - pd.Timedelta(days=max(ma_periods) * 2)
+    df = load_stock_dataframe(json_path, start=read_start)
     required_columns = ["Date", "Open", "High", "Low", "Close"]
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
@@ -412,14 +438,19 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
     if df.empty:
         raise ValueError("No valid candle data is available for this stock.")
 
-    ma_periods = normalize_interactive_ma_periods(ma_periods)
     for period in ma_periods:
         df[f"SMA{period}"] = df["Close"].rolling(period).mean()
 
-    if max_points is None:
-        chart_df = df.copy()
+    if display_start is not None:
+        chart_df = df[df["Date"] >= display_start].copy()
     else:
+        chart_df = df.copy()
+    if max_points is not None:
         chart_df = df.tail(max(100, int(max_points))).copy()
+        if display_start is not None:
+            chart_df = chart_df[chart_df["Date"] >= display_start].copy()
+    if chart_df.empty:
+        raise ValueError("No candles are available in the requested chart window.")
     candles = [
         {
             "time": row.Date.strftime("%Y-%m-%d"),
@@ -456,6 +487,11 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
             for row in chart_df.itertuples()
         ]
 
+    oldest_available = earliest_stock_date(json_path)
+    has_earlier_history = bool(
+        oldest_available is not None
+        and pd.Timestamp(oldest_available) < pd.Timestamp(chart_df["Date"].iloc[0])
+    )
     return {
         "candles": candles,
         "movingAverages": moving_averages,
@@ -464,6 +500,13 @@ def interactive_chart_payload(json_path, ma_periods=None, max_points=None):
         "pointCount": len(candles),
         "firstDate": candles[0]["time"],
         "lastDate": candles[-1]["time"],
+        "historyYears": history_years,
+        "hasEarlierHistory": has_earlier_history,
+        "oldestAvailableDate": (
+            oldest_available.strftime("%Y-%m-%d")
+            if oldest_available is not None
+            else candles[0]["time"]
+        ),
     }
 
 
@@ -519,10 +562,24 @@ def interactive_stock_chart_html(
     valuation_medians=None,
     trade_overlay=None,
     alert_market="INDIA",
+    history_years=SCREENING_HISTORY_YEARS,
+    restore_visible_range=None,
 ):
-    payload = interactive_chart_payload(json_path, ma_periods=ma_periods)
+    payload = interactive_chart_payload(
+        json_path,
+        ma_periods=ma_periods,
+        history_years=history_years,
+    )
     monthly_valuations = valuation_chart_payload(symbol, alert_market)
     payload["monthlyValuations"] = monthly_valuations
+    if isinstance(restore_visible_range, dict):
+        visible_from = str(restore_visible_range.get("from") or "")
+        visible_to = str(restore_visible_range.get("to") or "")
+        if visible_from and visible_to:
+            payload["restoreVisibleRange"] = {
+                "from": visible_from,
+                "to": visible_to,
+            }
     normalized_overlay = {}
     if isinstance(trade_overlay, dict):
         for key in ("buyDate", "exitDate", "windowStart", "windowEnd"):
@@ -1370,7 +1427,7 @@ def interactive_stock_chart_html(
               {valuation_state_html}
               {screener_chart_link_html}
             </div>
-            <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles</span>
+            <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles loaded on demand</span>
           </div>
           {match_navigation_html}
           <div class="chart-toolbar" aria-label="Chart controls">
@@ -1531,6 +1588,22 @@ def interactive_stock_chart_html(
               action: "range-change",
               range: String(range)
             }});
+          }}
+          let historyRequestPending = false;
+          function requestOlderHistory(loadAll) {{
+            if (historyRequestPending || !payload.hasEarlierHistory) return false;
+            historyRequestPending = true;
+            const currentYears = Number(payload.historyYears) || {SCREENING_HISTORY_YEARS};
+            const visibleRange = chart.timeScale().getVisibleRange();
+            postChartMessage({{
+              source: "nse-interactive-chart",
+              action: "load-history",
+              targetYears: loadAll ? 10 : Math.min(10, currentYears + 2),
+              showAll: Boolean(loadAll),
+              visibleFrom: visibleRange ? formatTimeKey(visibleRange.from) : "",
+              visibleTo: visibleRange ? formatTimeKey(visibleRange.to) : ""
+            }});
+            return true;
           }}
           const matchedPrevious = document.getElementById("matched-prev");
           const matchedNext = document.getElementById("matched-next");
@@ -1807,6 +1880,7 @@ def interactive_stock_chart_html(
               button.classList.toggle("active", String(button.dataset.range) === String(count));
             }});
             if (count === "all") {{
+              if (requestOlderHistory(true)) return;
               chart.timeScale().fitContent();
               return;
             }}
@@ -1824,6 +1898,11 @@ def interactive_stock_chart_html(
             }});
           }});
 
+          chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {{
+            if (!range || Number(range.from) > 12 || !payload.hasEarlierHistory) return;
+            requestOlderHistory(false);
+          }});
+
           const resizeObserver = new ResizeObserver(function(entries) {{
             const rect = entries[0].contentRect;
             const chartWidth = Math.max(240, Math.floor(rect.width));
@@ -1839,7 +1918,9 @@ def interactive_stock_chart_html(
           loading.remove();
           const tradeWindowStart = candleIndexByTime.get(String(tradeOverlay.windowStart || ""));
           const tradeWindowEnd = candleIndexByTime.get(String(tradeOverlay.windowEnd || ""));
-          if (Number.isInteger(tradeWindowStart) && Number.isInteger(tradeWindowEnd)) {{
+          if (payload.restoreVisibleRange && payload.restoreVisibleRange.from && payload.restoreVisibleRange.to) {{
+            chart.timeScale().setVisibleRange(payload.restoreVisibleRange);
+          }} else if (Number.isInteger(tradeWindowStart) && Number.isInteger(tradeWindowEnd)) {{
             chart.timeScale().setVisibleLogicalRange({{
               from: Math.max(0, tradeWindowStart),
               to: Math.min(payload.candles.length - 1, tradeWindowEnd) + 1,
@@ -1870,6 +1951,17 @@ def render_interactive_stock_chart(
     alert_market="INDIA",
     height=760,
 ):
+    history_key = f"_interactive_history_years_{str(alert_market).upper()}_{symbol}"
+    visible_range_key = f"{history_key}_visible_range"
+    range_override_key = f"{history_key}_range_override"
+    history_years = int(
+        st.session_state.get(history_key, SCREENING_HISTORY_YEARS)
+    )
+    restore_visible_range = st.session_state.pop(visible_range_key, None)
+    effective_initial_range = st.session_state.pop(
+        range_override_key,
+        initial_range,
+    )
     chart_html = interactive_stock_chart_html(
         symbol,
         json_path,
@@ -1879,11 +1971,13 @@ def render_interactive_stock_chart(
         match_total=match_total,
         has_previous=has_previous,
         has_next=has_next,
-        initial_range=initial_range,
+        initial_range=effective_initial_range,
         growth_metrics=growth_metrics,
         valuation_medians=valuation_medians,
         trade_overlay=trade_overlay,
         alert_market=alert_market,
+        history_years=history_years,
+        restore_visible_range=restore_visible_range,
     )
     alert_event = _CURSOR_ALERT_COMPONENT(
         chartHtml=chart_html,
@@ -1891,7 +1985,31 @@ def render_interactive_stock_chart(
         default=None,
         key=f"cursor_alert_chart_{str(alert_market).upper()}_{symbol}",
     )
-    if not isinstance(alert_event, dict) or alert_event.get("action") != "create-price-alert":
+    if not isinstance(alert_event, dict):
+        return
+    if alert_event.get("action") == "load-history":
+        try:
+            target_years = max(
+                history_years,
+                min(10, int(alert_event.get("targetYears", history_years + 2))),
+            )
+        except (TypeError, ValueError):
+            target_years = min(10, history_years + 2)
+        if target_years > history_years:
+            st.session_state[history_key] = target_years
+            if alert_event.get("showAll"):
+                st.session_state[range_override_key] = "all"
+            else:
+                visible_from = str(alert_event.get("visibleFrom") or "")
+                visible_to = str(alert_event.get("visibleTo") or "")
+                if visible_from and visible_to:
+                    st.session_state[visible_range_key] = {
+                        "from": visible_from,
+                        "to": visible_to,
+                    }
+            st.rerun()
+        return
+    if alert_event.get("action") != "create-price-alert":
         return
 
     event_id = str(alert_event.get("eventId") or "")
