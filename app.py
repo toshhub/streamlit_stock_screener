@@ -1439,13 +1439,6 @@ def filter_set_matches_favorite(filter_set, filter_name):
 def mark_current_filter_custom():
     active_name = st.session_state.get("_active_favorite_filter_name")
     if active_name:
-        # Preserve the source name so Save Favorite can update the original
-        # favorite without requiring the user to type its name again.
-        st.session_state["_favorite_source_name"] = active_name
-        st.session_state["_favorite_name_to_save"] = personal_favorite_keys.get(
-            active_name,
-            active_name,
-        )
         if app_user is None:
             st.session_state["_favorite_edit_login_required"] = True
     st.session_state["_active_favorite_filter_name"] = None
@@ -1485,11 +1478,6 @@ def apply_filter_selection_to_state(filter_name):
     st.session_state["pattern_reversal_pct_slider"] = reversal_pct
     st.session_state["pattern_reversal_pct_number"] = reversal_pct
     st.session_state["_active_favorite_filter_name"] = filter_name
-    st.session_state["_favorite_source_name"] = filter_name
-    st.session_state["_favorite_name_to_save"] = personal_favorite_keys.get(
-        filter_name,
-        filter_name,
-    )
 
     update_settings({
         "selected_favorite_filter_set": filter_name,
@@ -3358,7 +3346,6 @@ with tab2:
             and filter_set_matches_favorite(st.session_state["current_filter_set"], saved_active_name)
         ):
             st.session_state["_active_favorite_filter_name"] = saved_active_name
-            st.session_state["_favorite_source_name"] = saved_active_name
         else:
             st.session_state["_active_favorite_filter_name"] = None
 
@@ -3418,6 +3405,8 @@ with tab2:
     })
 
     # ---- Favorite Filter Set ----
+    remove_saved_strategy = False
+    selected_fav = None
     with quick_run_panel:
         st.markdown(
             '<div class="quick-run-section-label">Saved strategies'
@@ -3441,21 +3430,60 @@ with tab2:
                 selected = st.session_state["_favorite_select_widget"]
                 apply_filter_selection_to_state(selected)
 
-            selected_fav = st.selectbox(
-                "⭐ Filter Set To Run",
-                favorite_options,
-                key="_favorite_select_widget",
-                on_change=on_favorite_filter_selected,
-                format_func=favorite_option_label,
-                help="Select a saved favorite filter set to load all of its filters.",
-            )
-            # Ensure the save-name field is pre-filled with the currently-selected favourite
-            if "_favorite_name_to_save" not in st.session_state:
-                st.session_state["_favorite_name_to_save"] = selected_fav or ""
-            elif st.session_state.get("_favorite_name_to_save") == "" and selected_fav:
-                st.session_state["_favorite_name_to_save"] = selected_fav
+            strategy_col, remove_strategy_col = st.columns([8, 1])
+            with strategy_col:
+                selected_fav = st.selectbox(
+                    "⭐ Filter Set To Run",
+                    favorite_options,
+                    key="_favorite_select_widget",
+                    on_change=on_favorite_filter_selected,
+                    format_func=favorite_option_label,
+                    help="Select a saved favorite filter set to load all of its filters.",
+                )
+            with remove_strategy_col:
+                st.markdown(
+                    '<div style="height:1.72rem"></div>',
+                    unsafe_allow_html=True,
+                )
+                is_personal_strategy = selected_fav in personal_favorite_keys
+                remove_saved_strategy = st.button(
+                    "−",
+                    key="remove_selected_saved_strategy",
+                    use_container_width=True,
+                    disabled=not is_personal_strategy,
+                    help=(
+                        "Remove this personal saved strategy."
+                        if is_personal_strategy
+                        else "Shared strategies cannot be removed."
+                    ),
+                )
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
+
+    if remove_saved_strategy:
+        stored_name = personal_favorite_keys.get(selected_fav)
+        if app_user is None:
+            render_login_prompt(
+                "Sign in with Google before removing a personal saved strategy.",
+                key="saved_strategy_remove_login",
+                error=True,
+            )
+        elif cloud_store is None:
+            st.error("Cloud storage is not configured, so this strategy cannot be removed.")
+        elif not stored_name:
+            st.error("Only personal saved strategies can be removed.")
+        else:
+            try:
+                cloud_store.delete_filter_set(app_user.id, stored_name)
+            except CloudStorageError as exc:
+                st.error(str(exc))
+            else:
+                if st.session_state.get("_active_favorite_filter_name") == selected_fav:
+                    st.session_state["_active_favorite_filter_name"] = None
+                    update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
+                st.session_state.pop("_favorite_select_widget", None)
+                st.toast(f"Removed saved strategy: {stored_name}", icon="🗑️")
+                st.rerun()
 
     with quick_run_panel:
         quick_run_action = st.container(key="quick_run_action")
@@ -3482,20 +3510,11 @@ with tab2:
             [key for key in FILTER_TYPE_LABELS if key != "green_candle_today"],
             format_func=lambda value: FILTER_TYPE_LABELS[value],
         )
-        add_filter_col, remove_last_filter_col = st.columns(2)
-        with add_filter_col:
-            add_filter = st.button(
-                "➕ Add",
-                use_container_width=True,
-                help="Add the selected rule to the current filter set.",
-            )
-        with remove_last_filter_col:
-            remove_last_filter = st.button(
-                "− Remove Last",
-                use_container_width=True,
-                disabled=not current_filter_set,
-                help="Remove the most recently added rule from the current filter set.",
-            )
+        add_filter = st.button(
+            "➕ Add",
+            use_container_width=True,
+            help="Add the selected rule to the current filter set.",
+        )
 
     if add_filter:
         mark_current_filter_custom()
@@ -3505,11 +3524,6 @@ with tab2:
             "params": deepcopy(FILTER_TYPE_DEFAULTS[filter_type_to_add]),
         })
         st.session_state["next_filter_id"] += 1
-        st.rerun()
-
-    if remove_last_filter:
-        mark_current_filter_custom()
-        st.session_state["current_filter_set"] = current_filter_set[:-1]
         st.rerun()
 
     # Use a widget-key version so that when a favourite is loaded new widget
@@ -3843,15 +3857,44 @@ with tab2:
         "is-favorite" if active_favorite_name else "is-custom"
     )
     current_filter_status_icon = "⭐" if active_favorite_name else "✦"
-    current_filter_heading.markdown(
-        f'<div class="screener-section-heading">'
-        f'<div class="screener-section-heading__title">Current Filter Set '
-        f'<span class="screener-section-heading__status {current_filter_status_class}">'
-        f'{current_filter_status_icon} {html.escape(current_filter_label)}</span></div>'
-        f'<div class="screener-section-heading__count">{active_filter_count} active</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    save_custom_favorite = False
+    inline_favorite_name = ""
+    with current_filter_heading.container():
+        heading_col, save_strategy_col = st.columns(
+            [12, 1],
+            vertical_alignment="center",
+        )
+        with heading_col:
+            st.markdown(
+                f'<div class="screener-section-heading">'
+                f'<div class="screener-section-heading__title">Current Filter Set '
+                f'<span class="screener-section-heading__status {current_filter_status_class}">'
+                f'{current_filter_status_icon} {html.escape(current_filter_label)}</span></div>'
+                f'<div class="screener-section-heading__count">{active_filter_count} active</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with save_strategy_col:
+            if not active_favorite_name:
+                with st.popover(
+                    "＋",
+                    key="save_custom_strategy_popover",
+                    use_container_width=True,
+                    disabled=not active_filter_count,
+                    help="Save this custom filter set as a personal favorite.",
+                ):
+                    st.markdown("**Save custom strategy**")
+                    inline_favorite_name = st.text_input(
+                        "Strategy name",
+                        key="_inline_favorite_name",
+                        placeholder="e.g. Golden Cross + PE",
+                    )
+                    save_custom_favorite = st.button(
+                        "Save",
+                        key="save_custom_strategy",
+                        type="primary",
+                        use_container_width=True,
+                    )
 
     update_settings({
         "screener_filter_set": filter_set,
@@ -3860,7 +3903,6 @@ with tab2:
         "pattern_expressions": custom_filter_expressions(filter_set),
     })
 
-    # ===== Favorite Filter Management =====
     if st.session_state.pop("_favorite_edit_login_required", False):
         render_login_prompt(
             "Your filter changes are temporary in guest mode. Sign in with Google to save them as a personal favorite.",
@@ -3868,79 +3910,21 @@ with tab2:
             error=True,
         )
 
-    st.markdown(
-        '<div class="screener-section-heading">'
-        '<div class="screener-section-heading__title">⭐ Favorite Sets</div>'
-        '</div>'
-        '<p class="screener-section-copy">Save the current setup for reuse or remove a set you no longer need.</p>',
-        unsafe_allow_html=True,
-    )
-    save_col, remove_col = st.columns(2)
-    personal_saves_enabled = app_user is not None and cloud_store is not None
-    if not personal_saves_enabled:
+    if save_custom_favorite:
         if app_user is None:
             render_login_prompt(
-                "Guest mode: sign in with Google to save or remove personal favorite sets.",
-                key="favorite_guest_login",
-            )
-        else:
-            st.warning("Cloud storage is not configured, so personal favorite sets are unavailable.")
-    with save_col:
-        with st.container(border=True):
-            st.markdown(
-                '<div class="data-panel-heading tone-green"><span>💾</span>Save Current Set</div>'
-                '<p class="data-panel-subtitle">Store all current filters under a memorable name.</p>',
-                unsafe_allow_html=True,
-            )
-            favorite_name = st.text_input(
-                "Favorite Filter Name",
-                key="_favorite_name_to_save",
-                placeholder="e.g. Golden Cross + PE < 30",
-            )
-            save_fav = st.button(
-                "⭐ Save Favorite",
-                type="primary",
-                use_container_width=True,
-                help="Use an existing name to update that favorite, or enter a new name to create one.",
-            )
-
-    delete_fav = False
-    del_favorite_name = None
-    with remove_col:
-        with st.container(border=True):
-            st.markdown(
-                '<div class="data-panel-heading tone-rose"><span>🗑️</span>Remove Saved Set</div>'
-                '<p class="data-panel-subtitle">Delete a saved set without changing the filters currently on screen.</p>',
-                unsafe_allow_html=True,
-            )
-            if personal_favorite_keys:
-                del_favorite_name = st.selectbox(
-                    "My Favorite Filter Set",
-                    sorted(personal_favorite_keys.keys()),
-                    key="delete_favorite_select",
-                    format_func=lambda key: personal_favorite_keys[key],
-                )
-                delete_fav = st.button(
-                    "Remove Favorite",
-                    type="primary",
-                    use_container_width=True,
-                )
-            else:
-                st.info("No personal favorite sets yet.")
-
-    if save_fav:
-        if app_user is None:
-            render_login_prompt(
-                "Sign in with Google before saving or updating a personal favorite filter.",
-                key="favorite_save_login",
+                "Sign in with Google before saving this custom strategy.",
+                key="inline_favorite_save_login",
                 error=True,
             )
         elif cloud_store is None:
-            st.error("Cloud storage is not configured, so this favorite cannot be saved.")
-        elif not favorite_name.strip():
-            st.error("Enter a favorite filter name before saving.")
+            st.error("Cloud storage is not configured, so this strategy cannot be saved.")
+        elif not inline_favorite_name.strip():
+            st.error("Enter a strategy name before saving.")
+        elif inline_favorite_name.strip() in personal_filter_sets:
+            st.error("A personal strategy with that name already exists. Choose a new name.")
         else:
-            clean_name = favorite_name.strip()
+            clean_name = inline_favorite_name.strip()
             favorite_data = {
                 "ma_filter_set": filter_set,
                 "pattern": {
@@ -3956,35 +3940,10 @@ with tab2:
             else:
                 display_name = personal_favorite_display_name(clean_name)
                 st.session_state["_active_favorite_filter_name"] = display_name
-                st.session_state["_favorite_source_name"] = display_name
                 update_settings({"selected_favorite_filter_set": display_name})
                 st.session_state.pop("_favorite_select_widget", None)
-                st.success(f"⭐ Saved personal favorite: {clean_name}")
-                st.rerun()
-
-    if delete_fav:
-        if app_user is None:
-            render_login_prompt(
-                "Sign in with Google before removing a personal favorite filter.",
-                key="favorite_remove_login",
-                error=True,
-            )
-        elif cloud_store is None:
-            st.error("Cloud storage is not configured, so this favorite cannot be removed.")
-        elif del_favorite_name not in personal_favorite_keys:
-            st.error("Select a personal favorite filter to remove.")
-        else:
-            stored_name = personal_favorite_keys[del_favorite_name]
-            try:
-                cloud_store.delete_filter_set(app_user.id, stored_name)
-            except CloudStorageError as exc:
-                st.error(str(exc))
-            else:
-                if settings.get("selected_favorite_filter_set") == del_favorite_name:
-                    st.session_state["_active_favorite_filter_name"] = None
-                    update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
-                st.session_state.pop("_favorite_select_widget", None)
-                st.success(f"🗑️ Removed personal favorite: {stored_name}")
+                st.session_state.pop("_inline_favorite_name", None)
+                st.toast(f"Saved personal strategy: {clean_name}", icon="⭐")
                 st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
