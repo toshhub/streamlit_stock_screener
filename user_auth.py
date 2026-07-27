@@ -45,24 +45,6 @@ def current_user(st):
     )
 
 
-def render_account_controls(st, user, cloud_enabled):
-    """Render compact sidebar account context without duplicating header actions."""
-    with st.sidebar:
-        st.markdown("### Account")
-        if user:
-            st.write(f"Signed in as **{user.name}**")
-            if user.email:
-                st.caption(user.email)
-            if not cloud_enabled:
-                st.warning("Cloud storage is not configured. Personal saves are temporarily unavailable.")
-        elif auth_configured(st):
-            st.caption("Guest access")
-            st.caption("Use the Log in with Google button in the top banner to save favorites and alerts.")
-        else:
-            st.caption("Guest mode")
-            st.caption("Google login becomes available after the deployment secrets are configured.")
-
-
 def render_header_account_controls(st, user, cloud_enabled):
     """Render the primary login or account action inside the application banner."""
     with st.container(key="hero_account_panel"):

@@ -88,7 +88,7 @@ from storage import (
     update_settings,
 )
 from stock_data import list_symbol_paths, stock_exists, symbol_path
-from user_auth import current_user, render_account_controls, render_header_account_controls
+from user_auth import current_user, render_header_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
@@ -137,9 +137,8 @@ favorite_filter_sets = dict(shared_favorite_filter_sets)
 for display_name, stored_name in personal_favorite_keys.items():
     favorite_filter_sets[display_name] = personal_filter_sets[stored_name]
 
-render_account_controls(st, app_user, cloud_store is not None)
 if cloud_startup_error:
-    st.sidebar.error(cloud_startup_error)
+    st.error(cloud_startup_error)
 
 
 def render_login_prompt(message, key, error=False):
@@ -433,6 +432,11 @@ if query_param_value("interactive_chart", ""):
 st.markdown(
     """
     <style>
+    section[data-testid="stSidebar"],
+    button[data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
     :root {
         --ink-strong: #10243e;
         --ink: #334a63;
