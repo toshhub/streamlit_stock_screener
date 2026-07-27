@@ -73,6 +73,11 @@ def normalize_price_dataframe(df):
     for column in PRICE_COLUMNS[1:]:
         if column in normalized.columns:
             normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    if "Close" in normalized.columns:
+        # Batched Yahoo responses share a union date index across tickers and
+        # pad pre-listing/post-delisting dates with null OHLC rows. Those are
+        # not candles and must not create artificial yearly partitions.
+        normalized = normalized.dropna(subset=["Close"])
     normalized = normalized.sort_values("Date").drop_duplicates("Date", keep="last")
     return normalized.reset_index(drop=True)
 
@@ -207,3 +212,32 @@ def migrate_legacy_json(path, keep_years=10):
     changed = write_yearly_stock_data(path, df, keep_years=keep_years)
     legacy.unlink()
     return changed
+
+
+def remove_null_candle_rows(directory):
+    """Remove Yahoo batch padding from existing yearly partitions in one pass."""
+    directory = Path(directory).resolve()
+    cleaned_files = 0
+    removed_files = 0
+    for parquet_file in directory.glob("*/*.parquet"):
+        try:
+            original = pd.read_parquet(parquet_file)
+        except (OSError, ValueError):
+            continue
+        cleaned = normalize_price_dataframe(original)
+        if len(cleaned) == len(original):
+            continue
+        if cleaned.empty:
+            parquet_file.unlink()
+            removed_files += 1
+            continue
+        temporary = parquet_file.with_name(f".{parquet_file.name}.tmp")
+        cleaned.to_parquet(
+            temporary,
+            index=False,
+            engine="pyarrow",
+            compression="zstd",
+        )
+        temporary.replace(parquet_file)
+        cleaned_files += 1
+    return cleaned_files, removed_files

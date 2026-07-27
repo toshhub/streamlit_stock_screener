@@ -14,6 +14,17 @@ application can still read a legacy JSON file during rollout, but all writes
 use Parquet. A normal update re-downloads a 10-day overlap and rewrites only a
 year whose contents changed.
 
+`backfill_stock_history.py` performs a resumable true 10-year Yahoo backfill
+for existing datasets that were originally downloaded with a shorter period:
+
+```text
+python backfill_stock_history.py --market ALL --batch-size 100
+```
+
+It checkpoints successful symbols between batches, excludes intraday candles,
+preserves existing data when a ticker fails, and removes Yahoo's null
+pre-listing padding so newer stocks begin in their real listing year.
+
 ## Supabase migration
 
 Run the complete `supabase_schema.sql` in Supabase Dashboard → SQL Editor

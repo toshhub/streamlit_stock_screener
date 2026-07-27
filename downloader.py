@@ -10,7 +10,7 @@ import pandas as pd
 import yfinance as yf
 from pandas import Timestamp as PandasTimestamp
 
-from config import DAILY_DIR, US_DAILY_DIR
+from config import DAILY_DIR, META_DIR, US_DAILY_DIR
 from price_alerts import check_price_alerts_for_symbol
 from stock_data import (
     latest_stock_date,
@@ -50,6 +50,12 @@ DOWNLOAD_JOBS_LOCK = Lock()
 DOWNLOAD_JOBS = {}
 RECENT_REFRESH_DAYS = 10
 MAX_HISTORY_YEARS = 10
+
+# GitHub runners and sandboxed deployments may not have a writable user cache.
+# Keep Yahoo's timezone/cookie databases inside the application data area.
+YFINANCE_CACHE_DIR = META_DIR / ".yfinance_cache"
+YFINANCE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+yf.set_tz_cache_location(str(YFINANCE_CACHE_DIR))
 
 
 def normalize_market(market):

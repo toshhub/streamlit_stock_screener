@@ -12,7 +12,7 @@
   "email_subject": "NSE Stock Screener Results",
   "email_body": "Attached are the latest filtered stock screener results.",
   "create_charts": true,
-  "selected_favorite_filter_set": "50-200 Golden Cross",
+  "selected_favorite_filter_set": "50-200 Golden Cross Weekly Bullish",
   "screener_filter_set": [
     {
       "id": 1,
@@ -53,6 +53,14 @@
         "long_ma": 200,
         "down_pct": 15.0,
         "lookback_units": 350
+      }
+    },
+    {
+      "id": 7,
+      "type": "price_near_long",
+      "params": {
+        "long_ma": 935,
+        "threshold_pct": 40.0
       }
     }
   ],
