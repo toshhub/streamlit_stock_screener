@@ -23,6 +23,7 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertIn("window.parent.parent.postMessage(message", component_html)
         self.assertIn("message.source === \"nse-interactive-chart\"", component_html)
+        self.assertIn("allow-popups-to-escape-sandbox", component_html)
 
     @staticmethod
     def _price_rows(count):
