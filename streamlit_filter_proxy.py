@@ -47,6 +47,14 @@ def _favorite_card_key(label, tone, selected, index):
     return f"favorite_filter_card_tone_{tone}_{state}_{index}_{_slug(label)}"
 
 
+def _favorite_select_key(label, index):
+    return f"favorite_filter_select_{index}_{_slug(label)}"
+
+
+def _favorite_remove_key(label, index):
+    return f"favorite_filter_remove_{index}_{_slug(label)}"
+
+
 def _is_screener_top_layout(spec):
     if not isinstance(spec, (list, tuple)) or len(spec) != 2:
         return False
@@ -415,6 +423,60 @@ def _inject_styles(force=False):
         """
         + "".join(card_rules)
         + "".join(favorite_card_rules)
+        + """
+        div[class*="st-key-favorite_filter_card_"] {
+            position: relative;
+        }
+
+        div[class*="st-key-favorite_filter_card_"]:has([class*="st-key-favorite_filter_remove_"])
+            div[class*="st-key-favorite_filter_select_"] button {
+            padding-right: 2.75rem !important;
+        }
+
+        div[class*="st-key-favorite_filter_remove_"] {
+            position: absolute !important;
+            top: 50%;
+            right: 0.48rem;
+            z-index: 8;
+            width: 1.85rem !important;
+            transform: translateY(-50%);
+        }
+
+        div[class*="st-key-favorite_filter_remove_"] .stButton,
+        div[class*="st-key-favorite_filter_remove_"] [data-testid="stTooltipIcon"],
+        div[class*="st-key-favorite_filter_remove_"] [data-testid="stTooltipHoverTarget"] {
+            width: 1.85rem !important;
+        }
+
+        div[class*="st-key-favorite_filter_card_tone_"]
+            div[class*="st-key-favorite_filter_remove_"] button {
+            display: grid !important;
+            place-items: center !important;
+            min-height: 1.85rem !important;
+            width: 1.85rem !important;
+            height: 1.85rem !important;
+            padding: 0 !important;
+            border: 1px solid #f0a5a5 !important;
+            border-left-width: 1px !important;
+            border-radius: 8px !important;
+            background: rgba(255, 255, 255, 0.94) !important;
+            color: #c62828 !important;
+            font-size: 1rem !important;
+            font-weight: 900 !important;
+            line-height: 1 !important;
+            text-align: center !important;
+            box-shadow: 0 2px 7px rgba(127, 29, 29, 0.12) !important;
+            transform: none !important;
+        }
+
+        div[class*="st-key-favorite_filter_card_tone_"]
+            div[class*="st-key-favorite_filter_remove_"] button:hover {
+            border-color: #dc2626 !important;
+            background: #fee2e2 !important;
+            color: #991b1b !important;
+            transform: scale(1.05) !important;
+        }
+        """
         + "".join(expander_rules)
         + "</style>",
         unsafe_allow_html=True,
@@ -460,6 +522,8 @@ class StreamlitFilterProxy:
             if not options:
                 return None
 
+            removable_options = set(kwargs.pop("removable_options", ()) or ())
+            remove_callback = kwargs.pop("on_remove", None)
             widget_key = kwargs.get("key", "_favorite_filter_card_selected")
             selected = _st.session_state.get(widget_key)
             if selected not in options:
@@ -478,6 +542,10 @@ class StreamlitFilterProxy:
                 if callback:
                     callback(*callback_args, **callback_kwargs)
 
+            def remove_favorite(option):
+                if remove_callback:
+                    remove_callback(option)
+
             for row_start in range(0, len(options), 2):
                 row_options = options[row_start:row_start + 2]
                 columns = _st.columns(2, gap="small")
@@ -492,22 +560,34 @@ class StreamlitFilterProxy:
                             "args": (option,),
                         }
                     with columns[column_index]:
-                        _st.button(
-                            f"{prefix}{option}",
+                        card_index = row_start + column_index
+                        with _st.container(
                             key=_favorite_card_key(
                                 option,
                                 tone,
                                 is_selected,
-                                row_start + column_index,
-                            ),
-                            use_container_width=True,
-                            help=(
-                                f"Selected strategy: {option}"
-                                if is_selected
-                                else f"Load and run the {option} filter set."
-                            ),
-                            **button_kwargs,
-                        )
+                                card_index,
+                            )
+                        ):
+                            _st.button(
+                                f"{prefix}{option}",
+                                key=_favorite_select_key(option, card_index),
+                                use_container_width=True,
+                                help=(
+                                    f"Selected strategy: {option}"
+                                    if is_selected
+                                    else f"Load and run the {option} filter set."
+                                ),
+                                **button_kwargs,
+                            )
+                            if option in removable_options:
+                                _st.button(
+                                    "−",
+                                    key=_favorite_remove_key(option, card_index),
+                                    on_click=remove_favorite,
+                                    args=(option,),
+                                    help=f"Remove your saved strategy: {option}",
+                                )
 
             return selected
 

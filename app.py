@@ -3405,7 +3405,9 @@ with tab2:
     })
 
     # ---- Favorite Filter Set ----
-    remove_saved_strategy = False
+    def request_saved_strategy_removal(display_name):
+        st.session_state["_remove_saved_strategy_requested"] = display_name
+
     selected_fav = None
     with quick_run_panel:
         st.markdown(
@@ -3430,38 +3432,25 @@ with tab2:
                 selected = st.session_state["_favorite_select_widget"]
                 apply_filter_selection_to_state(selected)
 
-            strategy_col, remove_strategy_col = st.columns([8, 1])
-            with strategy_col:
-                selected_fav = st.selectbox(
-                    "⭐ Filter Set To Run",
-                    favorite_options,
-                    key="_favorite_select_widget",
-                    on_change=on_favorite_filter_selected,
-                    format_func=favorite_option_label,
-                    help="Select a saved favorite filter set to load all of its filters.",
-                )
-            with remove_strategy_col:
-                st.markdown(
-                    '<div style="height:1.72rem"></div>',
-                    unsafe_allow_html=True,
-                )
-                is_personal_strategy = selected_fav in personal_favorite_keys
-                remove_saved_strategy = st.button(
-                    "−",
-                    key="remove_selected_saved_strategy",
-                    use_container_width=True,
-                    disabled=not is_personal_strategy,
-                    help=(
-                        "Remove this personal saved strategy."
-                        if is_personal_strategy
-                        else "Shared strategies cannot be removed."
-                    ),
-                )
+            selected_fav = st.selectbox(
+                "⭐ Filter Set To Run",
+                favorite_options,
+                key="_favorite_select_widget",
+                on_change=on_favorite_filter_selected,
+                format_func=favorite_option_label,
+                removable_options=personal_favorite_keys.keys(),
+                on_remove=request_saved_strategy_removal,
+                help="Select a saved favorite filter set to load all of its filters.",
+            )
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
 
+    remove_saved_strategy = st.session_state.pop(
+        "_remove_saved_strategy_requested",
+        None,
+    )
     if remove_saved_strategy:
-        stored_name = personal_favorite_keys.get(selected_fav)
+        stored_name = personal_favorite_keys.get(remove_saved_strategy)
         if app_user is None:
             render_login_prompt(
                 "Sign in with Google before removing a personal saved strategy.",
@@ -3478,7 +3467,10 @@ with tab2:
             except CloudStorageError as exc:
                 st.error(str(exc))
             else:
-                if st.session_state.get("_active_favorite_filter_name") == selected_fav:
+                if (
+                    st.session_state.get("_active_favorite_filter_name")
+                    == remove_saved_strategy
+                ):
                     st.session_state["_active_favorite_filter_name"] = None
                     update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
                 st.session_state.pop("_favorite_select_widget", None)

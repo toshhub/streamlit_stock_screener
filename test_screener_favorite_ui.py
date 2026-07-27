@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+from streamlit.testing.v1 import AppTest
+
 
 class ScreenerFavoriteUiTests(unittest.TestCase):
     @classmethod
@@ -23,11 +25,50 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
     def test_custom_save_and_personal_strategy_remove_are_inline(self):
         self.assertIn('key="save_custom_strategy_popover"', self.app_source)
         self.assertIn('key="save_custom_strategy"', self.app_source)
-        self.assertIn('key="remove_selected_saved_strategy"', self.app_source)
         self.assertIn(
-            "is_personal_strategy = selected_fav in personal_favorite_keys",
+            "removable_options=personal_favorite_keys.keys()",
             self.app_source,
         )
+        self.assertIn(
+            "on_remove=request_saved_strategy_removal",
+            self.app_source,
+        )
+
+        proxy_source = (
+            Path(__file__).parent / "streamlit_filter_proxy.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('f"favorite_filter_remove_', proxy_source)
+        self.assertIn("if option in removable_options:", proxy_source)
+        self.assertIn(
+            "with _st.container(\n                            key=_favorite_card_key",
+            proxy_source,
+        )
+
+    def test_only_personal_strategy_card_renders_a_remove_button(self):
+        test_app = AppTest.from_string(
+            """
+from streamlit_filter_proxy import st
+
+def request_remove(name):
+    st.session_state["removed"] = name
+
+st.selectbox(
+    "⭐ Filter Set To Run",
+    ["100 Support", "200 Support"],
+    key="favorite",
+    removable_options=["100 Support"],
+    on_remove=request_remove,
+)
+"""
+        ).run(timeout=30)
+
+        self.assertFalse(test_app.exception)
+        labels = [button.label for button in test_app.button]
+        self.assertEqual(labels.count("−"), 1)
+        self.assertIn("☆  100 Support", labels)
+        self.assertIn("☆  200 Support", labels)
+        test_app.button(key="favorite_filter_remove_0_100_support").click().run()
+        self.assertEqual(test_app.session_state["removed"], "100 Support")
 
 
 if __name__ == "__main__":
