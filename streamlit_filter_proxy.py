@@ -430,42 +430,54 @@ def _inject_styles(force=False):
 
         div[class*="st-key-favorite_filter_card_"]:has([class*="st-key-favorite_filter_remove_"])
             div[class*="st-key-favorite_filter_select_"] button {
-            padding-right: 2.75rem !important;
+            padding-right: 2.45rem !important;
         }
 
         div[class*="st-key-favorite_filter_remove_"] {
             position: absolute !important;
             top: 50%;
-            right: 0.48rem;
+            right: 0.62rem;
             z-index: 8;
-            width: 1.85rem !important;
+            width: 1.6rem !important;
+            min-width: 1.6rem !important;
+            height: 1.6rem !important;
+            min-height: 1.6rem !important;
+            margin: 0 !important;
+            padding: 0 !important;
             transform: translateY(-50%);
         }
 
         div[class*="st-key-favorite_filter_remove_"] .stButton,
         div[class*="st-key-favorite_filter_remove_"] [data-testid="stTooltipIcon"],
         div[class*="st-key-favorite_filter_remove_"] [data-testid="stTooltipHoverTarget"] {
-            width: 1.85rem !important;
+            width: 1.6rem !important;
+            min-width: 1.6rem !important;
+            height: 1.6rem !important;
+            min-height: 1.6rem !important;
+            margin: 0 !important;
+            padding: 0 !important;
         }
 
         div[class*="st-key-favorite_filter_card_tone_"]
             div[class*="st-key-favorite_filter_remove_"] button {
-            display: grid !important;
-            place-items: center !important;
-            min-height: 1.85rem !important;
-            width: 1.85rem !important;
-            height: 1.85rem !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-height: 1.6rem !important;
+            width: 1.6rem !important;
+            min-width: 1.6rem !important;
+            height: 1.6rem !important;
             padding: 0 !important;
-            border: 1px solid #f0a5a5 !important;
+            border: 1px solid #ef9a9a !important;
             border-left-width: 1px !important;
-            border-radius: 8px !important;
-            background: rgba(255, 255, 255, 0.94) !important;
-            color: #c62828 !important;
-            font-size: 1rem !important;
+            border-radius: 999px !important;
+            background: #fff7f7 !important;
+            color: #b91c1c !important;
+            font-size: 0.95rem !important;
             font-weight: 900 !important;
             line-height: 1 !important;
             text-align: center !important;
-            box-shadow: 0 2px 7px rgba(127, 29, 29, 0.12) !important;
+            box-shadow: 0 1px 4px rgba(127, 29, 29, 0.12) !important;
             transform: none !important;
         }
 
@@ -475,7 +487,7 @@ def _inject_styles(force=False):
             width: 100% !important;
             margin: 0 !important;
             color: inherit !important;
-            font-size: 1rem !important;
+            font-size: 0.95rem !important;
             font-weight: 900 !important;
             line-height: 1 !important;
             text-align: center !important;
