@@ -5144,35 +5144,76 @@ with tab6:
         if app_user is not None and cloud_store is not None:
             st.info("No personal price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
     else:
-        def alert_table_frame(table_alerts, *, include_remove=False, include_acknowledged=False):
-            rows = []
-            alert_ids = []
-            for alert in table_alerts:
-                alert_ids.append(str(alert.get("id", "")))
-                direction = "Cross above" if alert.get("direction") == "above" else "Cross below"
-                row = {}
-                if include_acknowledged:
-                    row["Acknowledged"] = False
-                if include_remove:
-                    row["Remove"] = False
-                row.update({
-                    "Market": market_label(alert.get("market", MARKET_INDIA)),
-                    "Symbol": alert.get("symbol", ""),
-                    "Condition": direction,
-                    "Target Price": alert.get("target_price"),
-                    "Reference Price": alert.get("reference_price"),
-                    "Created": alert.get("created_at", ""),
-                    "Date of Trigger": alert.get("triggered_candle_date", ""),
-                    "Trigger Price": alert.get("triggered_price", ""),
-                })
-                rows.append(row)
-            return pd.DataFrame(rows, index=alert_ids)
+        def alert_value(value, *, numeric=False):
+            if value in (None, ""):
+                return "—"
+            if numeric:
+                try:
+                    number = float(value)
+                    if pd.isna(number):
+                        return "—"
+                    return f"{number:,.4f}".rstrip("0").rstrip(".")
+                except (TypeError, ValueError):
+                    return "—"
+            return str(value)
 
-        table_column_config = {
-            "Target Price": st.column_config.NumberColumn(format="%.4f"),
-            "Reference Price": st.column_config.NumberColumn(format="%.4f"),
-            "Trigger Price": st.column_config.NumberColumn(format="%.4f"),
-        }
+        def alert_table_html(table_alerts):
+            columns = (
+                ("Market", lambda alert: market_label(
+                    alert.get("market", MARKET_INDIA)
+                )),
+                ("Symbol", lambda alert: alert.get("symbol", "")),
+                ("Condition", lambda alert: (
+                    "Cross above"
+                    if alert.get("direction") == "above"
+                    else "Cross below"
+                )),
+                ("Target Price", lambda alert: alert_value(
+                    alert.get("target_price"), numeric=True
+                )),
+                ("Reference Price", lambda alert: alert_value(
+                    alert.get("reference_price"), numeric=True
+                )),
+                ("Created", lambda alert: alert.get("created_at", "")),
+                ("Date of Trigger", lambda alert: (
+                    alert.get("triggered_candle_date", "")
+                )),
+                ("Trigger Price", lambda alert: alert_value(
+                    alert.get("triggered_price"), numeric=True
+                )),
+            )
+            headers = "".join(
+                f"<th>{html.escape(label)}</th>"
+                for label, _ in columns
+            )
+            rows = []
+            for alert in table_alerts:
+                cells = "".join(
+                    f"<td>{html.escape(alert_value(getter(alert)))}</td>"
+                    for _, getter in columns
+                )
+                rows.append(f"<tr>{cells}</tr>")
+            return (
+                "<style>"
+                ".alert-static-table-wrap{width:100%;overflow-x:auto;"
+                "border:1px solid #dce6ee;border-radius:12px;background:#fff;"
+                "box-shadow:0 6px 20px rgba(16,36,62,.06)}"
+                ".alert-static-table{width:100%;min-width:920px;"
+                "border-collapse:collapse;font-size:14px;color:#334a63}"
+                ".alert-static-table th{padding:11px 12px;background:#123c56;"
+                "color:#fff;text-align:left;font-size:12px;"
+                "letter-spacing:.035em;text-transform:uppercase;"
+                "white-space:nowrap}"
+                ".alert-static-table td{padding:10px 12px;"
+                "border-bottom:1px solid #e4ebf0;white-space:nowrap}"
+                ".alert-static-table tr:nth-child(even){background:#f8fbfc}"
+                ".alert-static-table tr:last-child td{border-bottom:0}"
+                "</style>"
+                "<div class='alert-static-table-wrap'>"
+                "<table class='alert-static-table'><thead><tr>"
+                f"{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+                "</div>"
+            )
 
         alert_by_id = {
             str(alert.get("id", "")): alert
@@ -5245,12 +5286,9 @@ with tab6:
         st.caption("Price conditions that are still being monitored.")
         selected_remove_ids = []
         if active_alerts:
-            active_df = alert_table_frame(active_alerts)
-            st.dataframe(
-                active_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config=table_column_config,
+            st.markdown(
+                alert_table_html(active_alerts),
+                unsafe_allow_html=True,
             )
             selected_remove_ids.extend(
                 alert_selection(
@@ -5266,12 +5304,9 @@ with tab6:
         st.subheader("New Alerts")
         st.caption("Triggered alerts awaiting your acknowledgement.")
         if new_alerts:
-            new_df = alert_table_frame(new_alerts)
-            st.dataframe(
-                new_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config=table_column_config,
+            st.markdown(
+                alert_table_html(new_alerts),
+                unsafe_allow_html=True,
             )
             acknowledge_ids = alert_selection(
                 "Select new alerts to acknowledge",
@@ -5307,12 +5342,9 @@ with tab6:
         st.subheader("Old Alerts")
         st.caption("Triggered alerts you have already acknowledged.")
         if old_alerts:
-            old_df = alert_table_frame(old_alerts)
-            st.dataframe(
-                old_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config=table_column_config,
+            st.markdown(
+                alert_table_html(old_alerts),
+                unsafe_allow_html=True,
             )
             selected_remove_ids.extend(
                 alert_selection(
