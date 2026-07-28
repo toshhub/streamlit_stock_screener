@@ -5144,237 +5144,247 @@ with tab6:
         if app_user is not None and cloud_store is not None:
             st.info("No personal price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
     else:
-        def alert_value(value, *, numeric=False):
-            if value in (None, ""):
-                return "—"
-            if numeric:
-                try:
-                    number = float(value)
-                    if pd.isna(number):
-                        return "—"
-                    return f"{number:,.4f}".rstrip("0").rstrip(".")
-                except (TypeError, ValueError):
-                    return "—"
-            return str(value)
-
-        def alert_table_html(table_alerts):
-            columns = (
-                ("Market", lambda alert: market_label(
-                    alert.get("market", MARKET_INDIA)
-                )),
-                ("Symbol", lambda alert: alert.get("symbol", "")),
-                ("Condition", lambda alert: (
-                    "Cross above"
-                    if alert.get("direction") == "above"
-                    else "Cross below"
-                )),
-                ("Target Price", lambda alert: alert_value(
-                    alert.get("target_price"), numeric=True
-                )),
-                ("Reference Price", lambda alert: alert_value(
-                    alert.get("reference_price"), numeric=True
-                )),
-                ("Created", lambda alert: alert.get("created_at", "")),
-                ("Date of Trigger", lambda alert: (
-                    alert.get("triggered_candle_date", "")
-                )),
-                ("Trigger Price", lambda alert: alert_value(
-                    alert.get("triggered_price"), numeric=True
-                )),
-            )
-            headers = "".join(
-                f"<th>{html.escape(label)}</th>"
-                for label, _ in columns
-            )
-            rows = []
-            for alert in table_alerts:
-                cells = "".join(
-                    f"<td>{html.escape(alert_value(getter(alert)))}</td>"
-                    for _, getter in columns
-                )
-                rows.append(f"<tr>{cells}</tr>")
-            return (
-                "<style>"
-                ".alert-static-table-wrap{width:100%;overflow-x:auto;"
-                "border:1px solid #dce6ee;border-radius:12px;background:#fff;"
-                "box-shadow:0 6px 20px rgba(16,36,62,.06)}"
-                ".alert-static-table{width:100%;min-width:920px;"
-                "border-collapse:collapse;font-size:14px;color:#334a63}"
-                ".alert-static-table th{padding:11px 12px;background:#123c56;"
-                "color:#fff;text-align:left;font-size:12px;"
-                "letter-spacing:.035em;text-transform:uppercase;"
-                "white-space:nowrap}"
-                ".alert-static-table td{padding:10px 12px;"
-                "border-bottom:1px solid #e4ebf0;white-space:nowrap}"
-                ".alert-static-table tr:nth-child(even){background:#f8fbfc}"
-                ".alert-static-table tr:last-child td{border-bottom:0}"
-                "</style>"
-                "<div class='alert-static-table-wrap'>"
-                "<table class='alert-static-table'><thead><tr>"
-                f"{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
-                "</div>"
-            )
-
         alert_by_id = {
             str(alert.get("id", "")): alert
             for alert in sorted_alerts
         }
 
-        def alert_selection_label(alert_id):
-            alert = alert_by_id.get(str(alert_id), {})
-            symbol = str(alert.get("symbol", "") or "Unknown")
+        def alert_number(value):
             try:
-                target_label = (
-                    f"{float(alert.get('target_price')):,.4f}"
-                    .rstrip("0")
-                    .rstrip(".")
-                )
+                number = float(value)
+                if pd.isna(number):
+                    return "—"
+                return f"{number:,.4f}".rstrip("0").rstrip(".")
             except (TypeError, ValueError):
-                target_label = "price unavailable"
-            return f"{symbol} · {target_label}"
+                return "—"
 
-        def alert_selection(label, table_alerts, *, key, help_text):
-            options = [
-                str(alert.get("id", ""))
-                for alert in table_alerts
-                if str(alert.get("id", ""))
-            ]
-            return st.multiselect(
-                label,
-                options=options,
-                format_func=alert_selection_label,
-                key=key,
-                help=help_text,
-                placeholder="Choose one or more alerts",
+        def short_alert_date(value):
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return "—"
+            return parsed.strftime("%d %b %Y")
+
+        def clear_alert_cache():
+            st.session_state.pop("_cached_price_alerts", None)
+
+        @st.dialog("Remove price alert?")
+        def confirm_alert_removal(alert_id):
+            alert = alert_by_id.get(str(alert_id), {})
+            symbol = str(alert.get("symbol", "") or "this stock")
+            st.warning(
+                f"Remove the saved price alert for {symbol}? "
+                "This action cannot be undone."
+            )
+            confirm_col, cancel_col = st.columns(2)
+            with confirm_col:
+                confirmed = st.button(
+                    "Remove alert",
+                    type="primary",
+                    use_container_width=True,
+                    key="confirm_alert_row_removal",
+                )
+            with cancel_col:
+                cancelled = st.button(
+                    "Cancel",
+                    use_container_width=True,
+                    key="cancel_alert_row_removal",
+                )
+            if cancelled:
+                st.session_state.pop("_pending_alert_removal", None)
+                st.rerun()
+            if confirmed:
+                try:
+                    removed = remove_price_alerts([str(alert_id)])
+                except PermissionError as exc:
+                    render_login_prompt(
+                        str(exc),
+                        key="alert_row_remove_login",
+                        error=True,
+                    )
+                except (OSError, RuntimeError) as exc:
+                    st.error(f"Could not remove alert: {exc}")
+                else:
+                    clear_alert_cache()
+                    if (
+                        st.session_state.get("_selected_alert_chart")
+                        == str(alert_id)
+                    ):
+                        st.session_state.pop("_selected_alert_chart", None)
+                    st.session_state.pop("_pending_alert_removal", None)
+                    st.toast(f"Removed {removed} price alert(s).")
+                    st.rerun()
+
+        def render_selected_alert_chart(table_alerts, section_key):
+            selected_id = str(
+                st.session_state.get("_selected_alert_chart", "") or ""
+            )
+            selected_alert = next(
+                (
+                    alert for alert in table_alerts
+                    if str(alert.get("id", "")) == selected_id
+                ),
+                None,
+            )
+            if selected_alert is None:
+                return
+            symbol = str(selected_alert.get("symbol", "") or "").strip().upper()
+            market = normalize_market(
+                selected_alert.get("market", MARKET_INDIA)
+            )
+            chart_header, close_col = st.columns([5, 1])
+            chart_header.markdown(f"#### {symbol} alert chart")
+            if close_col.button(
+                "Close chart",
+                key=f"close_alert_chart_{section_key}",
+                use_container_width=True,
+            ):
+                st.session_state.pop("_selected_alert_chart", None)
+                st.rerun()
+            target_dir = timeframe_config("DAY", market)["target_dir"].resolve()
+            stock_file = symbol_path(target_dir, symbol).resolve()
+            if stock_file.parent != target_dir or not stock_exists(stock_file):
+                st.error(f"Daily chart data is unavailable for {symbol}.")
+                return
+            render_interactive_stock_chart(
+                symbol,
+                stock_file,
+                trade_overlay={
+                    "alertDate": selected_alert.get("created_at"),
+                    "alertPrice": selected_alert.get("target_price"),
+                },
+                alert_market=market,
+                height=780,
             )
 
-        alert_chart_rows = []
-        for alert in sorted_alerts:
-            status = str(alert.get("status", "") or "")
-            if status == "Triggered":
-                status = (
-                    "Old"
-                    if bool(alert.get("acknowledged", False))
-                    else "New"
+        def render_alert_rows(table_alerts, section_key, *, acknowledge=False):
+            header = st.columns([1, 1.7, 1.25, 1.45, 1.55, 1.45])
+            for column, label in zip(
+                header,
+                ("Market", "Symbol", "Condition", "Prices", "Dates", "Actions"),
+            ):
+                column.markdown(f"**{label}**")
+            for row_index, alert in enumerate(table_alerts):
+                alert_id = str(alert.get("id", ""))
+                symbol = str(alert.get("symbol", "") or "")
+                market = normalize_market(alert.get("market", MARKET_INDIA))
+                row_key = re.sub(
+                    r"[^A-Za-z0-9_-]",
+                    "_",
+                    f"{section_key}_{alert_id}_{row_index}",
                 )
-            alert_chart_rows.append({
-                "Symbol": alert.get("symbol", ""),
-                "Market": market_label(alert.get("market", MARKET_INDIA)),
-                "Status": status,
-                "Target Price": alert.get("target_price"),
-                "Created": alert.get("created_at", ""),
-                "Interactive Market": normalize_market(
-                    alert.get("market", MARKET_INDIA)
-                ),
-                "Alert Date": alert.get("created_at", ""),
-                "Alert Price": alert.get("target_price"),
-            })
-
-        st.subheader("Alert Charts")
-        st.caption(
-            "Select a stock name to open its interactive chart. "
-            "The purple arrow and thin dashed line mark when and where the alert was created."
-        )
-        sortable_results_table(
-            pd.DataFrame(alert_chart_rows),
-            height=850,
-            interactive_symbol_click=True,
-            table_title="Price Alert Charts",
-        )
+                with st.container(border=True):
+                    (
+                        market_col,
+                        symbol_col,
+                        condition_col,
+                        prices_col,
+                        dates_col,
+                        actions_col,
+                    ) = st.columns([1, 1.7, 1.25, 1.45, 1.55, 1.45])
+                    market_col.write(market_label(market))
+                    with symbol_col:
+                        name_col, chart_col = st.columns([4, 1])
+                        name_col.markdown(f"**{html.escape(symbol)}**")
+                        if chart_col.button(
+                            "📈",
+                            key=f"open_alert_chart_{row_key}",
+                            help=f"Open {symbol} interactive chart",
+                        ):
+                            current = str(
+                                st.session_state.get(
+                                    "_selected_alert_chart",
+                                    "",
+                                )
+                            )
+                            if current == alert_id:
+                                st.session_state.pop(
+                                    "_selected_alert_chart",
+                                    None,
+                                )
+                            else:
+                                st.session_state["_selected_alert_chart"] = (
+                                    alert_id
+                                )
+                    direction = (
+                        "Cross above"
+                        if alert.get("direction") == "above"
+                        else "Cross below"
+                    )
+                    condition_col.write(direction)
+                    prices_col.markdown(
+                        f"Target **{alert_number(alert.get('target_price'))}**  \n"
+                        f"Reference {alert_number(alert.get('reference_price'))}"
+                    )
+                    dates_col.markdown(
+                        f"Created {short_alert_date(alert.get('created_at'))}  \n"
+                        f"Triggered {short_alert_date(alert.get('triggered_candle_date'))}"
+                    )
+                    with actions_col:
+                        action_columns = st.columns(2 if acknowledge else 1)
+                        if acknowledge:
+                            if action_columns[0].button(
+                                "✓",
+                                key=f"acknowledge_alert_{row_key}",
+                                help="Acknowledge this alert",
+                                use_container_width=True,
+                            ):
+                                try:
+                                    acknowledged_count = acknowledge_price_alerts(
+                                        [alert_id]
+                                    )
+                                except PermissionError as exc:
+                                    render_login_prompt(
+                                        str(exc),
+                                        key=f"alert_ack_login_{row_key}",
+                                        error=True,
+                                    )
+                                except (OSError, RuntimeError) as exc:
+                                    st.error(
+                                        f"Could not acknowledge alert: {exc}"
+                                    )
+                                else:
+                                    clear_alert_cache()
+                                    st.toast(
+                                        f"Acknowledged {acknowledged_count} alert(s)."
+                                    )
+                                    st.rerun()
+                        remove_action_col = (
+                            action_columns[1]
+                            if acknowledge
+                            else action_columns[0]
+                        )
+                        if remove_action_col.button(
+                            "🗑",
+                            key=f"remove_alert_{row_key}",
+                            help="Remove this alert",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_pending_alert_removal"] = alert_id
+            render_selected_alert_chart(table_alerts, section_key)
 
         st.subheader("Active Alerts")
         st.caption("Price conditions that are still being monitored.")
-        selected_remove_ids = []
         if active_alerts:
-            st.markdown(
-                alert_table_html(active_alerts),
-                unsafe_allow_html=True,
-            )
-            selected_remove_ids.extend(
-                alert_selection(
-                    "Select active alerts to remove",
-                    active_alerts,
-                    key="active_price_alerts_remove",
-                    help_text="Selected alerts will be removed when you use Remove selected.",
-                )
-            )
+            render_alert_rows(active_alerts, "active")
         else:
             st.info("No active alerts.")
 
         st.subheader("New Alerts")
         st.caption("Triggered alerts awaiting your acknowledgement.")
         if new_alerts:
-            st.markdown(
-                alert_table_html(new_alerts),
-                unsafe_allow_html=True,
-            )
-            acknowledge_ids = alert_selection(
-                "Select new alerts to acknowledge",
-                new_alerts,
-                key="new_price_alerts_acknowledge",
-                help_text="Acknowledged alerts move to Old Alerts.",
-            )
-            if st.button(
-                "Acknowledge selected",
-                disabled=not acknowledge_ids,
-                key="acknowledge_selected_alerts",
-            ):
-                try:
-                    acknowledged = acknowledge_price_alerts(acknowledge_ids)
-                except PermissionError as exc:
-                    render_login_prompt(
-                        str(exc),
-                        key="alert_acknowledge_login",
-                        error=True,
-                    )
-                except (OSError, RuntimeError) as exc:
-                    st.error(f"Could not acknowledge alerts: {exc}")
-                else:
-                    if acknowledged:
-                        st.toast(
-                            f"Acknowledged {acknowledged} alert(s).",
-                            icon="✅",
-                        )
-                    st.rerun()
+            render_alert_rows(new_alerts, "new", acknowledge=True)
         else:
             st.info("No new alerts.")
 
         st.subheader("Old Alerts")
         st.caption("Triggered alerts you have already acknowledged.")
         if old_alerts:
-            st.markdown(
-                alert_table_html(old_alerts),
-                unsafe_allow_html=True,
-            )
-            selected_remove_ids.extend(
-                alert_selection(
-                    "Select old alerts to remove",
-                    old_alerts,
-                    key="old_price_alerts_remove",
-                    help_text="Selected alerts will be removed when you use Remove selected.",
-                )
-            )
+            render_alert_rows(old_alerts, "old")
         else:
             st.info("No old alerts.")
 
-        remove_col, _ = st.columns([1, 4])
-        with remove_col:
-            if st.button(
-                "Remove selected",
-                type="secondary",
-                disabled=not selected_remove_ids,
-                use_container_width=True,
-            ):
-                try:
-                    removed = remove_price_alerts(selected_remove_ids)
-                except PermissionError as exc:
-                    render_login_prompt(
-                        str(exc),
-                        key="alert_remove_login",
-                        error=True,
-                    )
-                except (OSError, RuntimeError) as exc:
-                    st.error(f"Could not remove alerts: {exc}")
-                else:
-                    st.success(f"Removed {removed} price alert(s).")
-                    st.rerun()
+        pending_alert_removal = st.session_state.get(
+            "_pending_alert_removal",
+        )
+        if pending_alert_removal:
+            confirm_alert_removal(pending_alert_removal)
