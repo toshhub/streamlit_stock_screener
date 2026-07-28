@@ -47,6 +47,59 @@ class LiveScreenerPipelineTests(unittest.TestCase):
             self.source,
         )
 
+    def test_progress_stays_in_screener_until_background_job_completes(self):
+        run_section = self.source[
+            self.source.index("# ===== RUN SCREENER LOGIC ====="):
+            self.source.index("with tab2:")
+        ]
+        self.assertIn(
+            "@st.fragment(run_every=0.75)\n"
+            "def render_active_screener_progress():",
+            self.source,
+        )
+        self.assertIn(
+            'st.rerun(scope="fragment")',
+            run_section,
+        )
+        self.assertNotIn(
+            'st.session_state["switch_to_results_tab"]',
+            run_section,
+        )
+        self.assertIn(
+            'st.session_state["switch_to_results_tab"] = True',
+            self.source[
+                self.source.index("def render_active_screener_progress():"):
+                self.source.index("def chart_file_needs_regeneration")
+            ],
+        )
+
+    def test_results_are_hidden_and_do_not_force_reruns_while_screening(self):
+        results_section = self.source[
+            self.source.index("# TAB 4: RESULTS"):
+            self.source.index("# TAB 5: PRICE ALERTS")
+        ]
+        self.assertIn(
+            "rows\n"
+            "        and not live_job_running",
+            results_section,
+        )
+        self.assertNotIn("time.sleep(0.75)", results_section)
+        self.assertNotIn(
+            'st.session_state["switch_to_results_tab"] = True',
+            results_section,
+        )
+
+    def test_background_job_persists_and_can_be_recovered_for_signed_in_user(self):
+        self.assertIn("SCREENER_JOBS[owner_key] = job", self.source)
+        self.assertIn("completion_callback(matched_rows)", self.source)
+        self.assertIn(
+            "cloud_store.save_results(\n"
+            "                    result_owner_id,\n"
+            "                    completed_rows,\n"
+            "                    result_metadata,",
+            self.source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

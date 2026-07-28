@@ -1541,6 +1541,32 @@ def stock_data_files(directory):
 
 
 CHART_CREATION_LOCK = threading.RLock()
+SCREENER_JOBS_LOCK = threading.RLock()
+SCREENER_JOBS = {}
+
+
+def screener_job_owner_key():
+    """Return the authenticated owner key used to recover background jobs."""
+    if app_user is None:
+        return None
+    return f"user:{app_user.id}"
+
+
+def attach_registered_screener_job():
+    """Reconnect this browser session to its still-running server-side job."""
+    job = st.session_state.get("screener_job")
+    if job:
+        return job
+
+    owner_key = screener_job_owner_key()
+    if owner_key is None:
+        return None
+    with SCREENER_JOBS_LOCK:
+        job = SCREENER_JOBS.get(owner_key)
+    if job and job.get("running"):
+        st.session_state["screener_job"] = job
+        return job
+    return None
 
 
 def screen_stock_file_worker(
@@ -1617,6 +1643,7 @@ def run_live_screener_job(
     pattern_reversal_pct,
     pattern_expressions,
     create_charts,
+    completion_callback=None,
 ):
     total = len(stock_files)
     max_workers = min(
@@ -1725,12 +1752,23 @@ def run_live_screener_job(
                     "charts_done": chart_done,
                     "charts_total": len(matched_rows),
                 })
+        persisted = False
+        persistence_error = ""
+        if completion_callback is not None:
+            try:
+                completion_callback(matched_rows)
+                persisted = True
+            except Exception as exc:
+                persistence_error = str(exc)
+
         job_queue.put({
             "type": "complete",
             "rows": matched_rows,
             "failed_count": failed_count,
             "total": total,
             "matches": len(matched_rows),
+            "persisted": persisted,
+            "persistence_error": persistence_error,
         })
     except Exception as exc:
         matched_rows = [
@@ -1749,6 +1787,8 @@ def start_live_screener_job(
     pattern_reversal_pct,
     pattern_expressions,
     create_charts,
+    completion_callback=None,
+    owner_key=None,
 ):
     job_queue = queue.Queue()
     total = len(stock_files)
@@ -1768,6 +1808,7 @@ def start_live_screener_job(
             pattern_reversal_pct,
             pattern_expressions,
             create_charts,
+            completion_callback,
         ),
         daemon=True,
     )
@@ -1784,13 +1825,17 @@ def start_live_screener_job(
         "error": "",
         "phase": "screening",
         "started_at": datetime.now().strftime("%H:%M:%S"),
+        "results_tab_opened": False,
     }
+    if owner_key is not None:
+        with SCREENER_JOBS_LOCK:
+            SCREENER_JOBS[owner_key] = job
     thread.start()
     return job
 
 
 def drain_live_screener_events():
-    job = st.session_state.get("screener_job")
+    job = attach_registered_screener_job()
     if not job:
         return None
 
@@ -1835,14 +1880,16 @@ def drain_live_screener_events():
             job["last_error"] = event.get("message", "")
         elif event_type == "complete":
             st.session_state["results"] = event.get("rows", rows)
-            persist_user_results(
-                st.session_state["results"],
-                st.session_state.get("last_results_metadata", {}),
-            )
+            if not event.get("persisted", False):
+                persist_user_results(
+                    st.session_state["results"],
+                    st.session_state.get("last_results_metadata", {}),
+                )
             job["done"] = event.get("total", job.get("total", 0))
             job["total"] = event.get("total", job.get("total", 0))
             job["matches"] = event.get("matches", len(st.session_state["results"]))
             job["failed_count"] = event.get("failed_count", job.get("failed_count", 0))
+            job["persistence_error"] = event.get("persistence_error", "")
             job["running"] = False
         elif event_type == "fatal_error":
             job["error"] = event.get("message", "Unknown screener error")
@@ -1851,7 +1898,60 @@ def drain_live_screener_events():
     thread = job.get("thread")
     if job.get("running") and thread is not None and not thread.is_alive():
         job["running"] = False
+        job["error"] = job.get("error") or "The screener stopped unexpectedly."
     return job
+
+
+@st.fragment(run_every=0.75)
+def render_active_screener_progress():
+    """Poll only the progress region while the server-side job is active."""
+    job = drain_live_screener_events()
+    if not job:
+        return
+
+    total = int(job.get("total", 0) or 0)
+    done = int(job.get("done", 0) or 0)
+    matches = int(job.get("matches", 0) or 0)
+    if job.get("running"):
+        if job.get("phase") == "charts":
+            charts_done = int(job.get("charts_done", 0) or 0)
+            charts_total = int(job.get("charts_total", matches) or 0)
+            st.progress(
+                min(1.0, charts_done / charts_total) if charts_total else 0.0,
+                text=(
+                    f"Screening complete · {matches:,} matches · "
+                    f"Preparing charts {charts_done:,} of {charts_total:,}"
+                ),
+            )
+        else:
+            st.progress(
+                min(1.0, done / total) if total else 0.0,
+                text=(
+                    f"Screening {done:,} of {total:,} stocks · "
+                    f"{matches:,} matches found"
+                ),
+            )
+        st.caption(
+            "This screening job runs on the server. You can minimize the browser "
+            "or switch to another mobile app and return later."
+        )
+        return
+
+    if job.get("error"):
+        st.error(f"Screener stopped: {job['error']}")
+        return
+
+    if not job.get("results_tab_opened"):
+        st.progress(
+            1.0,
+            text=(
+                f"Screening complete · {done:,} of {total:,} stocks · "
+                f"{matches:,} matches found"
+            ),
+        )
+        job["results_tab_opened"] = True
+        st.session_state["switch_to_results_tab"] = True
+        st.rerun()
 
 
 def chart_file_needs_regeneration(chart_path):
@@ -3205,7 +3305,11 @@ MAIN_TAB_LABELS = [
     "⭐ Watchlists",
     "🔔 Alerts",
 ]
-if st.session_state.pop("switch_to_results_tab", False):
+switch_to_results_requested = st.session_state.pop(
+    "switch_to_results_tab",
+    False,
+)
+if switch_to_results_requested:
     st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[3]
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
@@ -3213,6 +3317,9 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     key="_main_workspace_tab",
     on_change="ignore",
 )
+
+if switch_to_results_requested:
+    switch_to_tab(3)
 
 if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
     switch_to_tab(5)
@@ -3646,11 +3753,33 @@ def render_screener_workspace():
 
     with quick_run_panel:
         quick_run_action = st.container(key="quick_run_action")
+    active_screener_job = attach_registered_screener_job()
     with quick_run_action:
-        run_combined = st.button("▶️ Run Screener", type="primary", use_container_width=True)
+        run_combined = st.button(
+            "▶️ Run Screener",
+            type="primary",
+            use_container_width=True,
+            disabled=bool(
+                active_screener_job
+                and active_screener_job.get("running")
+            ),
+        )
 
-    # Placeholder for progress bar — will be filled when screener runs
+    # This child fragment alone refreshes while screening. The rest of the
+    # Screener workspace stays stable and responsive.
     screener_progress_placeholder = st.empty()
+    if (
+        active_screener_job
+        and (
+            active_screener_job.get("running")
+            or (
+                not active_screener_job.get("error")
+                and not active_screener_job.get("results_tab_opened")
+            )
+        )
+    ):
+        with screener_progress_placeholder.container():
+            render_active_screener_progress()
 
     # Read current_filter_set from session state now (after selectbox may have updated it)
     current_filter_set = st.session_state["current_filter_set"]
@@ -4112,6 +4241,10 @@ def render_screener_workspace():
 
     # ===== RUN SCREENER LOGIC =====
     if run_combined:
+        screener_progress_placeholder.progress(
+            0.0,
+            text="Preparing the stock universe…",
+        )
         run_filter_set = list(filter_set)  # shallow copy so we can inject green_candle_today
         run_lookback_days = pattern_lookback_days
         run_reversal_pct = pattern_reversal_pct
@@ -4161,9 +4294,8 @@ def render_screener_workspace():
 
         active_job = drain_live_screener_events()
         if active_job and active_job.get("running"):
-            st.warning("A screener run is already in progress. Open the Results tab to watch live matches.")
-            st.session_state["switch_to_results_tab"] = True
-            st.rerun()
+            st.warning("A screener run is already in progress. Its progress is shown above.")
+            st.stop()
 
         st.session_state["results"] = []
         active_name = st.session_state.get("_active_favorite_filter_name")
@@ -4181,7 +4313,7 @@ def render_screener_workspace():
             + ", ".join(f"{key}={value}" for key, value in item.get("params", {}).items())
             for item in run_filter_set
         ]
-        st.session_state["last_results_metadata"] = {
+        result_metadata = {
             "filter_name": result_filter_name,
             "market": current_market,
             "latest_data_date": (
@@ -4193,6 +4325,7 @@ def render_screener_workspace():
             "create_charts": bool(create_charts),
             "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        st.session_state["last_results_metadata"] = result_metadata
         update_changed_settings({
             "selected_favorite_filter_set": result_filter_name,
             "screener_filter_set": run_filter_set,
@@ -4201,6 +4334,19 @@ def render_screener_workspace():
             "pattern_expressions": list(run_pattern_expressions),
             "last_results_market": current_market,
         })
+        completion_callback = None
+        if app_user is not None and cloud_store is not None:
+            result_owner_id = app_user.id
+
+            def persist_completed_results(completed_rows):
+                cloud_store.save_results(
+                    result_owner_id,
+                    completed_rows,
+                    result_metadata,
+                )
+
+            completion_callback = persist_completed_results
+
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
             market_cap_positions,
@@ -4210,9 +4356,10 @@ def render_screener_workspace():
             run_reversal_pct,
             run_pattern_expressions,
             create_charts,
+            completion_callback=completion_callback,
+            owner_key=screener_job_owner_key(),
         )
-        st.session_state["switch_to_results_tab"] = True
-        st.rerun()
+        st.rerun(scope="fragment")
 
 
 with tab2:
@@ -4575,6 +4722,9 @@ with tab4:
         st.session_state["last_results_metadata"] = loaded_metadata
 
     rows = st.session_state.get("results", [])
+    live_job_running = bool(
+        live_screener_job and live_screener_job.get("running")
+    )
     if live_screener_job:
         total = live_screener_job.get("total", 0)
         done = live_screener_job.get("done", 0)
@@ -4591,9 +4741,9 @@ with tab4:
                 )
             else:
                 st.info(
-                    f"Screening live with {max_workers} workers: "
-                    f"{done}/{total} processed, "
-                    f"{matches} match(es) streamed so far."
+                    f"Screening is running with {max_workers} workers: "
+                    f"{done}/{total} processed and {matches} match(es) found. "
+                    "Progress remains available in the Screener tab."
                 )
         elif live_screener_job.get("error"):
             st.error(f"Screener stopped: {live_screener_job['error']}")
@@ -4602,8 +4752,17 @@ with tab4:
             st.success(f"Screening complete: {done}/{total} processed, {matches} match(es) found.")
             if failed_count:
                 st.warning(f"{failed_count} stock file(s) were skipped due to errors.")
+            if live_screener_job.get("persistence_error"):
+                st.warning(
+                    "The completed results could not be saved while the browser "
+                    "was away. They are available in this session."
+                )
 
-    if rows and (not fast_favorite_selection or tab4.open):
+    if (
+        rows
+        and not live_job_running
+        and (not fast_favorite_selection or tab4.open)
+    ):
         result_market_for_repair = normalize_market(settings.get("last_results_market", selected_market))
         result_timeframe_for_repair = "DAY"
         repair_filter_set = normalize_filter_set(
@@ -4613,9 +4772,6 @@ with tab4:
         result_metadata_for_repair = st.session_state.get(
             "last_results_metadata",
             {},
-        )
-        live_job_running = bool(
-            live_screener_job and live_screener_job.get("running")
         )
         if (
             not live_job_running
@@ -4630,7 +4786,11 @@ with tab4:
             st.session_state["results"] = rows
             persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
 
-    if rows and (not fast_favorite_selection or tab4.open):
+    if (
+        rows
+        and not live_job_running
+        and (not fast_favorite_selection or tab4.open)
+    ):
         # Determine heading: favorite filter name or the edited working set.
         result_metadata = st.session_state.get("last_results_metadata", {})
         heading_label = result_metadata.get("filter_name") or CUSTOM_FILTER_NAME
@@ -4719,19 +4879,6 @@ with tab4:
         if "ValuationMedians" in df.columns:
             table_df["ValuationMedians"] = df["ValuationMedians"]
 
-        if (
-            live_screener_job
-            and live_screener_job.get("running")
-            and live_screener_job.get("phase") == "screening"
-        ):
-            st.progress(
-                min(1.0, done / total) if total else 0.0,
-                text=(
-                    f"Screening {done:,} of {total:,} stocks · "
-                    f"{matches:,} matches found"
-                ),
-            )
-
         if "ChartPath" in df.columns:
             chart_df = table_df.copy()
             chart_df["ChartPath"] = df["ChartPath"]
@@ -4751,14 +4898,14 @@ with tab4:
 
     else:
         if live_screener_job and live_screener_job.get("running"):
-            st.info("Waiting for the first matching stock. Results will appear here automatically.")
+            st.info(
+                "Screening is still running. Progress is shown in the Screener "
+                "tab, and this tab will open automatically when the run finishes."
+            )
+        elif live_screener_job and not live_screener_job.get("error"):
+            st.info("Screening completed, but no stocks matched the selected filters.")
         else:
             st.info("No results yet. Run the screener from the 'Screener' tab to see results here.")
-
-    if live_screener_job and live_screener_job.get("running"):
-        st.session_state["switch_to_results_tab"] = True
-        time.sleep(0.75)
-        st.rerun()
 
 # =====================================================================
 # TAB 5: PRICE ALERTS
