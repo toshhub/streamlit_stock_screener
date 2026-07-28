@@ -620,6 +620,7 @@ def interactive_stock_chart_html(
     alert_market="INDIA",
     history_years=SCREENING_HISTORY_YEARS,
     restore_visible_range=None,
+    watchlists=None,
 ):
     payload = interactive_chart_payload(
         json_path,
@@ -859,6 +860,40 @@ def interactive_stock_chart_html(
         'aria-label="Add price alert at cursor" title="Move the cursor to a price, then click to add an alert">'
         '<span aria-hidden="true">+</span></button></div>'
     )
+    watchlist_controls_html = ""
+    if watchlists is not None:
+        watchlist_options = []
+        for watchlist in watchlists:
+            watchlist_id = str(watchlist.get("id", "") or "").strip()
+            watchlist_name = str(
+                watchlist.get("name", "") or "Untitled watchlist"
+            ).strip()
+            if not watchlist_id:
+                continue
+            watchlist_options.append(
+                f'<option value="{html.escape(watchlist_id, quote=True)}">'
+                f"{html.escape(watchlist_name)}</option>"
+            )
+        if watchlist_options:
+            watchlist_controls_html = (
+                '<section class="chart-control-section chart-watchlist-section">'
+                '<span class="chart-section-label">Add to watchlist</span>'
+                '<div class="chart-watchlist-actions">'
+                '<select id="chart-watchlist-select" '
+                'aria-label="Choose watchlist">'
+                f'{"".join(watchlist_options)}</select>'
+                '<button id="chart-watchlist-add" type="button" '
+                f'data-symbol="{html.escape(str(symbol), quote=True)}" '
+                f'data-market="{safe_alert_market}">Add stock</button>'
+                "</div></section>"
+            )
+        else:
+            watchlist_controls_html = (
+                '<section class="chart-control-section chart-watchlist-section">'
+                '<span class="chart-section-label">Add to watchlist</span>'
+                '<span class="chart-watchlist-empty">'
+                "Create a watchlist first</span></section>"
+            )
     match_navigation_html = ""
     if match_position and match_total:
         previous_disabled = "" if has_previous else "disabled"
@@ -1077,6 +1112,48 @@ def interactive_stock_chart_html(
           display: flex;
           align-items: stretch;
           gap: 8px;
+        }}
+        .chart-watchlist-actions {{
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }}
+        .chart-watchlist-actions select {{
+          min-width: 110px;
+          max-width: 170px;
+          height: 30px;
+          padding: 0 25px 0 8px;
+          border: 1px solid #bdcdd6;
+          border-radius: 7px;
+          background: #ffffff;
+          color: #263c52;
+          font: inherit;
+          font-size: 10px;
+        }}
+        .chart-watchlist-actions button {{
+          height: 30px;
+          padding: 0 9px;
+          border: 1px solid #70a68b;
+          border-radius: 7px;
+          background: #ecf8f1;
+          color: #17613d;
+          cursor: pointer;
+          font-size: 10px;
+          font-weight: 800;
+          white-space: nowrap;
+        }}
+        .chart-watchlist-actions button:hover {{
+          border-color: #3f8967;
+          background: #dcf2e5;
+        }}
+        .chart-watchlist-actions button:disabled {{
+          cursor: default;
+          opacity: 0.68;
+        }}
+        .chart-watchlist-empty {{
+          color: #718397;
+          font-size: 10px;
+          white-space: nowrap;
         }}
         .chart-actions {{
           display: flex;
@@ -1492,6 +1569,14 @@ def interactive_stock_chart_html(
             grid-template-columns: minmax(0, 1fr);
             gap: 6px;
           }}
+          .chart-watchlist-actions {{
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+          }}
+          .chart-watchlist-actions select {{
+            width: 100%;
+            max-width: none;
+          }}
           .chart-control-section {{ padding: 7px; }}
           .chart-range-actions {{
             display: grid;
@@ -1570,6 +1655,17 @@ def interactive_stock_chart_html(
             align-items:center;
             gap:3px;
           }}
+          .chart-watchlist-section {{
+            max-width: 260px;
+          }}
+          .chart-watchlist-actions select {{
+            max-width: 120px;
+            height: 26px;
+          }}
+          .chart-watchlist-actions button {{
+            height: 26px;
+            padding-inline: 6px;
+          }}
           .chart-control-section .chart-section-label {{ display:none; }}
           .chart-match-nav, .chart-close {{ width:25px; height:25px; }}
           .chart-toolbar {{ gap:4px; }}
@@ -1608,6 +1704,7 @@ def interactive_stock_chart_html(
           </div>
           {match_navigation_html}
           <div class="chart-toolbar" aria-label="Chart controls">
+            {watchlist_controls_html}
             <section class="chart-control-section">
               <span class="chart-section-label">Time range</span>
               <div class="chart-actions chart-range-actions">
@@ -1643,6 +1740,8 @@ def interactive_stock_chart_html(
           const fundamentalsClose = document.getElementById("fundamentals-close");
           const fundamentalsScrim = document.getElementById("fundamentals-scrim");
           const priceAlertButton = document.getElementById("price-alert-at-cursor");
+          const watchlistSelect = document.getElementById("chart-watchlist-select");
+          const watchlistAddButton = document.getElementById("chart-watchlist-add");
           const valuationDrawer = document.getElementById("valuation-drawer");
           const valuationToggle = document.getElementById("valuation-toggle");
           const valuationPanel = document.getElementById("valuation-panel");
@@ -2138,6 +2237,27 @@ def interactive_stock_chart_html(
               }}) || "";
             }}
           }}
+          if (watchlistSelect && watchlistAddButton) {{
+            watchlistAddButton.addEventListener("click", function(event) {{
+              event.preventDefault();
+              const watchlistId = String(watchlistSelect.value || "");
+              if (!watchlistId) return;
+              postChartMessage({{
+                source: "nse-interactive-chart",
+                action: "add-to-watchlist",
+                watchlistId: watchlistId,
+                symbol: watchlistAddButton.dataset.symbol || "",
+                market: watchlistAddButton.dataset.market || "INDIA",
+                eventId: String(Date.now()) + "-" + watchlistId
+              }});
+              watchlistAddButton.disabled = true;
+              watchlistAddButton.textContent = "Added";
+              window.setTimeout(function() {{
+                watchlistAddButton.disabled = false;
+                watchlistAddButton.textContent = "Add stock";
+              }}, 1200);
+            }});
+          }}
           if (tradeMarkers.length) {{
             if (typeof LightweightCharts.createSeriesMarkers === "function") {{
               LightweightCharts.createSeriesMarkers(candleSeries, tradeMarkers);
@@ -2396,6 +2516,8 @@ def render_interactive_stock_chart(
     trade_overlay=None,
     alert_market="INDIA",
     height=760,
+    watchlists=None,
+    watchlist_add_callback=None,
 ):
     history_key = f"_interactive_history_years_{str(alert_market).upper()}_{symbol}"
     visible_range_key = f"{history_key}_visible_range"
@@ -2424,6 +2546,7 @@ def render_interactive_stock_chart(
         alert_market=alert_market,
         history_years=history_years,
         restore_visible_range=restore_visible_range,
+        watchlists=watchlists,
     )
     alert_event = _CURSOR_ALERT_COMPONENT(
         chartHtml=chart_html,
@@ -2454,6 +2577,20 @@ def render_interactive_stock_chart(
                         "to": visible_to,
                     }
             st.rerun()
+        return
+    if alert_event.get("action") == "add-to-watchlist":
+        event_id = str(alert_event.get("eventId") or "")
+        processed_key = (
+            f"_processed_watchlist_add_"
+            f"{str(alert_market).upper()}_{symbol}"
+        )
+        if (
+            event_id
+            and st.session_state.get(processed_key) != event_id
+            and callable(watchlist_add_callback)
+        ):
+            st.session_state[processed_key] = event_id
+            watchlist_add_callback(alert_event)
         return
     if alert_event.get("action") != "create-price-alert":
         return

@@ -24,6 +24,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("window.parent.parent.postMessage(message", component_html)
         self.assertIn("message.source === \"nse-interactive-chart\"", component_html)
         self.assertIn("allow-popups-to-escape-sandbox", component_html)
+        self.assertIn('message.action === "add-to-watchlist"', component_html)
 
     @staticmethod
     def _price_rows(count):
@@ -144,6 +145,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("candleAtOrBeforeCursor", result)
         self.assertIn("Math.floor(logical)", result)
         self.assertIn('class="legend-gain ', result)
+
         self.assertIn("@media (max-width: 640px)", result)
         self.assertIn("grid-template-rows: auto minmax(280px, 1fr) auto", result)
         self.assertIn("padding: 0;", result)
@@ -179,6 +181,29 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("Median Market Cap / Sales", result)
         self.assertIn("valuation-favorable", result)
         self.assertIn("Below historical median", result)
+
+    def test_interactive_chart_can_add_stock_to_a_watchlist(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(
+                json.dumps(self._price_rows(300)),
+                encoding="utf-8",
+            )
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                watchlists=[
+                    {"id": "growth-list", "name": "Growth & Quality"},
+                    {"id": "income-list", "name": "Income"},
+                ],
+            )
+
+        self.assertIn('id="chart-watchlist-select"', result)
+        self.assertIn('value="growth-list"', result)
+        self.assertIn("Growth &amp; Quality", result)
+        self.assertIn('id="chart-watchlist-add"', result)
+        self.assertIn('action: "add-to-watchlist"', result)
+        self.assertIn("watchlistId: watchlistId", result)
 
     def test_valuation_drawer_has_screener_style_metric_and_range_controls(self):
         valuation_rows = [{

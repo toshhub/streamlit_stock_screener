@@ -33,7 +33,11 @@
       }
 
       if (event.source === frame.contentWindow && message.source === "nse-interactive-chart") {
-        if (message.action === "create-price-alert" || message.action === "load-history") {
+        if (
+          message.action === "create-price-alert"
+          || message.action === "load-history"
+          || message.action === "add-to-watchlist"
+        ) {
           sendToStreamlit("streamlit:setComponentValue", {
             value: message,
             dataType: "json"

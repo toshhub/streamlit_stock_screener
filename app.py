@@ -502,6 +502,80 @@ def run_interactive_chart_view():
         """,
         unsafe_allow_html=True,
     )
+    chart_watchlists = None
+    if app_user is not None and cloud_store is not None:
+        if "_cached_personal_watchlists" in st.session_state:
+            chart_watchlists = deepcopy(
+                st.session_state["_cached_personal_watchlists"]
+            )
+        else:
+            try:
+                chart_watchlists = cloud_store.load_watchlists(app_user.id)
+            except CloudStorageError as exc:
+                st.error(str(exc))
+                chart_watchlists = []
+            else:
+                st.session_state["_cached_personal_watchlists"] = deepcopy(
+                    chart_watchlists
+                )
+
+    def add_chart_stock_to_watchlist(event):
+        watchlist_id = str(event.get("watchlistId", "") or "")
+        selected_watchlist = next(
+            (
+                watchlist
+                for watchlist in (chart_watchlists or [])
+                if str(watchlist.get("id", "")) == watchlist_id
+            ),
+            None,
+        )
+        event_symbol = str(event.get("symbol", "") or "").strip().upper()
+        event_market = normalize_market(event.get("market", market))
+        if (
+            selected_watchlist is None
+            or event_symbol != symbol.upper()
+            or event_market != market
+        ):
+            st.error("The selected watchlist or stock is no longer available.")
+            return
+        existing_items = selected_watchlist.get("items", [])
+        already_saved = any(
+            str(item.get("symbol", "")).strip().upper() == event_symbol
+            and normalize_market(item.get("market", MARKET_INDIA))
+            == event_market
+            for item in existing_items
+        )
+        if already_saved:
+            st.toast(
+                f"{event_symbol} is already in {selected_watchlist['name']}."
+            )
+            return
+        try:
+            cloud_store.save_watchlist_item(
+                app_user.id,
+                watchlist_id,
+                event_symbol,
+                event_market,
+                "",
+                len(existing_items),
+            )
+        except CloudStorageError as exc:
+            st.error(str(exc))
+            return
+        selected_watchlist.setdefault("items", []).append({
+            "symbol": event_symbol,
+            "market": event_market,
+            "note": "",
+            "position": len(existing_items),
+        })
+        st.session_state["_cached_personal_watchlists"] = deepcopy(
+            chart_watchlists
+        )
+        st.toast(
+            f"Added {event_symbol} to {selected_watchlist['name']}.",
+            icon="⭐",
+        )
+
     try:
         render_interactive_stock_chart(
             symbol,
@@ -518,6 +592,8 @@ def run_interactive_chart_view():
             trade_overlay=trade_overlay,
             alert_market=market,
             height=embedded_chart_height,
+            watchlists=chart_watchlists,
+            watchlist_add_callback=add_chart_stock_to_watchlist,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")
@@ -4889,7 +4965,7 @@ with tab5:
         "watchlists",
         "Workspace 05 · Personal tracking",
         "Watchlists",
-        "Create private lists, keep notes, set your preferred order, and open a stock chart directly.",
+        "Create private lists, add or remove stocks, and open a stock chart directly.",
         "⭐",
         "Organize",
     )
@@ -4944,7 +5020,7 @@ with tab5:
             watchlist_id = str(watchlist["id"])
             with st.expander(
                 f"⭐ {watchlist['name']} · {len(watchlist.get('items', []))} stock(s)",
-                expanded=True,
+                expanded=False,
             ):
                 add_market = st.selectbox(
                     "Market",
@@ -4965,10 +5041,6 @@ with tab5:
                             else "No symbols are available for this market"
                         ),
                     )
-                    add_note = st.text_input(
-                        "Personal note (optional)",
-                        key=f"watchlist_note_{watchlist_id}",
-                    )
                     add_clicked = st.form_submit_button(
                         "Add stock",
                         disabled=not available_symbols,
@@ -4987,123 +5059,94 @@ with tab5:
                                 watchlist_id,
                                 clean_symbol,
                                 add_market,
-                                add_note,
+                                "",
                                 len(watchlist.get("items", [])),
                             )
                         except CloudStorageError as exc:
                             st.error(str(exc))
                         else:
+                            st.session_state.pop(
+                                "_cached_personal_watchlists",
+                                None,
+                            )
+                            st.session_state["_main_workspace_tab"] = (
+                                MAIN_TAB_LABELS[4]
+                            )
                             st.rerun()
 
                 items = watchlist.get("items", [])
                 if items:
-                    managed_items = []
-                    with st.form(f"watchlist_manage_{watchlist_id}"):
-                        st.caption(
-                            "Change order or notes, select stocks to remove, "
-                            "then save."
+                    stock_header, remove_header = st.columns([5, 1])
+                    stock_header.markdown("**Stock**")
+                    remove_header.markdown("**Remove**")
+                    for item_index, item in enumerate(items):
+                        item_symbol = str(item.get("symbol", ""))
+                        item_market = normalize_market(
+                            item.get("market", MARKET_INDIA)
                         )
-                        for item_index, item in enumerate(items):
-                            item_symbol = str(item.get("symbol", ""))
-                            item_market = normalize_market(
-                                item.get("market", MARKET_INDIA)
-                            )
-                            item_key = re.sub(
-                                r"[^A-Za-z0-9_-]",
-                                "_",
-                                f"{watchlist_id}_{item_market}_{item_symbol}_{item_index}",
-                            )
-                            symbol_col, order_col, note_col, remove_col = st.columns(
-                                [2, 1, 4, 1]
-                            )
-                            with symbol_col:
-                                st.markdown(
-                                    f"**{html.escape(item_symbol)}**  \n"
-                                    f"{html.escape(market_label(item_market))}"
-                                )
-                                params = urlencode({
-                                    "interactive_chart": item_symbol,
-                                    "market": item_market,
-                                })
-                                st.markdown(
-                                    f"[Open interactive chart ↗](?{params})"
-                                )
-                            with order_col:
-                                item_order = st.number_input(
-                                    "Order",
-                                    min_value=1,
-                                    step=1,
-                                    value=int(item.get("position", item_index)) + 1,
-                                    key=f"watchlist_order_{item_key}",
-                                )
-                            with note_col:
-                                item_note = st.text_input(
-                                    "Personal note",
-                                    value=str(item.get("note", "") or ""),
-                                    key=f"watchlist_item_note_{item_key}",
-                                )
-                            with remove_col:
-                                item_remove = st.checkbox(
-                                    "Remove",
-                                    key=f"watchlist_remove_{item_key}",
-                                )
-                            managed_items.append({
-                                "Symbol": item_symbol,
-                                "Market": item_market,
-                                "Note": item_note,
-                                "Order": int(item_order),
-                                "Remove": bool(item_remove),
-                            })
-                            if item_index < len(items) - 1:
-                                st.divider()
-                        save_watchlist_clicked = st.form_submit_button(
-                            "Save order and notes",
-                            type="primary",
+                        item_key = re.sub(
+                            r"[^A-Za-z0-9_-]",
+                            "_",
+                            (
+                                f"{watchlist_id}_{item_market}_"
+                                f"{item_symbol}_{item_index}"
+                            ),
                         )
-                    _, delete_col = st.columns([3, 1])
-                    if save_watchlist_clicked:
-                        try:
-                            remove_symbols = [
-                                row["Symbol"]
-                                for row in managed_items
-                                if row["Remove"]
-                            ]
-                            cloud_store.delete_watchlist_items(
-                                app_user.id, watchlist_id, remove_symbols
-                            )
-                            kept = sorted(
-                                (
-                                    row for row in managed_items
-                                    if not row["Remove"]
-                                ),
-                                key=lambda row: row["Order"],
-                            )
-                            for position, row in enumerate(kept):
-                                cloud_store.save_watchlist_item(
+                        symbol_col, remove_col = st.columns([5, 1])
+                        params = urlencode({
+                            "interactive_chart": item_symbol,
+                            "market": item_market,
+                        })
+                        symbol_col.markdown(
+                            f"**[{html.escape(item_symbol)}](?{params})**  \n"
+                            f"{html.escape(market_label(item_market))}"
+                        )
+                        if remove_col.button(
+                            "−",
+                            key=f"watchlist_remove_{item_key}",
+                            help=f"Remove {item_symbol}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                cloud_store.delete_watchlist_items(
                                     app_user.id,
                                     watchlist_id,
-                                    row["Symbol"],
-                                    row["Market"],
-                                    row["Note"],
-                                    position,
+                                    [item_symbol],
                                 )
-                        except CloudStorageError as exc:
-                            st.error(str(exc))
-                        else:
-                            st.rerun()
-                    if delete_col.button(
-                        "Delete list",
-                        key=f"delete_watchlist_{watchlist_id}",
-                        type="secondary",
-                    ):
-                        try:
-                            cloud_store.delete_watchlist(app_user.id, watchlist_id)
-                        except CloudStorageError as exc:
-                            st.error(str(exc))
-                        else:
-                            st.rerun()
+                            except CloudStorageError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.session_state.pop(
+                                    "_cached_personal_watchlists",
+                                    None,
+                                )
+                                st.session_state["_main_workspace_tab"] = (
+                                    MAIN_TAB_LABELS[4]
+                                )
+                                st.rerun()
                 else:
                     st.caption("This watchlist is empty.")
+                if st.button(
+                    "Delete watchlist",
+                    key=f"delete_watchlist_{watchlist_id}",
+                    type="secondary",
+                ):
+                    try:
+                        cloud_store.delete_watchlist(
+                            app_user.id,
+                            watchlist_id,
+                        )
+                    except CloudStorageError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.session_state.pop(
+                            "_cached_personal_watchlists",
+                            None,
+                        )
+                        st.session_state["_main_workspace_tab"] = (
+                            MAIN_TAB_LABELS[4]
+                        )
+                        st.rerun()
 
 
 with tab6:
