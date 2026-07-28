@@ -227,6 +227,18 @@ class InteractiveChartTests(unittest.TestCase):
             "height: Math.max(minimumChartHeight(), Math.floor(rect.height))",
             result,
         )
+        self.assertIn(
+            "@media (max-width: 640px) and (orientation: portrait)",
+            result,
+        )
+        self.assertIn("display: contents", result)
+        self.assertIn("order: 4", result)
+        self.assertIn(
+            "flex: 0 0 max(240px, calc(100dvh - 126px))",
+            result,
+        )
+        self.assertIn("overflow-y: auto", result)
+        self.assertIn("left: -1px", result)
 
     def test_interactive_chart_can_add_stock_to_a_watchlist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -611,16 +623,8 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("availableEmbedHeight", result)
         self.assertIn("(orientation: landscape) and (max-height: 600px)", result)
         self.assertIn("window.visualViewport", result)
-        self.assertIn("var portraitMobile = window.matchMedia(", result)
-        self.assertIn(
-            "'(orientation: portrait) and (max-width: 600px)'",
-            result,
-        )
-        self.assertIn("viewportHeight + 300", result)
-        self.assertIn(
-            "Math.min(1180, viewportHeight + 300)",
-            result,
-        )
+        self.assertNotIn("viewportHeight + 300", result)
+        self.assertIn("var componentFrameHeight = viewportHeight", result)
         self.assertIn("Math.max(", result)
         self.assertIn("setComponentFrameHeight(componentFrameHeight)", result)
         self.assertIn("&range=", result)
@@ -649,6 +653,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("window.frameElement.scrollIntoView", result)
         self.assertNotIn("height: 1100px", result)
         self.assertIn("border-width: 0", result)
+        self.assertIn(".interactive-panel-header { display: none; }", result)
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
         self.assertIn("table-layout: fixed", result)

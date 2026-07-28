@@ -1637,6 +1637,110 @@ def interactive_stock_chart_html(
           .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
         }}
+        @media (max-width: 640px) and (orientation: portrait) {{
+          html, body {{
+            width: 100%;
+            overflow: hidden;
+          }}
+          .chart-shell {{
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            min-height: 100dvh;
+            height: 100dvh;
+            padding: 0;
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+          }}
+          .chart-header,
+          .chart-toolbar {{
+            display: contents;
+          }}
+          .chart-title {{
+            order: 1;
+            flex: 0 0 auto;
+            gap: 3px;
+            padding: 4px;
+            border-width: 0 0 1px;
+            border-radius: 0;
+            box-shadow: none;
+          }}
+          .chart-title .chart-section-label,
+          .chart-subtitle {{
+            display: none;
+          }}
+          .chart-title__row {{ gap: 4px; }}
+          .chart-title strong {{ font-size: 13px; }}
+          .chart-title .chart-pe-badge,
+          .chart-valuation-status {{
+            min-height: 19px;
+            padding: 2px 5px;
+            font-size: 8px !important;
+          }}
+          .chart-legend {{
+            min-height: 31px;
+            max-height: 36px;
+            gap: 3px 7px;
+            padding: 3px 5px;
+            border-radius: 6px;
+            font-size: 9px;
+            line-height: 1.12;
+          }}
+          .chart-navigation-section {{
+            order: 2;
+            flex: 0 0 30px;
+          }}
+          .chart-toolbar > .chart-control-section:not(.chart-watchlist-section) {{
+            order: 3;
+            flex: 0 0 30px;
+          }}
+          .chart-navigation-section,
+          .chart-toolbar > .chart-control-section:not(.chart-watchlist-section) {{
+            min-height: 30px;
+            padding: 2px 4px;
+            border-width: 0 0 1px;
+            border-radius: 0;
+            box-shadow: none;
+          }}
+          .chart-navigation-section .chart-section-label,
+          .chart-toolbar > .chart-control-section:not(.chart-watchlist-section) > .chart-section-label {{
+            display: none;
+          }}
+          .chart-match-nav,
+          .chart-close {{
+            width: 27px;
+            height: 27px;
+          }}
+          .chart-action {{
+            height: 27px;
+            font-size: 9px;
+          }}
+          #chart {{
+            order: 4;
+            flex: 0 0 max(240px, calc(100dvh - 126px));
+            width: 100%;
+            min-height: 240px;
+            border-right: 0;
+            border-left: 0;
+          }}
+          #chart canvas {{
+            display: block;
+          }}
+          .chart-watchlist-section {{
+            order: 5;
+            flex: 0 0 auto;
+            margin: 6px;
+          }}
+          .chart-footer {{
+            order: 6;
+          }}
+          .fundamentals-toggle,
+          .valuation-toggle {{
+            left: -1px;
+            border-left: 0;
+          }}
+        }}
         @media (orientation: landscape) and (max-height: 600px) {{
           body {{ overflow:hidden; }}
           .chart-shell {{
@@ -3225,7 +3329,7 @@ def results_hover_table_html(
           border-radius: 0;
           background: #fff;
         }
-        .interactive-panel-header { padding: 3px 4px 6px; }
+        .interactive-panel-header { display: none; }
         .interactive-chart-embed {
           height: auto;
           min-height: 0;
@@ -3423,9 +3527,6 @@ def results_hover_table_html(
           var compactLandscape = window.matchMedia(
             '(orientation: landscape) and (max-height: 600px)'
           ).matches;
-          var portraitMobile = window.matchMedia(
-            '(orientation: portrait) and (max-width: 600px)'
-          ).matches;
           var viewportHeight = window.visualViewport
             ? window.visualViewport.height
             : window.innerHeight;
@@ -3440,12 +3541,7 @@ def results_hover_table_html(
           var navClearance = parseFloat(
             window.getComputedStyle(panel).top
           ) || 0;
-          var componentFrameHeight = portraitMobile
-            ? Math.max(
-                viewportHeight,
-                Math.min(1180, viewportHeight + 300)
-              )
-            : viewportHeight;
+          var componentFrameHeight = viewportHeight;
           var availableEmbedHeight = Math.max(
             compactLandscape ? 240 : 420,
             Math.floor(
