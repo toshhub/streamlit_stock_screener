@@ -625,6 +625,9 @@ st.markdown(
         --border: #dce6ee;
         --shadow-sm: 0 1px 2px rgba(16, 36, 62, 0.05);
         --shadow-md: 0 10px 30px rgba(16, 36, 62, 0.09);
+        --primary-nav-top: calc(3.65rem + env(safe-area-inset-top, 0px));
+        --primary-nav-height: calc(3.15rem + 0.96rem + 2px);
+        --primary-nav-clearance: 0.8rem;
     }
     .results-run-heading {
         margin: 0.4rem 0 1rem;
@@ -650,7 +653,11 @@ st.markdown(
     }
     .stMainBlockContainer {
         max-width: 1480px;
-        padding-top: 5.7rem;
+        padding-top: calc(
+            var(--primary-nav-top)
+            + var(--primary-nav-height)
+            + var(--primary-nav-clearance)
+        );
         padding-bottom: 4rem;
     }
     header[data-testid="stHeader"] {
@@ -978,7 +985,7 @@ st.markdown(
     div.stTabs [role="tablist"] {
         position: fixed;
         z-index: 990;
-        top: calc(3.65rem + env(safe-area-inset-top, 0px));
+        top: var(--primary-nav-top);
         left: 50%;
         width: fit-content;
         max-width: calc(100vw - 1.25rem);
@@ -1056,8 +1063,15 @@ st.markdown(
     }
     div.stTabs [role="tabpanel"] {
         min-height: calc(100vh - 9rem);
-        padding-top: 1.25rem;
-        scroll-margin-top: 9rem;
+        padding-top: calc(
+            var(--primary-nav-height)
+            + var(--primary-nav-clearance)
+        );
+        scroll-margin-top: calc(
+            var(--primary-nav-top)
+            + var(--primary-nav-height)
+            + var(--primary-nav-clearance)
+        );
     }
 
     /* Filter row badges */
@@ -1489,8 +1503,10 @@ st.markdown(
     }
 
     @media (max-width: 768px) {
-        .stMainBlockContainer {
-            padding-top: 5.15rem;
+        :root {
+            --primary-nav-top: calc(3.45rem + env(safe-area-inset-top, 0px));
+            --primary-nav-height: calc(2.8rem + 0.76rem + 2px);
+            --primary-nav-clearance: 0.7rem;
         }
         .st-key-app_hero_shell {
             min-height: 196px;
@@ -1521,7 +1537,6 @@ st.markdown(
         }
         .workspace-banner__title { font-size: 1.2rem; }
         div.stTabs [role="tablist"] {
-            top: calc(3.45rem + env(safe-area-inset-top, 0px));
             width: calc(100vw - 1rem);
             gap: clamp(0.2rem, 1.5vw, 0.45rem);
             justify-content: space-between;
@@ -1550,11 +1565,12 @@ st.markdown(
         .workspace-banner { grid-template-columns: 1fr; }
     }
     @media (orientation: landscape) and (max-height: 600px) {
-        .stMainBlockContainer {
-            padding-top: 4.35rem;
+        :root {
+            --primary-nav-top: calc(3.05rem + env(safe-area-inset-top, 0px));
+            --primary-nav-height: calc(2.35rem + 0.56rem + 2px);
+            --primary-nav-clearance: 0.55rem;
         }
         div.stTabs [role="tablist"] {
-            top: calc(3.05rem + env(safe-area-inset-top, 0px));
             width: auto;
             padding: 0.28rem;
             border-radius: 14px;

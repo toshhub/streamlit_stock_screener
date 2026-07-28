@@ -573,8 +573,18 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("position: sticky", result)
         self.assertIn("position: fixed", result)
-        self.assertIn("height: 100vh", result)
-        self.assertIn("max-height: 100vh", result)
+        self.assertIn("--fixed-app-nav-clearance:", result)
+        self.assertIn("top: var(--fixed-app-nav-clearance)", result)
+        self.assertIn(
+            "height: calc(100vh - var(--fixed-app-nav-clearance))",
+            result,
+        )
+        self.assertIn(
+            "height: calc(100dvh - var(--fixed-app-nav-clearance))",
+            result,
+        )
+        self.assertIn("window.getComputedStyle(panel).top", result)
+        self.assertIn("- navClearance", result)
         self.assertIn("flex: 1 1 auto", result)
         self.assertIn("window.frameElement.scrollIntoView", result)
         self.assertNotIn("height: 1100px", result)

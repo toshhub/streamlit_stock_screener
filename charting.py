@@ -2658,6 +2658,7 @@ def results_hover_table_html(
         --brand-dark: #10536a;
         --brand-soft: #e9f6f8;
         --border: #dce6ee;
+        --fixed-app-nav-clearance: calc(3.15rem + 0.96rem + 2px + 0.8rem);
       }
       * { box-sizing: border-box; }
       body {
@@ -2997,12 +2998,13 @@ def results_hover_table_html(
       .chart-panel.interactive-mode {
         position: fixed;
         inset: 0;
+        top: var(--fixed-app-nav-clearance);
         z-index: 2000;
         display: flex;
         flex-direction: column;
         width: 100%;
-        height: 100vh;
-        max-height: 100vh;
+        height: calc(100vh - var(--fixed-app-nav-clearance));
+        max-height: calc(100vh - var(--fixed-app-nav-clearance));
         margin: 0;
         overflow: hidden;
         padding: 8px;
@@ -3139,6 +3141,9 @@ def results_hover_table_html(
 
       /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
+        :root {
+          --fixed-app-nav-clearance: calc(2.8rem + 0.76rem + 2px + 0.7rem);
+        }
         body { padding: 0; }
         .results-table-shell { border-radius: 10px; }
         .results-table-toolbar { align-items: flex-start; flex-direction: column; gap: 4px; padding: 8px; }
@@ -3165,10 +3170,10 @@ def results_hover_table_html(
         .chart-help-text { font-size: 11px; }
         .chart-panel.interactive-mode {
           position: fixed;
-          inset: 0;
+          inset: var(--fixed-app-nav-clearance) 0 0;
           z-index: 9999;
-          height: 100dvh;
-          max-height: 100dvh;
+          height: calc(100dvh - var(--fixed-app-nav-clearance));
+          max-height: calc(100dvh - var(--fixed-app-nav-clearance));
           overflow: hidden;
           padding: 0;
           border: 0;
@@ -3186,11 +3191,16 @@ def results_hover_table_html(
       }
       /* Mobile landscape */
       @media screen and (orientation: landscape) and (max-height: 600px) {
+        :root {
+          --fixed-app-nav-clearance: calc(2.35rem + 0.56rem + 2px + 0.55rem);
+        }
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
         .chart-panel.interactive-mode {
-          position: fixed; inset: 0; z-index: 9999; height: 100dvh;
-          max-height: 100dvh; overflow: hidden; padding: 0; border: 0;
+          position: fixed; inset: var(--fixed-app-nav-clearance) 0 0; z-index: 9999;
+          height: calc(100dvh - var(--fixed-app-nav-clearance));
+          max-height: calc(100dvh - var(--fixed-app-nav-clearance));
+          overflow: hidden; padding: 0; border: 0;
           border-radius: 0; background: #fff;
         }
         .interactive-panel-header { padding: 2px 4px; }
@@ -3363,9 +3373,17 @@ def results_hover_table_html(
           } catch (error) {
             // Sandboxed components may not read the parent viewport.
           }
+          panel.classList.add('interactive-mode');
+          var navClearance = parseFloat(
+            window.getComputedStyle(panel).top
+          ) || 0;
           var availableEmbedHeight = Math.max(
             compactLandscape ? 240 : 420,
-            Math.floor(viewportHeight - (compactLandscape ? 2 : 70))
+            Math.floor(
+              viewportHeight
+              - navClearance
+              - (compactLandscape ? 2 : 70)
+            )
           );
           setComponentFrameHeight(viewportHeight);
           var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
@@ -3378,7 +3396,6 @@ def results_hover_table_html(
             '&has_next=' + (index < items.length - 1 ? '1' : '0') +
             '&range=' + encodeURIComponent(activeInteractiveRange);
           var escapedSymbol = escapeHtml(symbol);
-          panel.classList.add('interactive-mode');
           panel.innerHTML = '' +
             '<div class="interactive-panel-header">' +
               '<div class="interactive-panel-title">' +

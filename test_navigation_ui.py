@@ -48,6 +48,18 @@ class NavigationUiTests(unittest.TestCase):
         )
         self.assertIn("flex-basis: 2.45rem;", self.app_source)
 
+    def test_fixed_navigation_reserves_space_before_all_page_content(self):
+        self.assertIn("--primary-nav-top:", self.app_source)
+        self.assertIn("--primary-nav-height:", self.app_source)
+        self.assertIn("--primary-nav-clearance:", self.app_source)
+        self.assertIn("top: var(--primary-nav-top);", self.app_source)
+        self.assertIn(
+            "var(--primary-nav-height)\n"
+            "            + var(--primary-nav-clearance)",
+            self.app_source,
+        )
+        self.assertNotIn("padding-top: 1.25rem;", self.app_source)
+
 
 if __name__ == "__main__":
     unittest.main()
