@@ -50,6 +50,7 @@ DOWNLOAD_JOBS_LOCK = Lock()
 DOWNLOAD_JOBS = {}
 RECENT_RECONCILIATION_SESSIONS = 5
 MAX_HISTORY_YEARS = 10
+LATEST_VALUES_FILE = META_DIR / "latest_stock_values.parquet"
 
 # GitHub runners and sandboxed deployments may not have a writable user cache.
 # Keep Yahoo's timezone/cookie databases inside the application data area.
@@ -103,8 +104,69 @@ def _last_saved_date(out_file):
     return latest_stock_date(out_file)
 
 
-def data_availability_summary(directory):
+def _data_availability_from_snapshot(snapshot_file, market):
+    """Return market coverage from the consolidated daily snapshot."""
+    snapshot_file = Path(snapshot_file)
+    if not snapshot_file.exists():
+        return None
+
+    try:
+        rows = pd.read_parquet(
+            snapshot_file,
+            columns=["Market", "Symbol", "Date"],
+        )
+    except (OSError, ValueError, KeyError):
+        return None
+
+    if rows.empty:
+        return None
+
+    market = normalize_market(market)
+    rows = rows[
+        rows["Market"].astype(str).str.strip().str.upper().eq(market)
+    ].copy()
+    if rows.empty:
+        return None
+
+    rows["Symbol"] = rows["Symbol"].astype(str).str.strip().str.upper()
+    rows = rows[rows["Symbol"].ne(NIFTY_DATA_SYMBOL)]
+    rows["Date"] = pd.to_datetime(rows["Date"], errors="coerce").dt.normalize()
+    rows = rows.dropna(subset=["Date", "Symbol"])
+    if rows.empty:
+        return None
+
+    # One row is expected per stock. Keeping the newest duplicate makes the
+    # snapshot resilient to a partially migrated or manually combined file.
+    rows = (
+        rows.sort_values("Date")
+        .drop_duplicates("Symbol", keep="last")
+        .reset_index(drop=True)
+    )
+    latest_date = rows["Date"].max()
+    stocks_on_latest_date = int(rows["Date"].eq(latest_date).sum())
+    return {
+        "Latest Date": PandasTimestamp(latest_date).normalize(),
+        "Stocks On Latest Date": stocks_on_latest_date,
+        "Current Stock Files": stocks_on_latest_date,
+        "Stock Files": int(rows["Symbol"].nunique()),
+    }
+
+
+def data_availability_summary(
+    directory,
+    *,
+    market=None,
+    snapshot_file=LATEST_VALUES_FILE,
+):
     """Return the latest date and stock-file coverage for that date."""
+    if market is not None:
+        snapshot_summary = _data_availability_from_snapshot(
+            snapshot_file,
+            market,
+        )
+        if snapshot_summary is not None:
+            return snapshot_summary
+
     if not directory or not directory.exists():
         return {
             "Latest Date": None,

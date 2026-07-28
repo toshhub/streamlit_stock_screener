@@ -117,6 +117,53 @@ class IncrementalDownloaderTests(unittest.TestCase):
         self.assertEqual(summary["Current Stock Files"], 2)
         self.assertEqual(summary["Stock Files"], 3)
 
+    def test_data_availability_uses_consolidated_snapshot_without_scanning_stocks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            snapshot_file = directory / "latest_stock_values.parquet"
+            pd.DataFrame([
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "AAA",
+                    "Date": pd.Timestamp("2026-07-21"),
+                },
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "BBB",
+                    "Date": pd.Timestamp("2026-07-21"),
+                },
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "STALE",
+                    "Date": pd.Timestamp("2026-07-18"),
+                },
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "NIFTY",
+                    "Date": pd.Timestamp("2026-07-21"),
+                },
+                {
+                    "Market": MARKET_US,
+                    "Symbol": "MSFT",
+                    "Date": pd.Timestamp("2026-07-21"),
+                },
+            ]).to_parquet(snapshot_file, index=False)
+
+            with patch(
+                "downloader.list_symbol_paths",
+                side_effect=AssertionError("stock files should not be scanned"),
+            ):
+                summary = data_availability_summary(
+                    directory,
+                    market=MARKET_INDIA,
+                    snapshot_file=snapshot_file,
+                )
+
+        self.assertEqual(summary["Latest Date"], pd.Timestamp("2026-07-21"))
+        self.assertEqual(summary["Stocks On Latest Date"], 2)
+        self.assertEqual(summary["Current Stock Files"], 2)
+        self.assertEqual(summary["Stock Files"], 3)
+
     def test_daily_start_skips_weekend_dates(self):
         self.assertEqual(
             _date_after_latest(pd.Timestamp("2026-07-17"), "1d"),

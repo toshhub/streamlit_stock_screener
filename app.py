@@ -2064,7 +2064,7 @@ def render_data_availability_status(market=MARKET_INDIA):
     """Render the latest available data date and its stock coverage."""
     market = normalize_market(market)
     directory = timeframe_config("DAY", market)["target_dir"]
-    availability = data_availability_summary(directory)
+    availability = data_availability_summary(directory, market=market)
     last_date = availability["Latest Date"]
     if last_date:
         date_formatted = last_date.strftime("%d-%m-%Y")
@@ -4172,7 +4172,10 @@ def render_screener_workspace():
             if active_name and active_name in favorite_filter_sets
             else CUSTOM_FILTER_NAME
         )
-        latest_summary = data_availability_summary(target_dir)
+        latest_summary = data_availability_summary(
+            target_dir,
+            market=current_market,
+        )
         filter_condition_lines = [
             f"{FILTER_TYPE_LABELS.get(item['type'], item['type'])}: "
             + ", ".join(f"{key}={value}" for key, value in item.get("params", {}).items())
