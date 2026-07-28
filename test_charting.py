@@ -651,6 +651,13 @@ class InteractiveChartTests(unittest.TestCase):
         )
         self.assertIn("triggerStreamlitAction", result)
         self.assertIn("source: 'alert-table-action'", result)
+        self.assertIn("--component-nav-origin: 3.65rem", result)
+        self.assertIn(
+            "var(--component-nav-origin) + 3.15rem",
+            result,
+        )
+        self.assertNotIn("__NAV_ORIGIN_", result)
+        self.assertIn("source: 'alert-table-chart'", result)
         self.assertNotIn("window.parent.document.querySelector", result)
         self.assertNotIn('target="_top"', result)
         self.assertIn("streamlit:setFrameHeight", result)
@@ -672,6 +679,9 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("streamlit:componentReady", component_html)
         self.assertIn("streamlit:setComponentValue", component_html)
         self.assertIn('message.source === "alert-table-action"', component_html)
+        self.assertIn('message.source === "alert-table-chart"', component_html)
+        self.assertIn('message.action === "reveal"', component_html)
+        self.assertIn("window.frameElement.scrollIntoView", component_html)
         self.assertIn("actionKey", component_html)
         self.assertIn("<base href=", component_html)
         self.assertIn("document.referrer", component_html)

@@ -2648,6 +2648,11 @@ def results_hover_table_html(
         errors="ignore",
     )
     chart_paths = df.get("ChartPath")
+    nav_origins = (
+        ("3.65rem", "3.45rem", "3.05rem")
+        if row_actions
+        else ("0rem", "0rem", "0rem")
+    )
 
     styles = """
     <style>
@@ -2658,7 +2663,10 @@ def results_hover_table_html(
         --brand-dark: #10536a;
         --brand-soft: #e9f6f8;
         --border: #dce6ee;
-        --fixed-app-nav-clearance: calc(3.15rem + 0.96rem + 2px + 0.8rem);
+        --component-nav-origin: __NAV_ORIGIN_DESKTOP__;
+        --fixed-app-nav-clearance: calc(
+          var(--component-nav-origin) + 3.15rem + 0.96rem + 2px + 0.8rem
+        );
       }
       * { box-sizing: border-box; }
       body {
@@ -3142,7 +3150,10 @@ def results_hover_table_html(
       /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
         :root {
-          --fixed-app-nav-clearance: calc(2.8rem + 0.76rem + 2px + 0.7rem);
+          --component-nav-origin: __NAV_ORIGIN_PORTRAIT__;
+          --fixed-app-nav-clearance: calc(
+            var(--component-nav-origin) + 2.8rem + 0.76rem + 2px + 0.7rem
+          );
         }
         body { padding: 0; }
         .results-table-shell { border-radius: 10px; }
@@ -3192,7 +3203,10 @@ def results_hover_table_html(
       /* Mobile landscape */
       @media screen and (orientation: landscape) and (max-height: 600px) {
         :root {
-          --fixed-app-nav-clearance: calc(2.35rem + 0.56rem + 2px + 0.55rem);
+          --component-nav-origin: __NAV_ORIGIN_LANDSCAPE__;
+          --fixed-app-nav-clearance: calc(
+            var(--component-nav-origin) + 2.35rem + 0.56rem + 2px + 0.55rem
+          );
         }
         .hover-results-table { font-size: 12px; }
         .hover-results-table th, .hover-results-table td { padding: 5px 6px; }
@@ -3295,6 +3309,13 @@ def results_hover_table_html(
 
         function revealInteractiveHeader(panel, behavior) {
           if (!panel) return;
+          try {
+            window.parent.postMessage({
+              source: 'alert-table-chart',
+              action: 'reveal',
+              behavior: behavior || 'auto'
+            }, '*');
+          } catch (error) {}
           try {
             if (window.frameElement) {
               window.frameElement.scrollIntoView({
@@ -3583,6 +3604,12 @@ def results_hover_table_html(
       })();
     </script>
     """
+    styles = (
+        styles
+        .replace("__NAV_ORIGIN_DESKTOP__", nav_origins[0])
+        .replace("__NAV_ORIGIN_PORTRAIT__", nav_origins[1])
+        .replace("__NAV_ORIGIN_LANDSCAPE__", nav_origins[2])
+    )
 
     def display_column_label(column):
         label = str(column)

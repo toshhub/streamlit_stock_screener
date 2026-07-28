@@ -105,6 +105,23 @@
         }
 
         if (
+          message.source === "alert-table-chart"
+          && message.action === "reveal"
+          && event.source === frame.contentWindow
+        ) {
+          try {
+            if (window.frameElement) {
+              window.frameElement.scrollIntoView({
+                behavior: message.behavior || "auto",
+                block: "start",
+                inline: "nearest"
+              });
+            }
+          } catch (error) {}
+          return;
+        }
+
+        if (
           message.isStreamlitMessage === true
           && message.type === "streamlit:setFrameHeight"
           && event.source === frame.contentWindow
