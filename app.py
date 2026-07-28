@@ -5222,12 +5222,10 @@ with tab6:
                     })
                 table_rows.append({
                     "Symbol": symbol,
-                    "Market": market_label(market),
-                    "Condition": direction,
-                    "Prices": (
-                        f"Target "
+                    "Alert": (
+                        f"{market_label(market)} · {direction} · Target "
                         f"{alert_number_for_table(alert.get('target_price'))} / "
-                        f"Reference "
+                        f"Ref "
                         f"{alert_number_for_table(alert.get('reference_price'))}"
                     ),
                     "Dates": (
