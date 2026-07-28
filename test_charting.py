@@ -130,12 +130,22 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("title: label", result)
         self.assertIn("item.label + ' ' + formatPrice(value)", result)
         self.assertIn("Gain versus previous candle close", result)
+        self.assertIn('class="chart-title__identity"', result)
+        self.assertIn('class="chart-legend" id="chart-legend"', result)
+        self.assertLess(
+            result.index('class="chart-title__identity"'),
+            result.index('class="chart-legend" id="chart-legend"'),
+        )
+        self.assertIn(
+            "renderLegend(latestCandle.time, latestCandle, latestCandleIndex, null)",
+            result,
+        )
         self.assertIn("gainFromPreviousCandle", result)
         self.assertIn("candleAtOrBeforeCursor", result)
         self.assertIn("Math.floor(logical)", result)
         self.assertIn('class="legend-gain ', result)
         self.assertIn("@media (max-width: 640px)", result)
-        self.assertIn("grid-template-rows: auto auto minmax(280px, 1fr) auto", result)
+        self.assertIn("grid-template-rows: auto minmax(280px, 1fr) auto", result)
         self.assertIn("padding: 0;", result)
         self.assertIn("Growth &amp; valuation snapshot", result)
         self.assertIn("Source: Screener.in", result)

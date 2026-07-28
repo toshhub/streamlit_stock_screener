@@ -887,7 +887,7 @@ def interactive_stock_chart_html(
           position: relative;
           overflow: hidden;
           display: grid;
-          grid-template-rows: auto auto minmax(300px, 1fr) auto;
+          grid-template-rows: auto minmax(300px, 1fr) auto;
           height: 100vh;
           min-height: 0;
           padding: 8px;
@@ -904,6 +904,10 @@ def interactive_stock_chart_html(
           background: linear-gradient(135deg, #f7fafc 0%, #eef6f8 100%);
         }}
         .chart-title {{
+          display: grid;
+          grid-template-columns: minmax(170px, auto) minmax(280px, 1fr);
+          align-items: center;
+          gap: 14px;
           min-width: 0;
           padding: 9px 12px;
           border: 1px solid #cfe0e8;
@@ -911,6 +915,7 @@ def interactive_stock_chart_html(
           background: linear-gradient(135deg, #ffffff 0%, #edf8f9 100%);
           box-shadow: 0 2px 8px rgba(16, 36, 62, 0.05);
         }}
+        .chart-title__identity {{ min-width: 0; }}
         .chart-title.valuation-favorable {{
           border-color: #78c68f;
           background: linear-gradient(135deg, #f5fff7 0%, #dcf7e4 100%);
@@ -1083,20 +1088,20 @@ def interactive_stock_chart_html(
         .chart-legend {{
           display: flex;
           align-items: center;
+          align-content: center;
+          flex-wrap: wrap;
           gap: 10px;
-          min-height: 36px;
-          padding: 7px 14px;
-          overflow-x: auto;
-          border: 1px solid var(--border);
-          border-bottom: 0;
-          background: #f9fbfc;
+          min-height: 58px;
+          padding: 8px 10px;
+          overflow: hidden;
+          border: 1px solid rgba(120, 166, 151, 0.52);
+          border-radius: 9px;
+          background: rgba(255, 255, 255, 0.72);
           color: #334a63;
           font-size: 11px;
           font-variant-numeric: tabular-nums;
-          scrollbar-width: none;
-          white-space: nowrap;
+          line-height: 1.25;
         }}
-        .chart-legend::-webkit-scrollbar {{ display: none; }}
         .legend-date {{ color: var(--muted); font-weight: 750; }}
         .legend-ohlc b {{ margin-left: 4px; color: var(--ink); }}
         .legend-gain {{ font-weight: 750; }}
@@ -1444,7 +1449,7 @@ def interactive_stock_chart_html(
         }}
         @media (max-width: 640px) {{
           .chart-shell {{
-            grid-template-rows: auto auto minmax(280px, 1fr) auto;
+            grid-template-rows: auto minmax(280px, 1fr) auto;
             padding: 0;
           }}
           .chart-header {{
@@ -1452,7 +1457,11 @@ def interactive_stock_chart_html(
             gap: 6px;
             padding: 6px;
           }}
-          .chart-title {{ padding: 8px 9px; }}
+          .chart-title {{
+            grid-template-columns: 1fr;
+            gap: 7px;
+            padding: 8px 9px;
+          }}
           .chart-title strong {{ font-size: 15px; }}
           .chart-navigation-section {{ grid-column: 1; }}
           .chart-match-navigation {{ width: 100%; }}
@@ -1476,7 +1485,7 @@ def interactive_stock_chart_html(
             padding-inline: 4px;
           }}
           .chart-legend {{
-            min-height: 34px;
+            min-height: 44px;
             padding: 6px 8px;
             font-size: 10px;
           }}
@@ -1514,7 +1523,7 @@ def interactive_stock_chart_html(
           .chart-shell {{
             height:100dvh;
             padding:0;
-            grid-template-rows:auto auto minmax(0,1fr);
+            grid-template-rows:auto minmax(0,1fr);
           }}
           .chart-header {{
             grid-template-columns:minmax(190px,1fr) auto auto;
@@ -1522,7 +1531,12 @@ def interactive_stock_chart_html(
             padding:3px;
             border-radius:0;
           }}
-          .chart-title {{ padding:4px 7px; border-radius:7px; }}
+          .chart-title {{
+            grid-template-columns:minmax(120px,auto) minmax(220px,1fr);
+            gap:6px;
+            padding:4px 7px;
+            border-radius:7px;
+          }}
           .chart-title strong {{ font-size:13px; }}
           .chart-title .chart-section-label,
           .chart-subtitle {{ display:none; }}
@@ -1540,7 +1554,7 @@ def interactive_stock_chart_html(
           .chart-match-nav, .chart-close {{ width:25px; height:25px; }}
           .chart-toolbar {{ gap:4px; }}
           .chart-action {{ height:25px; min-width:28px; padding-inline:6px; font-size:9px; }}
-          .chart-legend {{ min-height:24px; padding:3px 8px; font-size:9px; }}
+          .chart-legend {{ min-height:34px; padding:3px 6px; gap:6px; font-size:9px; }}
           #chart {{ min-height:0; }}
           .chart-footer {{ display:none; }}
           .fundamentals-toggle {{ top:42%; left:0; min-height:78px; padding:7px 5px; }}
@@ -1560,14 +1574,17 @@ def interactive_stock_chart_html(
       <main class="chart-shell">
         <header class="chart-header">
           <div class="chart-title{valuation_state_class}">
-            <span class="chart-section-label">Selected stock</span>
-            <div class="chart-title__row">
-              <strong>{safe_symbol}</strong>
-              {pe_badge_html}
-              {valuation_state_html}
-              {screener_chart_link_html}
+            <div class="chart-title__identity">
+              <span class="chart-section-label">Selected stock</span>
+              <div class="chart-title__row">
+                <strong>{safe_symbol}</strong>
+                {pe_badge_html}
+                {valuation_state_html}
+                {screener_chart_link_html}
+              </div>
+              <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles loaded on demand</span>
             </div>
-            <span class="chart-subtitle">Interactive candlestick chart · {payload["pointCount"]:,} candles loaded on demand</span>
+            <div class="chart-legend" id="chart-legend">Loading latest OHLC and MA values…</div>
           </div>
           {match_navigation_html}
           <div class="chart-toolbar" aria-label="Chart controls">
@@ -1582,7 +1599,6 @@ def interactive_stock_chart_html(
             </section>
           </div>
         </header>
-        <div class="chart-legend" id="chart-legend">Move or tap the crosshair to inspect OHLC, gain vs previous candle, and MA values.</div>
         <section id="chart" aria-label="{safe_symbol} interactive stock chart">
           {price_alert_html}
           <div class="chart-loading" id="chart-loading">Loading interactive chart…</div>
@@ -2207,6 +2223,11 @@ def interactive_stock_chart_html(
                 item.label + ' ' + formatPrice(value) + '</span>';
             }});
             legend.innerHTML = content;
+          }}
+          const latestCandleIndex = payload.candles.length - 1;
+          if (latestCandleIndex >= 0) {{
+            const latestCandle = payload.candles[latestCandleIndex];
+            renderLegend(latestCandle.time, latestCandle, latestCandleIndex, null);
           }}
 
           function updateCursorPriceAlert(param) {{
