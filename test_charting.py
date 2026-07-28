@@ -147,7 +147,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('class="legend-gain ', result)
 
         self.assertIn("@media (max-width: 640px)", result)
-        self.assertIn("grid-template-rows: auto minmax(280px, 1fr) auto", result)
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto", result)
         self.assertIn("padding: 0;", result)
         self.assertIn("Growth &amp; valuation snapshot", result)
         self.assertIn("Source: Screener.in", result)
@@ -181,6 +181,34 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("Median Market Cap / Sales", result)
         self.assertIn("valuation-favorable", result)
         self.assertIn("Below historical median", result)
+
+    def test_mobile_interactive_chart_keeps_time_axis_inside_viewport(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(
+                json.dumps(self._price_rows(300)),
+                encoding="utf-8",
+            )
+            result = interactive_stock_chart_html("TEST", path)
+
+        self.assertIn(
+            "grid-template-rows: auto minmax(0, 1fr) auto",
+            result,
+        )
+        self.assertIn("#chart { min-height: 0; }", result)
+        self.assertIn("function minimumChartHeight()", result)
+        self.assertIn(
+            'window.matchMedia("(max-width: 640px)").matches ? 120 : 280',
+            result,
+        )
+        self.assertIn(
+            "height: Math.max(minimumChartHeight(), container.clientHeight)",
+            result,
+        )
+        self.assertIn(
+            "height: Math.max(minimumChartHeight(), Math.floor(rect.height))",
+            result,
+        )
 
     def test_interactive_chart_can_add_stock_to_a_watchlist(self):
         with tempfile.TemporaryDirectory() as temp_dir:

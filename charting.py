@@ -1546,7 +1546,7 @@ def interactive_stock_chart_html(
         }}
         @media (max-width: 640px) {{
           .chart-shell {{
-            grid-template-rows: auto minmax(280px, 1fr) auto;
+            grid-template-rows: auto minmax(0, 1fr) auto;
             padding: 0;
           }}
           .chart-header {{
@@ -1594,7 +1594,7 @@ def interactive_stock_chart_html(
             padding: 6px 8px;
             font-size: 10px;
           }}
-          #chart {{ min-height: 280px; }}
+          #chart {{ min-height: 0; }}
           .chart-footer {{
             align-items: flex-start;
             flex-direction: column;
@@ -2136,11 +2136,15 @@ def interactive_stock_chart_html(
             return Math.max(0.01, Math.min(0.5, usableWidth / (candleCount + 12)));
           }}
 
+          function minimumChartHeight() {{
+            return window.matchMedia("(max-width: 640px)").matches ? 120 : 280;
+          }}
+
           const initialChartWidth = Math.max(240, container.clientWidth);
           const colors = ["#2563eb", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5", "#15803d"];
           const chart = LightweightCharts.createChart(container, {{
             width: initialChartWidth,
-            height: Math.max(280, container.clientHeight),
+            height: Math.max(minimumChartHeight(), container.clientHeight),
             layout: {{
               background: {{ type: LightweightCharts.ColorType.Solid, color: "#ffffff" }},
               textColor: "#52667a",
@@ -2474,7 +2478,7 @@ def interactive_stock_chart_html(
             const chartWidth = Math.max(240, Math.floor(rect.width));
             chart.applyOptions({{
               width: chartWidth,
-              height: Math.max(280, Math.floor(rect.height)),
+              height: Math.max(minimumChartHeight(), Math.floor(rect.height)),
               timeScale: {{
                 minBarSpacing: minimumBarSpacingForWidth(chartWidth),
               }},
