@@ -1307,7 +1307,12 @@ def interactive_stock_chart_html(
         .valuation-panel__header {{ display:flex; justify-content:space-between; gap:10px;
           padding-bottom:10px; border-bottom:1px solid #e5e7eb; }}
         .valuation-panel h2 {{ margin:1px 0 0; color:#17334c; font-size:15px; }}
-        .valuation-drawer.is-open .valuation-toggle {{ opacity:0; pointer-events:none; }}
+        .valuation-drawer.is-open .valuation-toggle {{
+          border-color:#7c72d4;
+          background:linear-gradient(180deg,#7668e8,#4f46b8);
+          opacity:1;
+          pointer-events:auto;
+        }}
         .valuation-drawer.is-open .valuation-scrim {{ opacity:1; pointer-events:auto; }}
         .valuation-drawer.is-open .valuation-panel {{ pointer-events:auto; transform:translateX(0); }}
         .valuation-chart-wrap {{ min-height:300px; margin-top:12px; }}
@@ -1416,9 +1421,11 @@ def interactive_stock_chart_html(
           transition: transform 0.24s ease;
         }}
         .fundamentals-drawer.is-open .fundamentals-toggle {{
-          opacity: 0;
-          pointer-events: none;
-          transform: translateY(-50%) translateX(-12px);
+          border-color: #69a7b8;
+          background: linear-gradient(180deg, #168297, #10536a);
+          opacity: 1;
+          pointer-events: auto;
+          transform: translateY(-50%);
         }}
         .fundamentals-drawer.is-open .fundamentals-scrim {{
           opacity: 1;
@@ -1606,20 +1613,27 @@ def interactive_stock_chart_html(
           .valuation-toggle {{ left: 0; top: 72%; }}
           .fundamentals-scrim {{ inset: 0; border-radius: 0; }}
           .fundamentals-panel {{
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: min(360px, 94%);
-            border-radius: 0 12px 12px 0;
+            top: 8px;
+            left: 34px;
+            bottom: 8px;
+            width: calc(100% - 42px);
+            border-radius: 12px;
           }}
           .valuation-scrim {{ inset:0; border-radius:0; }}
-          .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
+          .valuation-panel {{
+            inset:8px 8px 8px 34px;
+            width:auto;
+            border-radius:12px;
+          }}
           .valuation-controls {{ align-items:stretch; }}
           .valuation-metrics {{ width:100%; }}
           .valuation-metrics button {{ flex:1; }}
           .valuation-ranges {{ width:100%; }}
           .valuation-ranges button {{ flex:1; padding-inline:6px; }}
-          .valuation-chart-wrap, #valuation-chart {{ min-height:260px; height:calc(100dvh - 245px); }}
+          .valuation-chart-wrap, #valuation-chart {{
+            min-height:240px;
+            height:clamp(240px,44dvh,420px);
+          }}
           .growth-grid {{ grid-template-columns: 1fr; }}
           .growth-card {{ padding: 8px 9px; }}
         }}
@@ -1992,12 +2006,14 @@ def interactive_stock_chart_html(
           }}
           function setValuationOpen(open) {{
             if (!valuationDrawer || !valuationPanel) return;
+            if (open && fundamentalsDrawer) setFundamentalsOpen(false);
             valuationDrawer.classList.toggle("is-open", open);
             valuationPanel.toggleAttribute("inert", !open);
             valuationPanel.setAttribute("aria-hidden", open ? "false" : "true");
             if (open) requestAnimationFrame(drawValuationChart);
           }}
-          if (valuationToggle) valuationToggle.addEventListener("click", () => setValuationOpen(true));
+          if (valuationToggle) valuationToggle.addEventListener("click", () =>
+            setValuationOpen(!valuationDrawer.classList.contains("is-open")));
           if (valuationClose) valuationClose.addEventListener("click", () => setValuationOpen(false));
           if (valuationScrim) valuationScrim.addEventListener("click", () => setValuationOpen(false));
           window.addEventListener("resize", () => {{
@@ -2027,6 +2043,7 @@ def interactive_stock_chart_html(
 
           function setFundamentalsOpen(isOpen) {{
             if (!fundamentalsDrawer || !fundamentalsToggle || !fundamentalsPanel) return;
+            if (isOpen && valuationDrawer) setValuationOpen(false);
             fundamentalsDrawer.classList.toggle("is-open", isOpen);
             fundamentalsToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
             fundamentalsPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
@@ -2040,7 +2057,9 @@ def interactive_stock_chart_html(
           }}
           if (fundamentalsToggle) {{
             fundamentalsToggle.addEventListener("click", function() {{
-              setFundamentalsOpen(true);
+              setFundamentalsOpen(
+                !fundamentalsDrawer.classList.contains("is-open")
+              );
             }});
           }}
           if (fundamentalsClose) {{
@@ -3024,6 +3043,17 @@ def results_hover_table_html(
         border: 0;
         border-radius: 0;
         box-shadow: none;
+      }
+      .chart-panel.interactive-mode::before {
+        position: fixed;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: var(--fixed-app-nav-clearance);
+        background: #f5f8fb;
+        box-shadow: 0 -2px 0 #f5f8fb;
+        content: "";
+        pointer-events: none;
       }
       .chart-panel img { width: 100%; height: auto; display: block; max-height: 50vh; object-fit: contain; }
       .chart-panel .panel-placeholder {

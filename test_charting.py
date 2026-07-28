@@ -157,9 +157,27 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('aria-hidden="true" inert', result)
         self.assertIn('class="fundamentals-panel"', result)
         self.assertIn("transform: translateX(calc(-100% - 18px))", result)
-        self.assertIn("border-radius: 0 12px 12px 0", result)
-        self.assertIn("setFundamentalsOpen(true)", result)
+        self.assertIn("width: calc(100% - 42px)", result)
+        self.assertIn("border-radius: 12px", result)
         self.assertIn("setFundamentalsOpen(false)", result)
+        self.assertIn(
+            '!fundamentalsDrawer.classList.contains("is-open")',
+            result,
+        )
+        self.assertIn(
+            '!valuationDrawer.classList.contains("is-open")',
+            result,
+        )
+        self.assertIn(
+            "if (isOpen && valuationDrawer) setValuationOpen(false)",
+            result,
+        )
+        self.assertIn(
+            "if (open && fundamentalsDrawer) setFundamentalsOpen(false)",
+            result,
+        )
+        self.assertIn("left: 34px", result)
+        self.assertIn("height:clamp(240px,44dvh,420px)", result)
         self.assertIn('id="price-alert-at-cursor"', result)
         self.assertIn('aria-label="Add price alert at cursor"', result)
         self.assertIn('data-symbol="TEST"', result)
@@ -613,6 +631,8 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("position: sticky", result)
         self.assertIn("position: fixed", result)
+        self.assertIn(".chart-panel.interactive-mode::before", result)
+        self.assertIn("height: var(--fixed-app-nav-clearance)", result)
         self.assertIn("--fixed-app-nav-clearance:", result)
         self.assertIn("top: var(--fixed-app-nav-clearance)", result)
         self.assertIn(
