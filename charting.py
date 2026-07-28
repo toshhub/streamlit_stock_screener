@@ -2125,9 +2125,9 @@ def interactive_stock_chart_html(
               const candleTimes = payload.candles.map(function(candle) {{
                 return String(candle.time);
               }});
-              alertMarkerTime = candleTimes.find(function(time) {{
-                return time >= requestedAlertDate;
-              }}) || candleTimes[candleTimes.length - 1];
+              alertMarkerTime = [...candleTimes].reverse().find(function(time) {{
+                return time <= requestedAlertDate;
+              }}) || "";
             }}
           }}
           if (tradeMarkers.length) {{

@@ -272,7 +272,9 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('position: "belowBar"', result)
         self.assertIn('shape: "arrowUp"', result)
         self.assertIn('text: ""', result)
-        self.assertIn("time >= requestedAlertDate", result)
+        self.assertIn("[...candleTimes].reverse().find", result)
+        self.assertIn("time <= requestedAlertDate", result)
+        self.assertNotIn("time >= requestedAlertDate", result)
 
     def test_alert_table_stock_name_opens_embedded_chart_with_marker_params(self):
         result = results_hover_table_html(
