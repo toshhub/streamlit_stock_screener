@@ -35,7 +35,7 @@ from charting import (
 )
 
 if (
-    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 3
+    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 4
     or "row_actions" not in inspect.signature(
         sortable_results_table
     ).parameters
@@ -5252,12 +5252,27 @@ with tab6:
             empty_message,
             *,
             acknowledge=False,
+            section_key,
         ):
             st.subheader(title)
             if not table_alerts:
                 st.info(empty_message)
                 return
-            sortable_results_table(
+            action_map = {}
+            for alert in table_alerts:
+                alert_id = str(alert.get("id", ""))
+                action_map[
+                    alert_action_button_key("remove", alert_id)
+                ] = ("remove", alert_id)
+                if acknowledge:
+                    action_map[
+                        alert_action_button_key(
+                            "acknowledge",
+                            alert_id,
+                        )
+                    ] = ("acknowledge", alert_id)
+
+            action_event = sortable_results_table(
                 alert_table_dataframe(
                     table_alerts,
                     acknowledge=acknowledge,
@@ -5269,37 +5284,24 @@ with tab6:
                 count_label=(
                     "alert" if len(table_alerts) == 1 else "alerts"
                 ),
+                component_key=f"alerts_table_{section_key}",
             )
-
-        new_alert_ids = {
-            str(alert.get("id", ""))
-            for alert in new_alerts
-        }
-        st.markdown(
-            "<style>.st-key-alert_action_bridge {"
-            "display: none !important;"
-            "}</style>",
-            unsafe_allow_html=True,
-        )
-        with st.container(key="alert_action_bridge"):
-            for alert in sorted_alerts:
-                alert_id = str(alert.get("id", ""))
-                st.button(
-                    "Remove alert",
-                    key=alert_action_button_key("remove", alert_id),
-                    on_click=run_alert_row_action,
-                    args=("remove", alert_id),
-                )
-                if alert_id in new_alert_ids:
-                    st.button(
-                        "Acknowledge alert",
-                        key=alert_action_button_key(
-                            "acknowledge",
-                            alert_id,
-                        ),
-                        on_click=run_alert_row_action,
-                        args=("acknowledge", alert_id),
-                    )
+            if not isinstance(action_event, dict):
+                return
+            nonce = str(action_event.get("nonce", ""))
+            action_key = str(action_event.get("actionKey", ""))
+            handled_nonce_key = (
+                f"_handled_alert_table_action_{section_key}"
+            )
+            if (
+                not nonce
+                or nonce == st.session_state.get(handled_nonce_key)
+                or action_key not in action_map
+            ):
+                return
+            st.session_state[handled_nonce_key] = nonce
+            run_alert_row_action(*action_map[action_key])
+            st.rerun()
 
         st.session_state.pop("_selected_alert_chart", None)
         st.session_state.pop("_pending_alert_removal", None)
@@ -5307,17 +5309,20 @@ with tab6:
             active_alerts,
             "Active Alerts",
             "No active alerts.",
+            section_key="active",
         )
         render_results_style_alert_table(
             new_alerts,
             "New Alerts",
             "No new alerts.",
             acknowledge=True,
+            section_key="new",
         )
         render_results_style_alert_table(
             old_alerts,
             "Old Alerts",
             "No old alerts.",
+            section_key="old",
         )
         st.stop()
 

@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body, #root, #table-frame {
+      width: 100%;
+      min-height: 0;
+      margin: 0;
+      border: 0;
+      padding: 0;
+      background: transparent;
+    }
+    body { overflow: hidden; }
+    #table-frame { display: block; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <iframe id="table-frame" title="Alerts table"></iframe>
+  </div>
+  <script>
+    (function () {
+      const frame = document.getElementById("table-frame");
+      let lastHtml = "";
+      let defaultHeight = 700;
+
+      function escapedAttribute(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function tableDocument(tableHtml) {
+        let appUrl = "/";
+        try {
+          appUrl = new URL(
+            document.referrer || "/",
+            window.location.href
+          ).href;
+        } catch (error) {}
+        const baseTag = '<base href="' + escapedAttribute(appUrl) + '">';
+        if (/<head(?:\s[^>]*)?>/i.test(tableHtml)) {
+          return tableHtml.replace(
+            /<head(?:\s[^>]*)?>/i,
+            function (headTag) {
+              return headTag + baseTag;
+            }
+          );
+        }
+        return baseTag + tableHtml;
+      }
+
+      function sendToStreamlit(type, extra) {
+        window.parent.postMessage(Object.assign({
+          isStreamlitMessage: true,
+          type: type
+        }, extra || {}), "*");
+      }
+
+      function setHeight(height) {
+        const safeHeight = Math.max(
+          220,
+          Math.round(Number(height) || defaultHeight)
+        );
+        frame.style.height = safeHeight + "px";
+        sendToStreamlit("streamlit:setFrameHeight", {height: safeHeight});
+      }
+
+      function emitAction(actionKey) {
+        sendToStreamlit("streamlit:setComponentValue", {
+          value: {
+            actionKey: String(actionKey || ""),
+            nonce: Date.now() + "-" + Math.random().toString(16).slice(2)
+          },
+          dataType: "json"
+        });
+      }
+
+      window.addEventListener("message", function (event) {
+        const message = event && event.data;
+        if (!message) return;
+
+        if (message.type === "streamlit:render") {
+          const args = message.args || {};
+          defaultHeight = Math.max(
+            220,
+            Math.round(Number(args.default_height) || 700)
+          );
+          const tableHtml = String(args.table_html || "");
+          if (tableHtml !== lastHtml) {
+            lastHtml = tableHtml;
+            frame.srcdoc = tableDocument(tableHtml);
+          }
+          setHeight(defaultHeight);
+          return;
+        }
+
+        if (message.source === "alert-table-action") {
+          emitAction(message.actionKey);
+          return;
+        }
+
+        if (
+          message.isStreamlitMessage === true
+          && message.type === "streamlit:setFrameHeight"
+          && event.source === frame.contentWindow
+        ) {
+          setHeight(message.height);
+        }
+      });
+
+      sendToStreamlit("streamlit:componentReady", {apiVersion: 1});
+      setHeight(defaultHeight);
+    })();
+  </script>
+</body>
+</html>

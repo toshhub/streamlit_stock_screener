@@ -206,6 +206,14 @@ class AlertTabPerformanceTests(unittest.TestCase):
         self.assertNotIn("refresh_alerts_when_tab_is_clicked()", app_source)
         self.assertNotIn("alerts_refresh_trigger", app_source)
 
+    def test_inline_alert_actions_are_consumed_in_the_alerts_tab(self):
+        app_source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertIn("action_event = sortable_results_table(", app_source)
+        self.assertIn("run_alert_row_action(*action_map[action_key])", app_source)
+        self.assertIn('st.rerun()', app_source)
+        self.assertNotIn('key="alert_action_bridge"', app_source)
+
 
 if __name__ == "__main__":
     unittest.main()

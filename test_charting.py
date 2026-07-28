@@ -615,6 +615,8 @@ class InteractiveChartTests(unittest.TestCase):
             result,
         )
         self.assertIn("triggerStreamlitAction", result)
+        self.assertIn("source: 'alert-table-action'", result)
+        self.assertNotIn("window.parent.document.querySelector", result)
         self.assertNotIn('target="_top"', result)
         self.assertIn("streamlit:setFrameHeight", result)
         self.assertIn("data-default-height='700'", result)
@@ -624,6 +626,20 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("<th>Remove Button Key</th>", result)
         self.assertIn("alert_date=2026-07-28", result)
         self.assertIn("alert_marker_price=100", result)
+
+    def test_alert_table_component_forwards_actions_to_streamlit(self):
+        component_html = (
+            Path(__file__).parent
+            / "alert_table_component"
+            / "index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("streamlit:componentReady", component_html)
+        self.assertIn("streamlit:setComponentValue", component_html)
+        self.assertIn('message.source === "alert-table-action"', component_html)
+        self.assertIn("actionKey", component_html)
+        self.assertIn("<base href=", component_html)
+        self.assertIn("document.referrer", component_html)
 
 
 class InteractiveChartRouteTests(unittest.TestCase):

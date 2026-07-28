@@ -25,7 +25,7 @@ from price_alerts import create_price_alert
 from screener import required_ma_periods
 
 
-RESULTS_TABLE_RENDERER_VERSION = 3
+RESULTS_TABLE_RENDERER_VERSION = 4
 
 
 MA_COLORS = [
@@ -43,6 +43,11 @@ INTERACTIVE_CHART_DEFAULT_MAS = [50, 200]
 _CURSOR_ALERT_COMPONENT = components.declare_component(
     "cursor_alert_chart",
     path=str(Path(__file__).parent / "cursor_alert_component"),
+)
+
+_ALERT_TABLE_COMPONENT = components.declare_component(
+    "alert_table_actions",
+    path=str(Path(__file__).parent / "alert_table_component"),
 )
 
 
@@ -3318,10 +3323,10 @@ def results_hover_table_html(
         function triggerStreamlitAction(buttonKey) {
           if (!buttonKey) return false;
           try {
-            var selector = '.st-key-' + buttonKey + ' button';
-            var streamlitButton = window.parent.document.querySelector(selector);
-            if (!streamlitButton) return false;
-            streamlitButton.click();
+            window.parent.postMessage({
+              source: 'alert-table-action',
+              actionKey: String(buttonKey)
+            }, '*');
             return true;
           } catch (error) {
             return false;
@@ -3764,18 +3769,28 @@ def sortable_results_table(
     table_title="Screening Results",
     row_actions=False,
     count_label=None,
+    component_key=None,
 ):
+    table_html = results_hover_table_html(
+        df,
+        interactive_market=interactive_market,
+        interactive_ma_periods=interactive_ma_periods,
+        interactive_symbol_click=interactive_symbol_click,
+        table_title=table_title,
+        row_actions=row_actions,
+        count_label=count_label,
+        component_height=height,
+    )
+    if row_actions:
+        return _ALERT_TABLE_COMPONENT(
+            table_html=table_html,
+            default_height=height,
+            key=component_key,
+            default=None,
+        )
     components.html(
-        results_hover_table_html(
-            df,
-            interactive_market=interactive_market,
-            interactive_ma_periods=interactive_ma_periods,
-            interactive_symbol_click=interactive_symbol_click,
-            table_title=table_title,
-            row_actions=row_actions,
-            count_label=count_label,
-            component_height=height,
-        ),
+        table_html,
         height=height,
         scrolling=True,
     )
+    return None
