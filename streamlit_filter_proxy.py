@@ -598,11 +598,6 @@ class StreamlitFilterProxy:
                                 f"{prefix}{option}",
                                 key=_favorite_select_key(option, card_index),
                                 use_container_width=True,
-                                help=(
-                                    f"Selected strategy: {option}"
-                                    if is_selected
-                                    else f"Load and run the {option} filter set."
-                                ),
                                 **button_kwargs,
                             )
                             if option in removable_options:
@@ -611,7 +606,6 @@ class StreamlitFilterProxy:
                                     key=_favorite_remove_key(option, card_index),
                                     on_click=remove_favorite,
                                     args=(option,),
-                                    help=f"Remove your saved strategy: {option}",
                                 )
 
             return selected
