@@ -589,8 +589,8 @@ class InteractiveChartTests(unittest.TestCase):
                 "Interactive Market": "INDIA",
                 "Alert Date": "2026-07-28T10:00:00+05:30",
                 "Alert Price": 100,
-                "Acknowledge URL": "?alert_id=abc&alert_action=acknowledge",
-                "Remove URL": "?alert_id=abc&alert_action=remove",
+                "Acknowledge Button Key": "alert_acknowledge_abc",
+                "Remove Button Key": "alert_remove_abc",
             }
         ])
 
@@ -606,11 +606,22 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('aria-label="Acknowledge alert"', result)
         self.assertIn('aria-label="Remove alert"', result)
         self.assertIn("window.confirm", result)
-        self.assertIn('target="_top"', result)
+        self.assertIn(
+            'data-streamlit-action-key="alert_acknowledge_abc"',
+            result,
+        )
+        self.assertIn(
+            'data-streamlit-action-key="alert_remove_abc"',
+            result,
+        )
+        self.assertIn("triggerStreamlitAction", result)
+        self.assertNotIn('target="_top"', result)
         self.assertIn("streamlit:setFrameHeight", result)
         self.assertIn("data-default-height='700'", result)
         self.assertNotIn("<th>Acknowledge URL</th>", result)
         self.assertNotIn("<th>Remove URL</th>", result)
+        self.assertNotIn("<th>Acknowledge Button Key</th>", result)
+        self.assertNotIn("<th>Remove Button Key</th>", result)
         self.assertIn("alert_date=2026-07-28", result)
         self.assertIn("alert_marker_price=100", result)
 

@@ -35,7 +35,7 @@ from charting import (
 )
 
 if (
-    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 2
+    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 3
     or "row_actions" not in inspect.signature(
         sortable_results_table
     ).parameters
@@ -5165,6 +5165,42 @@ with tab6:
                 return "—"
             return parsed.strftime("%d %b %Y")
 
+        def alert_action_button_key(action, alert_id):
+            clean_id = re.sub(
+                r"[^A-Za-z0-9_-]",
+                "_",
+                str(alert_id),
+            )
+            return f"alert_{action}_{clean_id}"
+
+        def run_alert_row_action(action, alert_id):
+            try:
+                if action == "acknowledge":
+                    changed = acknowledge_price_alerts([str(alert_id)])
+                    message = f"Acknowledged {changed} price alert(s)."
+                else:
+                    changed = remove_price_alerts([str(alert_id)])
+                    message = f"Removed {changed} price alert(s)."
+            except PermissionError as exc:
+                st.session_state["price_alert_feedback"] = (
+                    "error",
+                    str(exc),
+                )
+                st.session_state["price_alert_login_required"] = True
+            except (OSError, RuntimeError) as exc:
+                st.session_state["price_alert_feedback"] = (
+                    "error",
+                    f"Could not {action} alert: {exc}",
+                )
+            else:
+                st.session_state["price_alert_feedback"] = (
+                    "success",
+                    message,
+                )
+                st.session_state.pop("_cached_price_alerts", None)
+                st.session_state.pop("_cached_price_alerts_at", None)
+            st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[5]
+
         def alert_table_dataframe(table_alerts, *, acknowledge=False):
             table_rows = []
             for alert in table_alerts:
@@ -5176,16 +5212,16 @@ with tab6:
                     if alert.get("direction") == "above"
                     else "Cross below"
                 )
-                remove_url = "/?" + urlencode({
-                    "alert_id": alert_id,
-                    "alert_action": "remove",
-                })
-                acknowledge_url = ""
+                remove_button_key = alert_action_button_key(
+                    "remove",
+                    alert_id,
+                )
+                acknowledge_button_key = ""
                 if acknowledge:
-                    acknowledge_url = "/?" + urlencode({
-                        "alert_id": alert_id,
-                        "alert_action": "acknowledge",
-                    })
+                    acknowledge_button_key = alert_action_button_key(
+                        "acknowledge",
+                        alert_id,
+                    )
                 table_rows.append({
                     "Symbol": symbol,
                     "Alert": (
@@ -5205,8 +5241,8 @@ with tab6:
                     "Interactive Market": market,
                     "Alert Date": alert.get("created_at"),
                     "Alert Price": alert.get("target_price"),
-                    "Acknowledge URL": acknowledge_url,
-                    "Remove URL": remove_url,
+                    "Acknowledge Button Key": acknowledge_button_key,
+                    "Remove Button Key": remove_button_key,
                 })
             return pd.DataFrame(table_rows)
 
@@ -5234,6 +5270,36 @@ with tab6:
                     "alert" if len(table_alerts) == 1 else "alerts"
                 ),
             )
+
+        new_alert_ids = {
+            str(alert.get("id", ""))
+            for alert in new_alerts
+        }
+        st.markdown(
+            "<style>.st-key-alert_action_bridge {"
+            "display: none !important;"
+            "}</style>",
+            unsafe_allow_html=True,
+        )
+        with st.container(key="alert_action_bridge"):
+            for alert in sorted_alerts:
+                alert_id = str(alert.get("id", ""))
+                st.button(
+                    "Remove alert",
+                    key=alert_action_button_key("remove", alert_id),
+                    on_click=run_alert_row_action,
+                    args=("remove", alert_id),
+                )
+                if alert_id in new_alert_ids:
+                    st.button(
+                        "Acknowledge alert",
+                        key=alert_action_button_key(
+                            "acknowledge",
+                            alert_id,
+                        ),
+                        on_click=run_alert_row_action,
+                        args=("acknowledge", alert_id),
+                    )
 
         st.session_state.pop("_selected_alert_chart", None)
         st.session_state.pop("_pending_alert_removal", None)

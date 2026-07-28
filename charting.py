@@ -25,7 +25,7 @@ from price_alerts import create_price_alert
 from screener import required_ma_periods
 
 
-RESULTS_TABLE_RENDERER_VERSION = 2
+RESULTS_TABLE_RENDERER_VERSION = 3
 
 
 MA_COLORS = [
@@ -2500,6 +2500,8 @@ def results_hover_table_html(
             "Alert Price",
             "Acknowledge URL",
             "Remove URL",
+            "Acknowledge Button Key",
+            "Remove Button Key",
         ],
         errors="ignore",
     )
@@ -3313,6 +3315,19 @@ def results_hover_table_html(
           }
         }
 
+        function triggerStreamlitAction(buttonKey) {
+          if (!buttonKey) return false;
+          try {
+            var selector = '.st-key-' + buttonKey + ' button';
+            var streamlitButton = window.parent.document.querySelector(selector);
+            if (!streamlitButton) return false;
+            streamlitButton.click();
+            return true;
+          } catch (error) {
+            return false;
+          }
+        }
+
         function bindEvents() {
           document.querySelectorAll('.stock-hover').forEach(function(el) {
             // Click loads chart into fixed panel
@@ -3327,6 +3342,21 @@ def results_hover_table_html(
               e.preventDefault();
               e.stopPropagation();
               showInteractiveChart(button);
+            });
+          });
+
+          document.querySelectorAll('[data-streamlit-action-key]').forEach(function(button) {
+            button.addEventListener('click', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              var confirmation = button.getAttribute('data-confirm-message');
+              if (confirmation && !window.confirm(confirmation)) return;
+              button.disabled = true;
+              if (!triggerStreamlitAction(
+                button.getAttribute('data-streamlit-action-key')
+              )) {
+                button.disabled = false;
+              }
             });
           });
 
@@ -3457,29 +3487,38 @@ def results_hover_table_html(
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
             if column == "Actions" and row_actions:
-                acknowledge_url = source_row.get("Acknowledge URL")
-                remove_url = source_row.get("Remove URL")
+                acknowledge_button_key = source_row.get(
+                    "Acknowledge Button Key"
+                )
+                remove_button_key = source_row.get("Remove Button Key")
                 action_items = []
-                if acknowledge_url and not pd.isna(acknowledge_url):
+                if (
+                    acknowledge_button_key
+                    and not pd.isna(acknowledge_button_key)
+                ):
                     action_items.append(
-                        '<a class="alert-row-action alert-row-action--acknowledge" '
-                        f'href="{html.escape(str(acknowledge_url), quote=True)}" '
-                        'target="_top" title="Acknowledge alert" '
-                        'aria-label="Acknowledge alert">✓</a>'
+                        '<button class="alert-row-action '
+                        'alert-row-action--acknowledge" type="button" '
+                        f'data-streamlit-action-key="'
+                        f'{html.escape(str(acknowledge_button_key), quote=True)}" '
+                        'title="Acknowledge alert" '
+                        'aria-label="Acknowledge alert">✓</button>'
                     )
-                if remove_url and not pd.isna(remove_url):
+                if remove_button_key and not pd.isna(remove_button_key):
                     escaped_symbol_for_prompt = html.escape(
                         str(row.get("Symbol", "this stock")),
                         quote=True,
                     )
                     action_items.append(
-                        '<a class="alert-row-action alert-row-action--remove" '
-                        f'href="{html.escape(str(remove_url), quote=True)}" '
-                        'target="_top" title="Remove alert" '
+                        '<button class="alert-row-action '
+                        'alert-row-action--remove" type="button" '
+                        f'data-streamlit-action-key="'
+                        f'{html.escape(str(remove_button_key), quote=True)}" '
+                        'title="Remove alert" '
                         'aria-label="Remove alert" '
-                        f'onclick="return window.confirm(\'Remove the saved price alert for '
-                        f"{escaped_symbol_for_prompt}? This action cannot be undone.\');\">"
-                        "−</a>"
+                        f'data-confirm-message="Remove the saved price alert for '
+                        f'{escaped_symbol_for_prompt}? This action cannot be undone.">'
+                        "−</button>"
                     )
                 escaped_value = (
                     '<span class="alert-row-actions">'
