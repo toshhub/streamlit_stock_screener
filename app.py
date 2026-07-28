@@ -266,6 +266,29 @@ def symbols_file_for_market(market):
     return EXCEL_DIR / "MCAP_JUGAAD.xlsx"
 
 
+@st.cache_data(show_spinner=False)
+def cached_symbols_for_market(market, symbols_file, file_mtime_ns):
+    del file_mtime_ns
+    return tuple(
+        load_top_symbols(
+            Path(symbols_file),
+            limit=1_000_000,
+            market=normalize_market(market),
+        )
+    )
+
+
+def available_symbols_for_market(market):
+    symbols_file = symbols_file_for_market(market)
+    if not symbols_file.exists():
+        return ()
+    return cached_symbols_for_market(
+        normalize_market(market),
+        str(symbols_file),
+        symbols_file.stat().st_mtime_ns,
+    )
+
+
 def download_limit_for_market(market, symbols_file):
     """Return the complete source-file universe for scheduled downloads."""
     market = normalize_market(market)
@@ -4913,26 +4936,40 @@ with tab5:
                 f"⭐ {watchlist['name']} · {len(watchlist.get('items', []))} stock(s)",
                 expanded=True,
             ):
+                add_market = st.selectbox(
+                    "Market",
+                    [MARKET_INDIA, MARKET_US],
+                    format_func=market_label,
+                    key=f"watchlist_market_{watchlist_id}",
+                )
+                available_symbols = available_symbols_for_market(add_market)
                 with st.form(f"watchlist_add_{watchlist_id}", clear_on_submit=True):
-                    add_market = st.selectbox(
-                        "Market", [MARKET_INDIA, MARKET_US],
-                        format_func=market_label,
-                        key=f"watchlist_market_{watchlist_id}",
-                    )
-                    add_symbol = st.text_input(
+                    add_symbol = st.selectbox(
                         "Stock symbol",
+                        options=available_symbols,
+                        index=None,
                         key=f"watchlist_symbol_{watchlist_id}",
-                        placeholder="RELIANCE or AAPL",
+                        placeholder=(
+                            f"Type to search {market_label(add_market)} symbols"
+                            if available_symbols
+                            else "No symbols are available for this market"
+                        ),
                     )
                     add_note = st.text_input(
                         "Personal note (optional)",
                         key=f"watchlist_note_{watchlist_id}",
                     )
-                    add_clicked = st.form_submit_button("Add stock")
+                    add_clicked = st.form_submit_button(
+                        "Add stock",
+                        disabled=not available_symbols,
+                    )
                 if add_clicked:
                     clean_symbol = str(add_symbol).strip().upper()
-                    if not re.fullmatch(r"[A-Z0-9._-]+", clean_symbol):
-                        st.error("Enter a valid stock symbol.")
+                    if clean_symbol not in set(available_symbols):
+                        st.error(
+                            "Select a stock symbol from the available "
+                            f"{market_label(add_market)} suggestions."
+                        )
                     else:
                         try:
                             cloud_store.save_watchlist_item(
@@ -4950,48 +4987,88 @@ with tab5:
 
                 items = watchlist.get("items", [])
                 if items:
-                    item_rows = []
-                    for item in items:
-                        params = urlencode({
-                            "interactive_chart": item["symbol"],
-                            "market": item["market"],
-                        })
-                        item_rows.append({
-                            "Remove": False,
-                            "Order": int(item.get("position", 0)) + 1,
-                            "Market": item["market"],
-                            "Symbol": item["symbol"],
-                            "Note": item.get("note", ""),
-                            "Chart": f"?{params}",
-                        })
-                    edited_items = st.data_editor(
-                        pd.DataFrame(item_rows),
-                        hide_index=True,
-                        use_container_width=True,
-                        column_config={
-                            "Remove": st.column_config.CheckboxColumn(),
-                            "Order": st.column_config.NumberColumn(min_value=1, step=1),
-                            "Market": st.column_config.TextColumn(disabled=True),
-                            "Symbol": st.column_config.TextColumn(disabled=True),
-                            "Note": st.column_config.TextColumn(),
-                            "Chart": st.column_config.LinkColumn(
-                                "Interactive chart",
-                                display_text="Open chart ↗",
-                            ),
-                        },
-                        key=f"watchlist_editor_{watchlist_id}",
-                    )
-                    save_col, delete_col = st.columns([3, 1])
-                    if save_col.button("Save order and notes", key=f"save_watchlist_{watchlist_id}"):
+                    managed_items = []
+                    with st.form(f"watchlist_manage_{watchlist_id}"):
+                        st.caption(
+                            "Change order or notes, select stocks to remove, "
+                            "then save."
+                        )
+                        for item_index, item in enumerate(items):
+                            item_symbol = str(item.get("symbol", ""))
+                            item_market = normalize_market(
+                                item.get("market", MARKET_INDIA)
+                            )
+                            item_key = re.sub(
+                                r"[^A-Za-z0-9_-]",
+                                "_",
+                                f"{watchlist_id}_{item_market}_{item_symbol}_{item_index}",
+                            )
+                            symbol_col, order_col, note_col, remove_col = st.columns(
+                                [2, 1, 4, 1]
+                            )
+                            with symbol_col:
+                                st.markdown(
+                                    f"**{html.escape(item_symbol)}**  \n"
+                                    f"{html.escape(market_label(item_market))}"
+                                )
+                                params = urlencode({
+                                    "interactive_chart": item_symbol,
+                                    "market": item_market,
+                                })
+                                st.markdown(
+                                    f"[Open interactive chart ↗](?{params})"
+                                )
+                            with order_col:
+                                item_order = st.number_input(
+                                    "Order",
+                                    min_value=1,
+                                    step=1,
+                                    value=int(item.get("position", item_index)) + 1,
+                                    key=f"watchlist_order_{item_key}",
+                                )
+                            with note_col:
+                                item_note = st.text_input(
+                                    "Personal note",
+                                    value=str(item.get("note", "") or ""),
+                                    key=f"watchlist_item_note_{item_key}",
+                                )
+                            with remove_col:
+                                item_remove = st.checkbox(
+                                    "Remove",
+                                    key=f"watchlist_remove_{item_key}",
+                                )
+                            managed_items.append({
+                                "Symbol": item_symbol,
+                                "Market": item_market,
+                                "Note": item_note,
+                                "Order": int(item_order),
+                                "Remove": bool(item_remove),
+                            })
+                            if item_index < len(items) - 1:
+                                st.divider()
+                        save_watchlist_clicked = st.form_submit_button(
+                            "Save order and notes",
+                            type="primary",
+                        )
+                    _, delete_col = st.columns([3, 1])
+                    if save_watchlist_clicked:
                         try:
-                            remove_symbols = edited_items.loc[
-                                edited_items["Remove"], "Symbol"
-                            ].tolist()
+                            remove_symbols = [
+                                row["Symbol"]
+                                for row in managed_items
+                                if row["Remove"]
+                            ]
                             cloud_store.delete_watchlist_items(
                                 app_user.id, watchlist_id, remove_symbols
                             )
-                            kept = edited_items.loc[~edited_items["Remove"]].sort_values("Order")
-                            for position, row in enumerate(kept.to_dict(orient="records")):
+                            kept = sorted(
+                                (
+                                    row for row in managed_items
+                                    if not row["Remove"]
+                                ),
+                                key=lambda row: row["Order"],
+                            )
+                            for position, row in enumerate(kept):
                                 cloud_store.save_watchlist_item(
                                     app_user.id,
                                     watchlist_id,
