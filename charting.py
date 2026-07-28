@@ -633,13 +633,25 @@ def interactive_stock_chart_html(
             }
     normalized_overlay = {}
     if isinstance(trade_overlay, dict):
-        for key in ("buyDate", "exitDate", "windowStart", "windowEnd"):
+        for key in (
+            "buyDate",
+            "exitDate",
+            "windowStart",
+            "windowEnd",
+            "alertDate",
+        ):
             value = trade_overlay.get(key)
             if value:
                 parsed = pd.to_datetime(value, errors="coerce", dayfirst=False)
                 if pd.notna(parsed):
                     normalized_overlay[key] = parsed.strftime("%Y-%m-%d")
-        for key in ("buyPrice", "targetPrice", "stopPrice", "exitPrice"):
+        for key in (
+            "buyPrice",
+            "targetPrice",
+            "stopPrice",
+            "exitPrice",
+            "alertPrice",
+        ):
             try:
                 value = float(trade_overlay.get(key))
                 if math.isfinite(value):
@@ -2068,13 +2080,14 @@ def interactive_stock_chart_html(
             {{ key: "buyPrice", title: "BUY", color: "#15803d", style: LightweightCharts.LineStyle.Solid }},
             {{ key: "targetPrice", title: "TARGET", color: "#2563eb", style: LightweightCharts.LineStyle.Dashed }},
             {{ key: "stopPrice", title: "STOP", color: "#dc2626", style: LightweightCharts.LineStyle.Dashed }},
+            {{ key: "alertPrice", title: "ALERT", color: "#7c3aed", style: LightweightCharts.LineStyle.Dashed, width: 1 }},
           ].forEach(function(level) {{
             const price = Number(tradeOverlay[level.key]);
             if (!Number.isFinite(price)) return;
             candleSeries.createPriceLine({{
               price: price,
               color: level.color,
-              lineWidth: 2,
+              lineWidth: level.width || 2,
               lineStyle: level.style,
               axisLabelVisible: true,
               title: level.title,
@@ -2103,11 +2116,50 @@ def interactive_stock_chart_html(
               text: reasonLabel,
             }});
           }}
+          let alertMarkerTime = "";
+          const alertMarkerPrice = Number(tradeOverlay.alertPrice);
+          if (tradeOverlay.alertDate && Number.isFinite(alertMarkerPrice)) {{
+            const requestedAlertDate = String(tradeOverlay.alertDate);
+            alertMarkerTime = requestedAlertDate;
+            if (!candleIndexByTime.has(alertMarkerTime)) {{
+              const candleTimes = payload.candles.map(function(candle) {{
+                return String(candle.time);
+              }});
+              alertMarkerTime = candleTimes.find(function(time) {{
+                return time >= requestedAlertDate;
+              }}) || candleTimes[candleTimes.length - 1];
+            }}
+          }}
           if (tradeMarkers.length) {{
             if (typeof LightweightCharts.createSeriesMarkers === "function") {{
               LightweightCharts.createSeriesMarkers(candleSeries, tradeMarkers);
             }} else if (typeof candleSeries.setMarkers === "function") {{
               candleSeries.setMarkers(tradeMarkers);
+            }}
+          }}
+          if (alertMarkerTime && candleIndexByTime.has(alertMarkerTime)) {{
+            const alertAnchorSeries = chart.addSeries(LightweightCharts.LineSeries, {{
+              color: "rgba(124,58,237,0)",
+              lineWidth: 1,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+            }});
+            alertAnchorSeries.setData([{{
+              time: alertMarkerTime,
+              value: alertMarkerPrice,
+            }}]);
+            const alertAnchorMarkers = [{{
+              time: alertMarkerTime,
+              position: "belowBar",
+              color: "#7c3aed",
+              shape: "arrowUp",
+              text: "",
+            }}];
+            if (typeof LightweightCharts.createSeriesMarkers === "function") {{
+              LightweightCharts.createSeriesMarkers(alertAnchorSeries, alertAnchorMarkers);
+            }} else if (typeof alertAnchorSeries.setMarkers === "function") {{
+              alertAnchorSeries.setMarkers(alertAnchorMarkers);
             }}
           }}
 
@@ -2420,7 +2472,13 @@ def render_interactive_stock_chart(
         st.toast(f"Could not create alert: {exc}", icon="⚠️")
 
 
-def results_hover_table_html(df, interactive_market=None, interactive_ma_periods=None):
+def results_hover_table_html(
+    df,
+    interactive_market=None,
+    interactive_ma_periods=None,
+    interactive_symbol_click=False,
+    table_title="Screening Results",
+):
     visible_df = df.drop(
         columns=[
             "ChartPath",
@@ -2431,6 +2489,9 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
             "Profit CAGR 3Y",
             "Price CAGR 3Y",
             "ROE 3Y",
+            "Interactive Market",
+            "Alert Date",
+            "Alert Price",
         ],
         errors="ignore",
     )
@@ -2658,6 +2719,26 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
         width: 13px;
         height: 13px;
         pointer-events: none;
+      }
+      .interactive-chart-link.interactive-symbol-button {
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        min-width: 0;
+        flex: 0 1 auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      .interactive-symbol-button .stock-symbol-label {
+        max-width: 100%;
+      }
+      .interactive-chart-link.interactive-symbol-button:hover,
+      .interactive-chart-link.interactive-symbol-button:focus {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
       }
       .screener-company-link {
         display: inline-grid;
@@ -3276,6 +3357,7 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     interactive_periods = normalize_interactive_ma_periods(interactive_ma_periods)
     interactive_ma_query = ",".join(str(period) for period in interactive_periods)
     for original_index, (row_index, row) in enumerate(visible_df.iterrows()):
+        source_row = df.loc[row_index]
         cells = []
         chart_path = chart_paths.loc[row_index] if chart_paths is not None else None
         chart_source = chart_sources.loc[row_index] if chart_sources is not None else None
@@ -3345,27 +3427,47 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
 
                 interactive_link = ""
                 source_symbol = chart_source if chart_source and not pd.isna(chart_source) else value
-                if interactive_market and source_symbol:
+                row_interactive_market = source_row.get(
+                    "Interactive Market",
+                    interactive_market,
+                )
+                if row_interactive_market and source_symbol:
                     interactive_params = {
                         "interactive_chart": str(source_symbol),
-                        "market": str(interactive_market),
+                        "market": str(row_interactive_market),
                         "ma": interactive_ma_query,
                     }
                     pe_ratio = row.get("PE Ratio")
                     if pe_ratio is not None and not pd.isna(pe_ratio):
                         interactive_params["pe"] = str(pe_ratio)
+                    alert_date = source_row.get("Alert Date")
+                    alert_price = source_row.get("Alert Price")
+                    if alert_date is not None and not pd.isna(alert_date):
+                        interactive_params["alert_date"] = str(alert_date)
+                    if alert_price is not None and not pd.isna(alert_price):
+                        interactive_params["alert_marker_price"] = str(alert_price)
                     interactive_href = "?" + urlencode(interactive_params)
-                    interactive_link = (
-                        f'<button class="interactive-chart-link" type="button" '
+                    interactive_attributes = (
                         f'data-interactive-src="{html.escape(interactive_href, quote=True)}" '
                         f'data-symbol="{html.escape(value, quote=True)}" '
                         f'title="Show {html.escape(value, quote=True)} interactive chart" '
-                        f'aria-label="Show {html.escape(value, quote=True)} interactive chart">'
-                        '<svg viewBox="0 0 16 16" aria-hidden="true">'
-                        '<path d="M3 2v4M3 9v5M1.5 6h3v3h-3zM8 1v3M8 8v5M6.5 4h3v4h-3zM13 3v5M13 11v3M11.5 8h3v3h-3z" '
-                        'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
-                        '</svg></button>'
+                        f'aria-label="Show {html.escape(value, quote=True)} interactive chart"'
                     )
+                    if interactive_symbol_click:
+                        symbol_html = (
+                            f'<button class="interactive-chart-link interactive-symbol-button" '
+                            f'type="button" {interactive_attributes}>'
+                            f"{symbol_html}</button>"
+                        )
+                    else:
+                        interactive_link = (
+                            f'<button class="interactive-chart-link" type="button" '
+                            f"{interactive_attributes}>"
+                            '<svg viewBox="0 0 16 16" aria-hidden="true">'
+                            '<path d="M3 2v4M3 9v5M1.5 6h3v3h-3zM8 1v3M8 8v5M6.5 4h3v4h-3zM13 3v5M13 11v3M11.5 8h3v3h-3z" '
+                            'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>'
+                            '</svg></button>'
+                        )
                 screener_company_link = ""
                 if (
                     str(interactive_market or "").strip().upper() == "INDIA"
@@ -3482,21 +3584,33 @@ def results_hover_table_html(df, interactive_market=None, interactive_ma_periods
     """
 
     result_count = len(visible_df)
+    count_noun = (
+        f"alert{'s' if result_count != 1 else ''}"
+        if interactive_symbol_click
+        else f"match{'es' if result_count != 1 else ''}"
+    )
+    interaction_help = (
+        "Select a stock name for its interactive chart"
+        if interactive_symbol_click
+        else (
+            "Select a symbol for the fast chart · "
+            "Use the candle icon for interactive view"
+        )
+    )
     table_html = (
         f"<div class='results-table-shell'>"
         f"<div class='results-table-toolbar'>"
-        f"<div class='results-table-toolbar__title'>Screening Results"
-        f"<span class='results-count'>{result_count} match{'es' if result_count != 1 else ''}</span></div>"
+        f"<div class='results-table-toolbar__title'>{html.escape(str(table_title))}"
+        f"<span class='results-count'>{result_count} {count_noun}</span></div>"
         f"<div class='results-table-toolbar__meta'>Tap Symbol for A–Z; tap again for market-cap order · "
-        f"Select a symbol for the fast chart · "
-        f"Use the candle icon for interactive view</div>"
+        f"{interaction_help}</div>"
         f"</div>"
         f"<div class='results-table-wrapper'>"
         f"<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"</div></div>"
         f"<div class='chart-panel' id='chart-panel'>"
-        f"<div class='panel-placeholder'>📈 Select a stock for the fast chart or use its candle icon for the interactive chart</div></div>"
+        f"<div class='panel-placeholder'>📈 {interaction_help}</div></div>"
     )
     return f"{styles}{script}{table_html}"
 
@@ -3506,12 +3620,16 @@ def sortable_results_table(
     height=700,
     interactive_market=None,
     interactive_ma_periods=None,
+    interactive_symbol_click=False,
+    table_title="Screening Results",
 ):
     components.html(
         results_hover_table_html(
             df,
             interactive_market=interactive_market,
             interactive_ma_periods=interactive_ma_periods,
+            interactive_symbol_click=interactive_symbol_click,
+            table_title=table_title,
         ),
         height=height,
         scrolling=True,

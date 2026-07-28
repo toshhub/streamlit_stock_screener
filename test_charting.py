@@ -250,6 +250,57 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("LightweightCharts.createSeriesMarkers", result)
         self.assertIn("tradeWindowStart", result)
 
+    def test_alert_overlay_adds_thin_price_line_and_created_date_arrow(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(40)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                trade_overlay={
+                    "alertDate": "2020-01-12T10:00:00+05:30",
+                    "alertPrice": 12.25,
+                },
+            )
+
+        self.assertIn('"alertDate":"2020-01-12"', result)
+        self.assertIn('"alertPrice":12.25', result)
+        self.assertIn('key: "alertPrice", title: "ALERT"', result)
+        self.assertIn("lineWidth: level.width || 2", result)
+        self.assertIn("const alertAnchorSeries", result)
+        self.assertIn("value: alertMarkerPrice", result)
+        self.assertIn('position: "belowBar"', result)
+        self.assertIn('shape: "arrowUp"', result)
+        self.assertIn('text: ""', result)
+        self.assertIn("time >= requestedAlertDate", result)
+
+    def test_alert_table_stock_name_opens_embedded_chart_with_marker_params(self):
+        result = results_hover_table_html(
+            pd.DataFrame([{
+                "Symbol": "TEST",
+                "Market": "India",
+                "Target Price": 123.45,
+                "Interactive Market": "INDIA",
+                "Alert Date": "2026-07-20T10:00:00+05:30",
+                "Alert Price": 123.45,
+            }]),
+            interactive_symbol_click=True,
+            table_title="Price Alert Charts",
+        )
+
+        self.assertIn("Price Alert Charts", result)
+        self.assertIn("interactive-symbol-button", result)
+        self.assertIn("flex: 0 1 auto", result)
+        self.assertIn(".interactive-symbol-button .stock-symbol-label", result)
+        self.assertIn(">TEST</span></button>", result)
+        self.assertIn("interactive_chart=TEST", result)
+        self.assertIn("market=INDIA", result)
+        self.assertIn("alert_date=", result)
+        self.assertIn("alert_marker_price=123.45", result)
+        self.assertNotIn(">Interactive Market</th>", result)
+        self.assertNotIn(">Alert Date</th>", result)
+        self.assertNotIn(">Alert Price</th>", result)
+
     def test_ma_periods_are_sanitized_capped_and_defaulted(self):
         self.assertEqual(
             normalize_interactive_ma_periods([200, "50", 50.9, -1, 0, "bad", 1200]),
