@@ -81,10 +81,8 @@ from storage import (
     configure_user_storage,
     load_favourite_filter_sets,
     load_pe_ratios,
-    load_results,
     load_settings,
     save_favourite_filter_sets,
-    save_results,
     update_settings,
 )
 from stock_data import list_symbol_paths, stock_exists, symbol_path
@@ -192,15 +190,6 @@ def render_login_prompt(message, key, error=False):
         type="primary",
         on_click=st.login,
     )
-
-
-def persist_user_results(rows, metadata=None):
-    """Keep the UI usable while a deployment is awaiting the SQL migration."""
-    try:
-        return save_results(rows, metadata)
-    except CloudStorageError as exc:
-        st.session_state["results_storage_error"] = str(exc)
-        return rows
 
 
 def query_param_value(name, default=None):
@@ -1643,7 +1632,6 @@ def run_live_screener_job(
     pattern_reversal_pct,
     pattern_expressions,
     create_charts,
-    completion_callback=None,
 ):
     total = len(stock_files)
     max_workers = min(
@@ -1752,23 +1740,12 @@ def run_live_screener_job(
                     "charts_done": chart_done,
                     "charts_total": len(matched_rows),
                 })
-        persisted = False
-        persistence_error = ""
-        if completion_callback is not None:
-            try:
-                completion_callback(matched_rows)
-                persisted = True
-            except Exception as exc:
-                persistence_error = str(exc)
-
         job_queue.put({
             "type": "complete",
             "rows": matched_rows,
             "failed_count": failed_count,
             "total": total,
             "matches": len(matched_rows),
-            "persisted": persisted,
-            "persistence_error": persistence_error,
         })
     except Exception as exc:
         matched_rows = [
@@ -1787,7 +1764,6 @@ def start_live_screener_job(
     pattern_reversal_pct,
     pattern_expressions,
     create_charts,
-    completion_callback=None,
     owner_key=None,
 ):
     job_queue = queue.Queue()
@@ -1808,7 +1784,6 @@ def start_live_screener_job(
             pattern_reversal_pct,
             pattern_expressions,
             create_charts,
-            completion_callback,
         ),
         daemon=True,
     )
@@ -1880,16 +1855,10 @@ def drain_live_screener_events():
             job["last_error"] = event.get("message", "")
         elif event_type == "complete":
             st.session_state["results"] = event.get("rows", rows)
-            if not event.get("persisted", False):
-                persist_user_results(
-                    st.session_state["results"],
-                    st.session_state.get("last_results_metadata", {}),
-                )
             job["done"] = event.get("total", job.get("total", 0))
             job["total"] = event.get("total", job.get("total", 0))
             job["matches"] = event.get("matches", len(st.session_state["results"]))
             job["failed_count"] = event.get("failed_count", job.get("failed_count", 0))
-            job["persistence_error"] = event.get("persistence_error", "")
             job["running"] = False
         elif event_type == "fatal_error":
             job["error"] = event.get("message", "Unknown screener error")
@@ -4333,19 +4302,6 @@ def render_screener_workspace():
             "pattern_expressions": list(run_pattern_expressions),
             "last_results_market": current_market,
         })
-        completion_callback = None
-        if app_user is not None and cloud_store is not None:
-            result_owner_id = app_user.id
-
-            def persist_completed_results(completed_rows):
-                cloud_store.save_results(
-                    result_owner_id,
-                    completed_rows,
-                    result_metadata,
-                )
-
-            completion_callback = persist_completed_results
-
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
             market_cap_positions,
@@ -4355,7 +4311,6 @@ def render_screener_workspace():
             run_reversal_pct,
             run_pattern_expressions,
             create_charts,
-            completion_callback=completion_callback,
             owner_key=screener_job_owner_key(),
         )
         st.rerun(scope="fragment")
@@ -4706,19 +4661,10 @@ with tab4:
 
     live_screener_job = drain_live_screener_events()
 
-    # Load persisted results if session state is empty
+    # Screening results intentionally live only in this browser session.
     if "results" not in st.session_state:
-        try:
-            loaded_rows, loaded_metadata = load_results(include_metadata=True)
-        except CloudStorageError as exc:
-            loaded_rows, loaded_metadata = [], {}
-            st.warning(
-                "Personal results storage is awaiting the Supabase schema update. "
-                "Run supabase_schema.sql to enable it."
-            )
-            st.caption(str(exc))
-        st.session_state["results"] = loaded_rows
-        st.session_state["last_results_metadata"] = loaded_metadata
+        st.session_state["results"] = []
+        st.session_state["last_results_metadata"] = {}
 
     rows = st.session_state.get("results", [])
     live_job_running = bool(
@@ -4751,11 +4697,6 @@ with tab4:
             st.success(f"Screening complete: {done}/{total} processed, {matches} match(es) found.")
             if failed_count:
                 st.warning(f"{failed_count} stock file(s) were skipped due to errors.")
-            if live_screener_job.get("persistence_error"):
-                st.warning(
-                    "The completed results could not be saved while the browser "
-                    "was away. They are available in this session."
-                )
 
     if (
         rows
@@ -4783,7 +4724,6 @@ with tab4:
             )
         ):
             st.session_state["results"] = rows
-            persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
 
     if (
         rows

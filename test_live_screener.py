@@ -107,16 +107,12 @@ class LiveScreenerPipelineTests(unittest.TestCase):
             results_section,
         )
 
-    def test_background_job_persists_and_can_be_recovered_for_signed_in_user(self):
+    def test_background_job_can_be_recovered_without_persisting_results(self):
         self.assertIn("SCREENER_JOBS[owner_key] = job", self.source)
-        self.assertIn("completion_callback(matched_rows)", self.source)
-        self.assertIn(
-            "cloud_store.save_results(\n"
-            "                    result_owner_id,\n"
-            "                    completed_rows,\n"
-            "                    result_metadata,",
-            self.source,
-        )
+        self.assertNotIn("completion_callback", self.source)
+        self.assertNotIn("persist_user_results", self.source)
+        self.assertNotIn("load_results(", self.source)
+        self.assertNotIn("save_results(", self.source)
 
 
 if __name__ == "__main__":

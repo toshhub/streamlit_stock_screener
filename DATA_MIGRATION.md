@@ -30,7 +30,6 @@ pre-listing padding so newer stocks begin in their real listing year.
 Run the complete `supabase_schema.sql` in Supabase Dashboard → SQL Editor
 before deploying this version. It adds:
 
-- `user_results`
 - `user_watchlists`
 - `user_watchlist_items`
 - the alert acknowledgement columns (safe if already present)

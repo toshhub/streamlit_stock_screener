@@ -1,6 +1,5 @@
 
 import json
-import hashlib
 import threading
 from contextvars import ContextVar
 from config import META_DIR
@@ -10,7 +9,6 @@ LEGACY_SETTINGS_FILE = META_DIR / "app_settings.json"
 FAVOURITE_FILTERS_FILE = META_DIR / "favourite_filters.json"
 PE_RATIOS_FILE = META_DIR / "pe_ratios.json"
 FUNDAMENTALS_FILE = META_DIR / "screener_fundamentals.json"
-RESULTS_FILE = META_DIR / "last_results.json"
 _SETTINGS_LOCK = threading.RLock()
 _USER_STORAGE_BACKEND = None
 _CURRENT_USER_ID = ContextVar("settings_user_id", default=None)
@@ -77,45 +75,3 @@ def load_fundamentals():
 
 def save_fundamentals(data):
     FUNDAMENTALS_FILE.write_text(json.dumps(data, indent=2))
-
-def save_results(rows, metadata=None):
-    """Persist results only inside the current authenticated user's namespace."""
-    user_id = _CURRENT_USER_ID.get()
-    if _USER_STORAGE_BACKEND is not None:
-        if not user_id:
-            return []
-        _USER_STORAGE_BACKEND.save_results(user_id, rows, metadata or {})
-        return rows
-    if not user_id:
-        return rows
-    # Local development fallback remains isolated by a non-identifying hash.
-    local_file = _local_results_file(user_id)
-    local_file.write_text(json.dumps({"rows": rows, "metadata": metadata or {}}, indent=2, default=str))
-    return rows
-
-def load_results(include_metadata=False):
-    """Load only the current user's persisted screener results."""
-    user_id = _CURRENT_USER_ID.get()
-    if _USER_STORAGE_BACKEND is not None:
-        if not user_id:
-            return ([], {}) if include_metadata else []
-        payload = _USER_STORAGE_BACKEND.load_results(user_id)
-        rows = payload.get("rows", [])
-        metadata = payload.get("metadata", {})
-        return (rows, metadata) if include_metadata else rows
-    if not user_id:
-        return ([], {}) if include_metadata else []
-    local_file = _local_results_file(user_id)
-    if local_file.exists():
-        payload = json.loads(local_file.read_text())
-        if isinstance(payload, list):  # legacy local format
-            return (payload, {}) if include_metadata else payload
-        rows = payload.get("rows", [])
-        metadata = payload.get("metadata", {})
-        return (rows, metadata) if include_metadata else rows
-    return ([], {}) if include_metadata else []
-
-
-def _local_results_file(user_id):
-    digest = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:24]
-    return META_DIR / f"last_results_{digest}.json"

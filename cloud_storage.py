@@ -156,40 +156,6 @@ class SupabaseCloudStorage:
             raise CloudStorageError(f"Could not remove the personal favorite filter: {exc}") from exc
         return len(response.data or [])
 
-    def load_results(self, user_id):
-        user_id = self._require_user(user_id)
-        try:
-            response = (
-                self.client.table("user_results")
-                .select("rows,metadata")
-                .eq("user_id", user_id)
-                .limit(1)
-                .execute()
-            )
-        except Exception as exc:
-            raise CloudStorageError(f"Could not load personal screener results: {exc}") from exc
-        if not response.data:
-            return {"rows": [], "metadata": {}}
-        row = response.data[0]
-        return {
-            "rows": row.get("rows") if isinstance(row.get("rows"), list) else [],
-            "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
-        }
-
-    def save_results(self, user_id, rows, metadata):
-        user_id = self._require_user(user_id)
-        try:
-            (
-                self.client.table("user_results")
-                .upsert(
-                    {"user_id": user_id, "rows": list(rows), "metadata": dict(metadata)},
-                    on_conflict="user_id",
-                )
-                .execute()
-            )
-        except Exception as exc:
-            raise CloudStorageError(f"Could not save personal screener results: {exc}") from exc
-
     def load_watchlists(self, user_id):
         user_id = self._require_user(user_id)
         try:
