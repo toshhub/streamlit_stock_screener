@@ -104,18 +104,57 @@ configure_user_storage(cloud_store, app_user.id if app_user else None)
 configure_cloud_alerts(cloud_store, require_auth=True)
 set_current_alert_user(app_user.id if app_user else None)
 
+# Favorite callbacks set all required filter state before Streamlit reruns.
+# Reuse the session copies for that rerun instead of blocking on Supabase.
+fast_favorite_selection = st.session_state.pop(
+    "_fast_favorite_selection",
+    False,
+)
+
 cloud_startup_error = ""
 try:
-    settings = load_settings()
-    personal_filter_sets = (
-        cloud_store.load_filter_sets(app_user.id)
-        if cloud_store is not None and app_user is not None
-        else {}
-    )
+    if (
+        fast_favorite_selection
+        and "_cached_settings" in st.session_state
+        and "_cached_personal_filter_sets" in st.session_state
+    ):
+        settings = deepcopy(st.session_state["_cached_settings"])
+        personal_filter_sets = deepcopy(
+            st.session_state["_cached_personal_filter_sets"]
+        )
+    else:
+        settings = load_settings()
+        personal_filter_sets = (
+            cloud_store.load_filter_sets(app_user.id)
+            if cloud_store is not None and app_user is not None
+            else {}
+        )
+        st.session_state["_cached_settings"] = deepcopy(settings)
+        st.session_state["_cached_personal_filter_sets"] = deepcopy(
+            personal_filter_sets
+        )
 except CloudStorageError as exc:
     settings = dict(shared_settings)
     personal_filter_sets = {}
     cloud_startup_error = str(exc)
+
+
+def update_changed_settings(values):
+    """Avoid remote writes when a rerun has not changed persisted values."""
+    changed = {
+        key: value
+        for key, value in values.items()
+        if settings.get(key) != value
+    }
+    if not changed:
+        return settings
+    updated = update_settings(changed)
+    if isinstance(updated, dict):
+        settings.update(updated)
+    else:
+        settings.update(changed)
+    st.session_state["_cached_settings"] = deepcopy(settings)
+    return settings
 
 
 def personal_favorite_display_name(name):
@@ -1454,7 +1493,6 @@ def mark_current_filter_custom():
         if app_user is None:
             st.session_state["_favorite_edit_login_required"] = True
     st.session_state["_active_favorite_filter_name"] = None
-    update_settings({"selected_favorite_filter_set": CUSTOM_FILTER_NAME})
 
 
 def apply_filter_selection_to_state(filter_name):
@@ -1473,7 +1511,6 @@ def apply_filter_selection_to_state(filter_name):
         ma_filter_set,
         pattern_settings.get("expressions", []),
     )
-    loaded_expressions = custom_filter_expressions(loaded_ma_filter_set)
     lookback_days = int(pattern_settings.get("lookback_days", settings.get("pattern_lookback_days", 120)))
     reversal_pct = float(pattern_settings.get("reversal_pct", settings.get("pattern_reversal_pct", 5.0)))
 
@@ -1490,14 +1527,7 @@ def apply_filter_selection_to_state(filter_name):
     st.session_state["pattern_reversal_pct_slider"] = reversal_pct
     st.session_state["pattern_reversal_pct_number"] = reversal_pct
     st.session_state["_active_favorite_filter_name"] = filter_name
-
-    update_settings({
-        "selected_favorite_filter_set": filter_name,
-        "screener_filter_set": loaded_ma_filter_set,
-        "pattern_lookback_days": lookback_days,
-        "pattern_reversal_pct": reversal_pct,
-        "pattern_expressions": loaded_expressions,
-    })
+    st.session_state["_fast_favorite_selection"] = True
 
 
 def is_stock_data_file(path):
@@ -3167,12 +3197,23 @@ st.button(
     on_click=mark_alerts_refresh_requested,
 )
 
+MAIN_TAB_LABELS = [
+    "📥 Data",
+    "🔍 Screener",
+    "🧪 Backtest",
+    "📊 Results",
+    "⭐ Watchlists",
+    "🔔 Alerts",
+]
+if st.session_state.pop("switch_to_results_tab", False):
+    st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[3]
+
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["📥 Data", "🔍 Screener", "🧪 Backtest", "📊 Results", "⭐ Watchlists", "🔔 Alerts"]
+    MAIN_TAB_LABELS,
+    key="_main_workspace_tab",
+    on_change="ignore",
 )
 
-if st.session_state.pop("switch_to_results_tab", False):
-    switch_to_tab(3)
 if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
     switch_to_tab(5)
 
@@ -3342,7 +3383,7 @@ with tab1:
                 use_container_width=True,
             )
 
-    update_settings({
+    update_changed_settings({
         "market": selected_market,
         "download_tf": download_tf,
         limit_setting_key: download_limit,
@@ -3384,7 +3425,12 @@ with tab1:
 # =====================================================================
 # TAB 2: SCREENER
 # =====================================================================
-with tab2:
+@st.fragment
+def render_screener_workspace():
+    fragment_fast_favorite_selection = st.session_state.pop(
+        "_fast_favorite_selection",
+        fast_favorite_selection,
+    )
     current_market = normalize_market(selected_market)
     render_workspace_banner(
         "screener",
@@ -3478,12 +3524,13 @@ with tab2:
                 key="green_candle_min_gain_pct",
                 help="Minimum percentage gain from previous close required for the green candle filter.",
             ))
-    update_settings({
-        "tf": tf,
-        "create_charts": create_charts,
-        "green_candle_toggle": green_candle_toggle,
-        "green_candle_min_gain_pct": green_candle_min_gain_pct,
-    })
+    if not fragment_fast_favorite_selection:
+        update_changed_settings({
+            "tf": tf,
+            "create_charts": create_charts,
+            "green_candle_toggle": green_candle_toggle,
+            "green_candle_min_gain_pct": green_candle_min_gain_pct,
+        })
 
     # ---- Favorite Filter Set ----
     def request_saved_strategy_removal(display_name):
@@ -4008,12 +4055,17 @@ with tab2:
                         use_container_width=True,
                     )
 
-    update_settings({
-        "screener_filter_set": filter_set,
-        "pattern_lookback_days": pattern_lookback_days,
-        "pattern_reversal_pct": pattern_reversal_pct,
-        "pattern_expressions": custom_filter_expressions(filter_set),
-    })
+    if not fragment_fast_favorite_selection:
+        update_changed_settings({
+            "selected_favorite_filter_set": (
+                st.session_state.get("_active_favorite_filter_name")
+                or CUSTOM_FILTER_NAME
+            ),
+            "screener_filter_set": filter_set,
+            "pattern_lookback_days": pattern_lookback_days,
+            "pattern_reversal_pct": pattern_reversal_pct,
+            "pattern_expressions": custom_filter_expressions(filter_set),
+        })
 
     if st.session_state.pop("_favorite_edit_login_required", False):
         render_login_prompt(
@@ -4138,7 +4190,14 @@ with tab2:
             "create_charts": bool(create_charts),
             "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
-        update_settings({"last_results_market": current_market})
+        update_changed_settings({
+            "selected_favorite_filter_set": result_filter_name,
+            "screener_filter_set": run_filter_set,
+            "pattern_lookback_days": run_lookback_days,
+            "pattern_reversal_pct": run_reversal_pct,
+            "pattern_expressions": list(run_pattern_expressions),
+            "last_results_market": current_market,
+        })
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
             market_cap_positions,
@@ -4151,6 +4210,10 @@ with tab2:
         )
         st.session_state["switch_to_results_tab"] = True
         st.rerun()
+
+
+with tab2:
+    render_screener_workspace()
 
 
 # =====================================================================
@@ -4537,7 +4600,7 @@ with tab4:
             if failed_count:
                 st.warning(f"{failed_count} stock file(s) were skipped due to errors.")
 
-    if rows:
+    if rows and (not fast_favorite_selection or tab4.open):
         result_market_for_repair = normalize_market(settings.get("last_results_market", selected_market))
         result_timeframe_for_repair = "DAY"
         repair_filter_set = normalize_filter_set(
@@ -4564,7 +4627,7 @@ with tab4:
             st.session_state["results"] = rows
             persist_user_results(rows, st.session_state.get("last_results_metadata", {}))
 
-    if rows:
+    if rows and (not fast_favorite_selection or tab4.open):
         # Determine heading: favorite filter name or the edited working set.
         result_metadata = st.session_state.get("last_results_metadata", {})
         heading_label = result_metadata.get("filter_name") or CUSTOM_FILTER_NAME
@@ -4694,7 +4757,6 @@ with tab4:
         time.sleep(0.75)
         st.rerun()
 
-
 # =====================================================================
 # TAB 5: PRICE ALERTS
 # =====================================================================
@@ -4716,7 +4778,18 @@ with tab5:
         st.warning("Cloud storage is not configured, so personal watchlists are unavailable.")
     else:
         try:
-            personal_watchlists = cloud_store.load_watchlists(app_user.id)
+            if (
+                fast_favorite_selection
+                and "_cached_personal_watchlists" in st.session_state
+            ):
+                personal_watchlists = deepcopy(
+                    st.session_state["_cached_personal_watchlists"]
+                )
+            else:
+                personal_watchlists = cloud_store.load_watchlists(app_user.id)
+                st.session_state["_cached_personal_watchlists"] = deepcopy(
+                    personal_watchlists
+                )
         except CloudStorageError as exc:
             st.error(str(exc))
             personal_watchlists = []
@@ -4873,7 +4946,11 @@ with tab6:
     elif cloud_store is None:
         st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
 
-    alerts = load_price_alerts()
+    if fast_favorite_selection and "_cached_price_alerts" in st.session_state:
+        alerts = deepcopy(st.session_state["_cached_price_alerts"])
+    else:
+        alerts = load_price_alerts()
+        st.session_state["_cached_price_alerts"] = deepcopy(alerts)
     sorted_alerts = sort_price_alerts(alerts)
     active_alerts = [
         alert for alert in sorted_alerts
