@@ -3751,9 +3751,24 @@ def render_screener_workspace():
                 stored_name,
             )
 
-    with quick_run_panel:
-        quick_run_action = st.container(key="quick_run_action")
     active_screener_job = attach_registered_screener_job()
+    with quick_run_panel:
+        # Keep live progress directly above the primary action so it appears
+        # in the same place immediately after Run Screener is clicked.
+        screener_progress_placeholder = st.empty()
+        if (
+            active_screener_job
+            and (
+                active_screener_job.get("running")
+                or (
+                    not active_screener_job.get("error")
+                    and not active_screener_job.get("results_tab_opened")
+                )
+            )
+        ):
+            with screener_progress_placeholder.container():
+                render_active_screener_progress()
+        quick_run_action = st.container(key="quick_run_action")
     with quick_run_action:
         run_combined = st.button(
             "▶️ Run Screener",
@@ -3764,22 +3779,6 @@ def render_screener_workspace():
                 and active_screener_job.get("running")
             ),
         )
-
-    # This child fragment alone refreshes while screening. The rest of the
-    # Screener workspace stays stable and responsive.
-    screener_progress_placeholder = st.empty()
-    if (
-        active_screener_job
-        and (
-            active_screener_job.get("running")
-            or (
-                not active_screener_job.get("error")
-                and not active_screener_job.get("results_tab_opened")
-            )
-        )
-    ):
-        with screener_progress_placeholder.container():
-            render_active_screener_progress()
 
     # Read current_filter_set from session state now (after selectbox may have updated it)
     current_filter_set = st.session_state["current_filter_set"]

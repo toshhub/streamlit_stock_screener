@@ -73,6 +73,24 @@ class LiveScreenerPipelineTests(unittest.TestCase):
             ],
         )
 
+    def test_progress_region_is_rendered_above_run_button(self):
+        quick_run_section = self.source[
+            self.source.index(
+                "active_screener_job = attach_registered_screener_job()"
+            ):
+            self.source.index(
+                "# Read current_filter_set from session state"
+            )
+        ]
+        self.assertLess(
+            quick_run_section.index(
+                "screener_progress_placeholder = st.empty()"
+            ),
+            quick_run_section.index(
+                'run_combined = st.button('
+            ),
+        )
+
     def test_results_are_hidden_and_do_not_force_reruns_while_screening(self):
         results_section = self.source[
             self.source.index("# TAB 4: RESULTS"):
