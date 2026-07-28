@@ -1,6 +1,8 @@
 import json
 import html
 import hmac
+import importlib
+import inspect
 import os
 import queue
 import re
@@ -17,6 +19,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+import charting as charting_module
 from backtest import (
     get_backtest_calendar_dates,
     run_backtest,
@@ -30,6 +33,12 @@ from charting import (
     render_interactive_stock_chart,
     sortable_results_table,
 )
+
+if "row_actions" not in inspect.signature(
+    sortable_results_table
+).parameters:
+    charting_module = importlib.reload(charting_module)
+    sortable_results_table = charting_module.sortable_results_table
 from cloud_storage import CloudStorageError, cloud_storage_from_config
 from downloader import (
     MARKET_INDIA,
