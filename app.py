@@ -650,7 +650,7 @@ st.markdown(
     }
     .stMainBlockContainer {
         max-width: 1480px;
-        padding-top: 1.35rem;
+        padding-top: 5.7rem;
         padding-bottom: 4rem;
     }
     header[data-testid="stHeader"] {
@@ -764,7 +764,9 @@ st.markdown(
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 0.65rem;
-        margin: -0.35rem 0 1.1rem;
+        position: relative;
+        z-index: 1;
+        margin: 1.15rem 0 0;
     }
     .workflow-step {
         display: flex;
@@ -772,10 +774,11 @@ st.markdown(
         gap: 0.7rem;
         min-width: 0;
         padding: 0.7rem 0.8rem;
-        border: 1px solid var(--border);
+        border: 1px solid rgba(255, 255, 255, 0.20);
         border-radius: 12px;
-        background: rgba(255, 255, 255, 0.78);
-        box-shadow: var(--shadow-sm);
+        background: rgba(255, 255, 255, 0.10);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(8px);
     }
     .workflow-step__number {
         display: grid;
@@ -789,7 +792,7 @@ st.markdown(
     }
     .workflow-step__copy { min-width: 0; }
     .workflow-step__title {
-        color: var(--ink-strong);
+        color: #ffffff;
         font-size: 0.78rem;
         font-weight: 800;
         line-height: 1.15;
@@ -797,16 +800,16 @@ st.markdown(
     .workflow-step__detail {
         margin-top: 0.14rem;
         overflow: hidden;
-        color: var(--ink-muted);
+        color: rgba(255, 255, 255, 0.70);
         font-size: 0.68rem;
         line-height: 1.2;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    .workflow-step--data .workflow-step__number { background: #e8f2ff; color: #2563a8; }
-    .workflow-step--screen .workflow-step__number { background: #f1eafe; color: #7048b5; }
-    .workflow-step--test .workflow-step__number { background: #fff0dc; color: #b56318; }
-    .workflow-step--review .workflow-step__number { background: #e5f7ee; color: #18794e; }
+    .workflow-step--data .workflow-step__number { background: #dceeff; color: #205f9b; }
+    .workflow-step--screen .workflow-step__number { background: #eee5ff; color: #6540a5; }
+    .workflow-step--test .workflow-step__number { background: #ffead0; color: #a95814; }
+    .workflow-step--review .workflow-step__number { background: #dcf5e8; color: #126b43; }
 
     /* Tab-level context banners */
     .workspace-banner {
@@ -969,43 +972,92 @@ st.markdown(
     }
 
     /* Primary navigation */
-    div.stTabs [data-baseweb="tab-list"] {
-        gap: 0.4rem;
-        padding: 0.4rem;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.78);
-        box-shadow: var(--shadow-sm);
+    div.stTabs {
+        overflow: visible;
     }
-    div.stTabs [data-baseweb="tab"] {
-        min-height: 2.85rem;
-        padding: 0.6rem 1.35rem;
-        border-radius: 10px;
-        border: none;
+    div.stTabs [role="tablist"] {
+        position: fixed;
+        z-index: 990;
+        top: calc(3.65rem + env(safe-area-inset-top, 0px));
+        left: 50%;
+        width: fit-content;
+        max-width: calc(100vw - 1.25rem);
+        gap: 0.5rem;
+        justify-content: center;
+        padding: 0.48rem;
+        border: 1px solid rgba(183, 204, 216, 0.82);
+        border-radius: 18px;
+        background: rgba(248, 251, 253, 0.92);
+        box-shadow:
+            0 12px 34px rgba(16, 53, 76, 0.17),
+            inset 0 1px 0 rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(18px) saturate(1.3);
+        transform: translateX(-50%);
+    }
+    div.stTabs [role="tab"] {
+        display: grid;
+        place-items: center;
+        flex: 0 0 3.15rem;
+        width: 3.15rem;
+        min-width: 3.15rem;
+        height: 3.15rem;
+        min-height: 3.15rem;
+        padding: 0;
+        border: 1px solid transparent;
+        border-radius: 13px;
         background: transparent;
         color: var(--ink-muted);
-        font-size: 0.93rem;
-        font-weight: 700;
-        transition: all 0.16s ease;
+        box-shadow: none;
+        transition:
+            transform 0.16s ease,
+            background 0.16s ease,
+            border-color 0.16s ease,
+            box-shadow 0.16s ease;
     }
-    div.stTabs [data-baseweb="tab"]:hover {
+    div.stTabs [role="tab"] p {
+        margin: 0;
+        font-size: 0 !important;
+        line-height: 1;
+    }
+    div.stTabs [role="tab"] p::before {
+        display: block;
+        font-size: 1.42rem;
+        line-height: 1;
+        filter: saturate(0.9);
+    }
+    div.stTabs [role="tab"]:nth-child(1) p::before { content: "📥"; }
+    div.stTabs [role="tab"]:nth-child(2) p::before { content: "🔎"; }
+    div.stTabs [role="tab"]:nth-child(3) p::before { content: "🧪"; }
+    div.stTabs [role="tab"]:nth-child(4) p::before { content: "📊"; }
+    div.stTabs [role="tab"]:nth-child(5) p::before { content: "⭐"; }
+    div.stTabs [role="tab"]:nth-child(6) p::before { content: "🔔"; }
+    div.stTabs [role="tab"]:focus-visible {
+        outline: 3px solid rgba(23, 107, 135, 0.20);
+        outline-offset: 2px;
+    }
+    div.stTabs [role="tab"]:hover {
         background: var(--brand-soft);
+        border-color: #c8e0e6;
         color: var(--brand-dark);
+        transform: translateY(-2px);
     }
-    div.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    div.stTabs [role="tab"][aria-selected="true"] {
         background: linear-gradient(135deg, #176b87, #168297);
+        border-color: rgba(16, 83, 106, 0.45);
         color: #ffffff;
-        box-shadow: 0 5px 14px rgba(23, 107, 135, 0.19);
+        box-shadow: 0 7px 18px rgba(23, 107, 135, 0.28);
+        transform: translateY(-1px);
     }
-    div.stTabs [data-baseweb="tab"][aria-selected="true"] p {
+    div.stTabs [role="tab"][aria-selected="true"] p {
         color: #ffffff !important;
     }
-    div.stTabs [data-baseweb="tab-highlight"],
-    div.stTabs [data-baseweb="tab-border"] {
+    div.stTabs .react-aria-SelectionIndicator {
         display: none;
     }
-    div.stTabs [data-baseweb="tab-panel"] {
-        padding-top: 1.1rem;
+    div.stTabs [role="tabpanel"] {
+        min-height: calc(100vh - 9rem);
+        padding-top: 1.25rem;
+        scroll-margin-top: 9rem;
     }
 
     /* Filter row badges */
@@ -1438,10 +1490,10 @@ st.markdown(
 
     @media (max-width: 768px) {
         .stMainBlockContainer {
-            padding-top: 0.8rem;
+            padding-top: 5.15rem;
         }
         .st-key-app_hero_shell {
-            min-height: 112px;
+            min-height: 196px;
             padding: 1.25rem;
             border-radius: 17px;
         }
@@ -1468,21 +1520,66 @@ st.markdown(
             height: 2.7rem;
         }
         .workspace-banner__title { font-size: 1.2rem; }
-        div.stTabs [data-baseweb="tab-list"] {
-            overflow-x: auto;
-            justify-content: flex-start;
+        div.stTabs [role="tablist"] {
+            top: calc(3.45rem + env(safe-area-inset-top, 0px));
+            width: calc(100vw - 1rem);
+            gap: clamp(0.2rem, 1.5vw, 0.45rem);
+            justify-content: space-between;
+            overflow: visible;
+            padding: 0.38rem;
+            border-radius: 16px;
         }
-        div.stTabs [data-baseweb="tab"] {
-            flex: 0 0 auto;
-            padding-inline: 0.9rem;
+        div.stTabs [role="tab"] {
+            flex: 0 0 clamp(2.6rem, 13vw, 3rem);
+            width: clamp(2.6rem, 13vw, 3rem);
+            min-width: clamp(2.6rem, 13vw, 3rem);
+            height: 2.8rem;
+            min-height: 2.8rem;
+            border-radius: 11px;
+        }
+        div.stTabs [role="tab"] p::before {
+            font-size: 1.26rem;
         }
     }
     @media (max-width: 460px) {
         .workflow-rail { gap: 0.45rem; }
         .workflow-step { padding: 0.55rem 0.6rem; }
         .workflow-step__detail { display: none; }
+        .workflow-step__title { font-size: 0.7rem; }
         .workspace-banner__icon { display: none; }
         .workspace-banner { grid-template-columns: 1fr; }
+    }
+    @media (orientation: landscape) and (max-height: 600px) {
+        .stMainBlockContainer {
+            padding-top: 4.35rem;
+        }
+        div.stTabs [role="tablist"] {
+            top: calc(3.05rem + env(safe-area-inset-top, 0px));
+            width: auto;
+            padding: 0.28rem;
+            border-radius: 14px;
+        }
+        div.stTabs [role="tab"] {
+            flex-basis: 2.45rem;
+            width: 2.45rem;
+            min-width: 2.45rem;
+            height: 2.35rem;
+            min-height: 2.35rem;
+            border-radius: 9px;
+        }
+        div.stTabs [role="tab"] p::before {
+            font-size: 1.08rem;
+        }
+        .st-key-app_hero_shell {
+            min-height: 142px;
+            padding: 0.85rem 1rem;
+        }
+        .workflow-rail {
+            margin-top: 0.7rem;
+        }
+        .workflow-step {
+            padding: 0.45rem 0.55rem;
+        }
     }
     </style>
     """,
@@ -1529,41 +1626,41 @@ with st.container(key="app_hero_shell"):
     with hero_account_col:
         render_header_account_controls(st, app_user, cloud_store is not None)
 
-st.markdown(
-    """
-    <div class="workflow-rail" aria-label="Analysis workflow">
-        <div class="workflow-step workflow-step--data">
-            <div class="workflow-step__number">01</div>
-            <div class="workflow-step__copy">
-                <div class="workflow-step__title">Prepare data</div>
-                <div class="workflow-step__detail">Keep the market universe current</div>
+    st.markdown(
+        """
+        <div class="workflow-rail" aria-label="Analysis workflow">
+            <div class="workflow-step workflow-step--data">
+                <div class="workflow-step__number">01</div>
+                <div class="workflow-step__copy">
+                    <div class="workflow-step__title">Prepare data</div>
+                    <div class="workflow-step__detail">Keep the market universe current</div>
+                </div>
+            </div>
+            <div class="workflow-step workflow-step--screen">
+                <div class="workflow-step__number">02</div>
+                <div class="workflow-step__copy">
+                    <div class="workflow-step__title">Build a screen</div>
+                    <div class="workflow-step__detail">Combine technical and custom rules</div>
+                </div>
+            </div>
+            <div class="workflow-step workflow-step--test">
+                <div class="workflow-step__number">03</div>
+                <div class="workflow-step__copy">
+                    <div class="workflow-step__title">Validate strategy</div>
+                    <div class="workflow-step__detail">Measure historical performance</div>
+                </div>
+            </div>
+            <div class="workflow-step workflow-step--review">
+                <div class="workflow-step__number">04</div>
+                <div class="workflow-step__copy">
+                    <div class="workflow-step__title">Review results</div>
+                    <div class="workflow-step__detail">Compare candidates and charts</div>
+                </div>
             </div>
         </div>
-        <div class="workflow-step workflow-step--screen">
-            <div class="workflow-step__number">02</div>
-            <div class="workflow-step__copy">
-                <div class="workflow-step__title">Build a screen</div>
-                <div class="workflow-step__detail">Combine technical and custom rules</div>
-            </div>
-        </div>
-        <div class="workflow-step workflow-step--test">
-            <div class="workflow-step__number">03</div>
-            <div class="workflow-step__copy">
-                <div class="workflow-step__title">Validate strategy</div>
-                <div class="workflow-step__detail">Measure historical performance</div>
-            </div>
-        </div>
-        <div class="workflow-step workflow-step--review">
-            <div class="workflow-step__number">04</div>
-            <div class="workflow-step__copy">
-                <div class="workflow-step__title">Review results</div>
-                <div class="workflow-step__detail">Compare candidates and charts</div>
-            </div>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def sync_pattern_lookback_from_slider():
@@ -3350,11 +3447,11 @@ if triggered_alert_badge_count:
     st.markdown(
         f"""
         <style>
-        .stTabs [data-baseweb="tab-list"] > button:nth-child(5) {{
+        .stTabs [role="tablist"] > [role="tab"]:nth-child(6) {{
             position: relative;
             padding-right: 1.75rem;
         }}
-        .stTabs [data-baseweb="tab-list"] > button:nth-child(5)::after {{
+        .stTabs [role="tablist"] > [role="tab"]:nth-child(6)::after {{
             content: "{triggered_alert_badge_count}";
             position: absolute;
             top: 0.2rem;
