@@ -5214,17 +5214,11 @@ with tab6:
                     st.toast(f"Removed {removed} price alert(s).")
                     st.rerun()
 
-        def render_selected_alert_chart(table_alerts, section_key):
+        def render_selected_alert_chart():
             selected_id = str(
                 st.session_state.get("_selected_alert_chart", "") or ""
             )
-            selected_alert = next(
-                (
-                    alert for alert in table_alerts
-                    if str(alert.get("id", "")) == selected_id
-                ),
-                None,
-            )
+            selected_alert = alert_by_id.get(selected_id)
             if selected_alert is None:
                 return
             symbol = str(selected_alert.get("symbol", "") or "").strip().upper()
@@ -5234,8 +5228,8 @@ with tab6:
             chart_header, close_col = st.columns([5, 1])
             chart_header.markdown(f"#### {symbol} alert chart")
             if close_col.button(
-                "Close chart",
-                key=f"close_alert_chart_{section_key}",
+                "← Back to alerts",
+                key="close_alert_chart",
                 use_container_width=True,
             ):
                 st.session_state.pop("_selected_alert_chart", None)
@@ -5305,6 +5299,7 @@ with tab6:
                                 st.session_state["_selected_alert_chart"] = (
                                     alert_id
                                 )
+                            st.rerun()
                     direction = (
                         "Cross above"
                         if alert.get("direction") == "above"
@@ -5360,31 +5355,37 @@ with tab6:
                             use_container_width=True,
                         ):
                             st.session_state["_pending_alert_removal"] = alert_id
-            render_selected_alert_chart(table_alerts, section_key)
-
-        st.subheader("Active Alerts")
-        st.caption("Price conditions that are still being monitored.")
-        if active_alerts:
-            render_alert_rows(active_alerts, "active")
-        else:
-            st.info("No active alerts.")
-
-        st.subheader("New Alerts")
-        st.caption("Triggered alerts awaiting your acknowledgement.")
-        if new_alerts:
-            render_alert_rows(new_alerts, "new", acknowledge=True)
-        else:
-            st.info("No new alerts.")
-
-        st.subheader("Old Alerts")
-        st.caption("Triggered alerts you have already acknowledged.")
-        if old_alerts:
-            render_alert_rows(old_alerts, "old")
-        else:
-            st.info("No old alerts.")
-
-        pending_alert_removal = st.session_state.get(
-            "_pending_alert_removal",
+        selected_alert_id = str(
+            st.session_state.get("_selected_alert_chart", "") or ""
         )
-        if pending_alert_removal:
-            confirm_alert_removal(pending_alert_removal)
+        if selected_alert_id in alert_by_id:
+            render_selected_alert_chart()
+        else:
+            st.session_state.pop("_selected_alert_chart", None)
+
+            st.subheader("Active Alerts")
+            st.caption("Price conditions that are still being monitored.")
+            if active_alerts:
+                render_alert_rows(active_alerts, "active")
+            else:
+                st.info("No active alerts.")
+
+            st.subheader("New Alerts")
+            st.caption("Triggered alerts awaiting your acknowledgement.")
+            if new_alerts:
+                render_alert_rows(new_alerts, "new", acknowledge=True)
+            else:
+                st.info("No new alerts.")
+
+            st.subheader("Old Alerts")
+            st.caption("Triggered alerts you have already acknowledged.")
+            if old_alerts:
+                render_alert_rows(old_alerts, "old")
+            else:
+                st.info("No old alerts.")
+
+            pending_alert_removal = st.session_state.get(
+                "_pending_alert_removal",
+            )
+            if pending_alert_removal:
+                confirm_alert_removal(pending_alert_removal)
