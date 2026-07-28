@@ -3255,6 +3255,11 @@ def results_hover_table_html(
         function setComponentFrameHeight(height) {
           var requestedHeight = Math.max(220, Math.round(Number(height) || 0));
           try {
+            if (window.frameElement) {
+              window.frameElement.style.height = requestedHeight + 'px';
+            }
+          } catch (error) {}
+          try {
             window.parent.postMessage({
               isStreamlitMessage: true,
               type: 'streamlit:setFrameHeight',
@@ -3388,6 +3393,9 @@ def results_hover_table_html(
           var compactLandscape = window.matchMedia(
             '(orientation: landscape) and (max-height: 600px)'
           ).matches;
+          var portraitMobile = window.matchMedia(
+            '(orientation: portrait) and (max-width: 600px)'
+          ).matches;
           var viewportHeight = window.visualViewport
             ? window.visualViewport.height
             : window.innerHeight;
@@ -3402,15 +3410,21 @@ def results_hover_table_html(
           var navClearance = parseFloat(
             window.getComputedStyle(panel).top
           ) || 0;
+          var componentFrameHeight = portraitMobile
+            ? Math.max(
+                viewportHeight,
+                Math.min(1180, viewportHeight + 300)
+              )
+            : viewportHeight;
           var availableEmbedHeight = Math.max(
             compactLandscape ? 240 : 420,
             Math.floor(
-              viewportHeight
+              componentFrameHeight
               - navClearance
               - (compactLandscape ? 2 : 70)
             )
           );
-          setComponentFrameHeight(viewportHeight);
+          setComponentFrameHeight(componentFrameHeight);
           var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
             'embedded=1' +
             '&embed_height=' + encodeURIComponent(availableEmbedHeight) +

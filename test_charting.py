@@ -593,6 +593,18 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("availableEmbedHeight", result)
         self.assertIn("(orientation: landscape) and (max-height: 600px)", result)
         self.assertIn("window.visualViewport", result)
+        self.assertIn("var portraitMobile = window.matchMedia(", result)
+        self.assertIn(
+            "'(orientation: portrait) and (max-width: 600px)'",
+            result,
+        )
+        self.assertIn("viewportHeight + 300", result)
+        self.assertIn(
+            "Math.min(1180, viewportHeight + 300)",
+            result,
+        )
+        self.assertIn("Math.max(", result)
+        self.assertIn("setComponentFrameHeight(componentFrameHeight)", result)
         self.assertIn("&range=", result)
         self.assertIn("activeInteractiveRange", result)
         self.assertIn("message.action === 'range-change'", result)
@@ -689,6 +701,10 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("window.parent.document.querySelector", result)
         self.assertNotIn('target="_top"', result)
         self.assertIn("streamlit:setFrameHeight", result)
+        self.assertIn(
+            "window.frameElement.style.height = requestedHeight + 'px'",
+            result,
+        )
         self.assertIn("data-default-height='700'", result)
         self.assertNotIn("<th>Acknowledge URL</th>", result)
         self.assertNotIn("<th>Remove URL</th>", result)
@@ -710,6 +726,10 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('message.source === "alert-table-chart"', component_html)
         self.assertIn('message.action === "reveal"', component_html)
         self.assertIn("window.frameElement.scrollIntoView", component_html)
+        self.assertIn(
+            'window.frameElement.style.height = safeHeight + "px"',
+            component_html,
+        )
         self.assertIn("actionKey", component_html)
         self.assertIn("<base href=", component_html)
         self.assertIn("document.referrer", component_html)

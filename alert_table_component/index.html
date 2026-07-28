@@ -67,6 +67,11 @@
           Math.round(Number(height) || defaultHeight)
         );
         frame.style.height = safeHeight + "px";
+        try {
+          if (window.frameElement) {
+            window.frameElement.style.height = safeHeight + "px";
+          }
+        } catch (error) {}
         sendToStreamlit("streamlit:setFrameHeight", {height: safeHeight});
       }
 
