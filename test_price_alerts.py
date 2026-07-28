@@ -196,5 +196,16 @@ class PriceAlertTests(unittest.TestCase):
         self.assertEqual(len(backend.rows["google-user-b"]), 1)
 
 
+class AlertTabPerformanceTests(unittest.TestCase):
+    def test_alert_tab_reuses_session_snapshot_without_click_rerun(self):
+        app_source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertIn("def session_price_alerts(max_age_seconds=60):", app_source)
+        self.assertIn("price_alerts_snapshot = session_price_alerts()", app_source)
+        self.assertIn("alerts = session_price_alerts()", app_source)
+        self.assertNotIn("refresh_alerts_when_tab_is_clicked()", app_source)
+        self.assertNotIn("alerts_refresh_trigger", app_source)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -228,6 +228,7 @@ def process_price_alert_request():
                 message = f"Removed {changed} price alert(s)."
             st.session_state["price_alert_feedback"] = ("success", message)
             st.session_state.pop("_cached_price_alerts", None)
+            st.session_state.pop("_cached_price_alerts_at", None)
         except PermissionError as exc:
             st.session_state["price_alert_feedback"] = ("error", str(exc))
             st.session_state["price_alert_login_required"] = True
@@ -257,6 +258,8 @@ def process_price_alert_request():
         else:
             message = f"That {symbol} price alert already exists. No duplicate was added."
         st.session_state["price_alert_feedback"] = ("success", message)
+        st.session_state.pop("_cached_price_alerts", None)
+        st.session_state.pop("_cached_price_alerts_at", None)
     except PermissionError as exc:
         st.session_state["price_alert_feedback"] = ("error", str(exc))
         st.session_state["price_alert_login_required"] = True
@@ -3244,10 +3247,28 @@ def switch_to_tab(tab_index):
     )
 
 
+def session_price_alerts(max_age_seconds=60):
+    cached_alerts = st.session_state.get("_cached_price_alerts")
+    cached_at = float(
+        st.session_state.get("_cached_price_alerts_at", 0.0) or 0.0
+    )
+    cache_is_fresh = (
+        cached_alerts is not None
+        and (time.monotonic() - cached_at) < max_age_seconds
+    )
+    if cache_is_fresh:
+        return deepcopy(cached_alerts)
+    fresh_alerts = load_price_alerts()
+    st.session_state["_cached_price_alerts"] = deepcopy(fresh_alerts)
+    st.session_state["_cached_price_alerts_at"] = time.monotonic()
+    return fresh_alerts
+
+
+price_alerts_snapshot = session_price_alerts()
 triggered_alert_badge_count = sum(
     alert.get("status") == "Triggered"
     and not bool(alert.get("acknowledged", False))
-    for alert in load_price_alerts()
+    for alert in price_alerts_snapshot
 )
 if triggered_alert_badge_count:
     st.markdown(
@@ -3282,58 +3303,6 @@ if triggered_alert_badge_count:
     )
 
 
-def refresh_alerts_when_tab_is_clicked():
-    """Reload current alert data before showing the client-side Alerts tab."""
-    components.html(
-        """
-        <script>
-        const installAlertsRefresh = () => {
-          const tabs = Array.from(window.parent.document.querySelectorAll('[role="tab"]'));
-          const alertsTab = tabs.find((tab) => (tab.textContent || '').includes('Alerts'));
-          if (!alertsTab) return false;
-
-          // The tab DOM node can survive a Streamlit rerun while this component
-          // iframe (and its old callback context) is replaced. Assigning the
-          // property every run guarantees that subsequent clicks use a live
-          // callback instead of a stale first-run listener.
-          alertsTab.dataset.alertRefreshInstalled = String(Date.now());
-          alertsTab.onclick = (event) => {
-            // switch_to_tab() also clicks tabs programmatically after a rerun.
-            if (window.parent.document.body.dataset.codexSuppressAlertsRefresh === 'true') return;
-            const refreshButton = window.parent.document.querySelector(
-              '.st-key-alerts_refresh_trigger button'
-            );
-            if (refreshButton) refreshButton.click();
-          };
-          return true;
-        };
-
-        if (!installAlertsRefresh()) {
-          let attempts = 0;
-          const timer = window.setInterval(() => {
-            attempts += 1;
-            if (installAlertsRefresh() || attempts >= 50) window.clearInterval(timer);
-          }, 100);
-        }
-        </script>
-        """,
-        height=0,
-    )
-
-def mark_alerts_refresh_requested():
-    st.session_state["switch_to_alerts_tab"] = True
-
-
-st.markdown(
-    "<style>.st-key-alerts_refresh_trigger { display: none !important; }</style>",
-    unsafe_allow_html=True,
-)
-st.button(
-    "Refresh Alerts Data",
-    key="alerts_refresh_trigger",
-    on_click=mark_alerts_refresh_requested,
-)
-
 MAIN_TAB_LABELS = [
     "📥 Data",
     "🔍 Screener",
@@ -3360,8 +3329,6 @@ if switch_to_results_requested:
 
 if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
     switch_to_tab(5)
-
-refresh_alerts_when_tab_is_clicked()
 
 price_alert_feedback = st.session_state.pop("price_alert_feedback", None)
 if price_alert_feedback:
@@ -5157,11 +5124,7 @@ with tab6:
     elif cloud_store is None:
         st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
 
-    if fast_favorite_selection and "_cached_price_alerts" in st.session_state:
-        alerts = deepcopy(st.session_state["_cached_price_alerts"])
-    else:
-        alerts = load_price_alerts()
-        st.session_state["_cached_price_alerts"] = deepcopy(alerts)
+    alerts = session_price_alerts()
     sorted_alerts = sort_price_alerts(alerts)
     active_alerts = [
         alert for alert in sorted_alerts
