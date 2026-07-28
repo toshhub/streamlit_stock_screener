@@ -2480,6 +2480,7 @@ def results_hover_table_html(
     table_title="Screening Results",
     row_actions=False,
     count_label=None,
+    component_height=700,
 ):
     visible_df = df.drop(
         columns=[
@@ -3076,6 +3077,17 @@ def results_hover_table_html(
             .replace(/'/g, '&#39;');
         }
 
+        function setComponentFrameHeight(height) {
+          var requestedHeight = Math.max(220, Math.round(Number(height) || 0));
+          try {
+            window.parent.postMessage({
+              isStreamlitMessage: true,
+              type: 'streamlit:setFrameHeight',
+              height: requestedHeight
+            }, '*');
+          } catch (error) {}
+        }
+
         function setActiveRow(el) {
           if (activeRow && activeRow !== el) {
             activeRow.classList.remove('stock-hover-active');
@@ -3208,6 +3220,7 @@ def results_hover_table_html(
             compactLandscape ? 240 : 420,
             Math.floor(viewportHeight - (compactLandscape ? 2 : 70))
           );
+          setComponentFrameHeight(viewportHeight);
           var embeddedSrc = src + (src.indexOf('?') >= 0 ? '&' : '?') +
             'embedded=1' +
             '&embed_height=' + encodeURIComponent(availableEmbedHeight) +
@@ -3291,6 +3304,9 @@ def results_hover_table_html(
           if (panel) {
             panel.classList.remove('interactive-mode');
             panel.innerHTML = '<div class="panel-placeholder">📈 Select a stock for the fast chart or use its candle icon for the interactive chart</div>';
+            setComponentFrameHeight(
+              Number(panel.getAttribute('data-default-height')) || 700
+            );
           }
         }
 
@@ -3690,7 +3706,8 @@ def results_hover_table_html(
         f"<table class='hover-results-table'><thead><tr>{header_cells}</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
         f"</div></div>"
-        f"<div class='chart-panel' id='chart-panel'>"
+        f"<div class='chart-panel' id='chart-panel' "
+        f"data-default-height='{int(component_height)}'>"
         f"<div class='panel-placeholder'>📈 {interaction_help}</div></div>"
     )
     return f"{styles}{script}{table_html}"
@@ -3715,6 +3732,7 @@ def sortable_results_table(
             table_title=table_title,
             row_actions=row_actions,
             count_label=count_label,
+            component_height=height,
         ),
         height=height,
         scrolling=True,

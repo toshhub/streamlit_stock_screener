@@ -607,6 +607,8 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('aria-label="Remove alert"', result)
         self.assertIn("window.confirm", result)
         self.assertIn('target="_top"', result)
+        self.assertIn("streamlit:setFrameHeight", result)
+        self.assertIn("data-default-height='700'", result)
         self.assertNotIn("<th>Acknowledge URL</th>", result)
         self.assertNotIn("<th>Remove URL</th>", result)
         self.assertIn("alert_date=2026-07-28", result)
