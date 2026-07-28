@@ -10,6 +10,29 @@ from downloader import MARKET_INDIA, MARKET_US
 
 
 class MonthlyValuationTests(unittest.TestCase):
+    def test_latest_value_snapshot_includes_legacy_json_stock_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            output = directory / "latest.parquet"
+            (directory / "TEST.json").write_text(
+                '[{"Date":"2026-07-28","Close":123.5,"Volume":1000}]',
+                encoding="utf-8",
+            )
+            with patch.object(
+                market_snapshots,
+                "LATEST_VALUES_FILE",
+                output,
+            ):
+                snapshot = market_snapshots.refresh_latest_stock_values({
+                    MARKET_INDIA: directory,
+                })
+
+        self.assertEqual(snapshot.iloc[0]["Symbol"], "TEST")
+        self.assertEqual(
+            pd.Timestamp(snapshot.iloc[0]["Date"]),
+            pd.Timestamp("2026-07-28"),
+        )
+
     def test_screener_history_is_upserted_and_us_is_not_requested(self):
         history = [
             {

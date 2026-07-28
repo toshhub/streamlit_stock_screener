@@ -4960,7 +4960,16 @@ with tab4:
         result_market = normalize_market(
             result_metadata.get("market", settings.get("last_results_market", selected_market))
         )
-        latest_data_date = result_metadata.get("latest_data_date") or "Unavailable"
+        latest_result_summary = data_availability_summary(
+            timeframe_config("DAY", result_market)["target_dir"],
+            market=result_market,
+        )
+        latest_result_date = latest_result_summary.get("Latest Date")
+        latest_data_date = (
+            latest_result_date.strftime("%Y-%m-%d")
+            if latest_result_date is not None
+            else result_metadata.get("latest_data_date") or "Unavailable"
+        )
         conditions = result_metadata.get("filter_conditions") or []
         conditions_html = "".join(
             f"<li>{html.escape(str(condition))}</li>" for condition in conditions

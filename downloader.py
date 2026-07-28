@@ -152,6 +152,22 @@ def _data_availability_from_snapshot(snapshot_file, market):
     }
 
 
+def _stock_data_mtime_ns(path):
+    """Return the newest storage-file timestamp for one stock."""
+    path = Path(path)
+    candidates = list(path.glob("*.parquet")) if path.is_dir() else []
+    json_file = path if path.suffix.lower() == ".json" else path.parent / f"{path.name}.json"
+    if json_file.exists():
+        candidates.append(json_file)
+    mtimes = []
+    for candidate in candidates:
+        try:
+            mtimes.append(candidate.stat().st_mtime_ns)
+        except OSError:
+            continue
+    return max(mtimes, default=0)
+
+
 def data_availability_summary(
     directory,
     *,
@@ -159,16 +175,15 @@ def data_availability_summary(
     snapshot_file=LATEST_VALUES_FILE,
 ):
     """Return the latest date and stock-file coverage for that date."""
+    snapshot_summary = None
     if market is not None:
         snapshot_summary = _data_availability_from_snapshot(
             snapshot_file,
             market,
         )
-        if snapshot_summary is not None:
-            return snapshot_summary
 
     if not directory or not directory.exists():
-        return {
+        return snapshot_summary or {
             "Latest Date": None,
             "Stocks On Latest Date": 0,
             "Current Stock Files": 0,
@@ -176,6 +191,42 @@ def data_availability_summary(
         }
 
     stock_files = list_symbol_paths(directory, include_index=False)
+    if snapshot_summary is not None:
+        try:
+            snapshot_mtime_ns = Path(snapshot_file).stat().st_mtime_ns
+        except OSError:
+            snapshot_mtime_ns = 0
+        changed_stock_files = [
+            path
+            for path in stock_files
+            if _stock_data_mtime_ns(path) > snapshot_mtime_ns
+        ]
+        if not changed_stock_files:
+            return snapshot_summary
+        changed_dates = [
+            latest_date
+            for path in changed_stock_files
+            if (latest_date := _last_saved_date(path)) is not None
+        ]
+        snapshot_date = snapshot_summary.get("Latest Date")
+        changed_latest = max(changed_dates) if changed_dates else None
+        if (
+            changed_latest is None
+            or snapshot_date is not None
+            and changed_latest <= snapshot_date
+        ):
+            return snapshot_summary
+        stocks_on_latest_date = sum(
+            date == changed_latest
+            for date in changed_dates
+        )
+        return {
+            "Latest Date": changed_latest,
+            "Stocks On Latest Date": stocks_on_latest_date,
+            "Current Stock Files": stocks_on_latest_date,
+            "Stock Files": len(stock_files),
+        }
+
     latest_dates = [
         latest_date
         for path in stock_files
@@ -200,6 +251,18 @@ def data_availability_summary(
         "Current Stock Files": stocks_on_latest_date,
         "Stock Files": len(stock_files),
     }
+
+
+def refresh_data_availability_snapshot():
+    """Refresh the fast market-status snapshot after daily downloads."""
+    # Import locally to avoid the downloader/market_snapshots module cycle
+    # during application startup.
+    from market_snapshots import refresh_latest_stock_values
+
+    return refresh_latest_stock_values({
+        market: timeframe_config("DAY", market)["target_dir"]
+        for market in MARKET_LABELS
+    })
 
 
 def _next_download_start(existing_df, interval):
@@ -637,6 +700,15 @@ def _run_background_download(job, symbols_file, timeframe, limit, incremental, m
         downloaded_count = sum(1 for row in download_rows if row["Downloaded"])
         rows_added = sum(int(row.get("Rows Added", 0) or 0) for row in download_rows)
         failed = [row for row in download_rows if not row["Downloaded"]]
+        snapshot_error = ""
+        try:
+            with DOWNLOAD_JOBS_LOCK:
+                job["status"] = "Refreshing data status"
+            refresh_data_availability_snapshot()
+        except Exception as exc:
+            # A summary refresh must not turn a successful price download into
+            # a failed job; the on-demand reconciliation above remains valid.
+            snapshot_error = str(exc)
         with DOWNLOAD_JOBS_LOCK:
             job.update({
                 "running": False,
@@ -647,6 +719,7 @@ def _run_background_download(job, symbols_file, timeframe, limit, incremental, m
                 "rows_added": rows_added,
                 "failed": failed,
                 "nifty_row": nifty_row,
+                "snapshot_error": snapshot_error,
                 "completed_at": time.strftime("%d-%m-%Y %H:%M:%S"),
             })
     except Exception as exc:

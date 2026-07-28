@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -74,6 +75,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
         with (
             patch("downloader.download_top_stocks", return_value=completed_rows),
             patch("downloader.download_nifty_index", return_value=nifty_row),
+            patch("downloader.refresh_data_availability_snapshot") as refresh_snapshot,
         ):
             _, started = start_background_download(
                 Path("symbols.xlsx"),
@@ -92,6 +94,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
         self.assertFalse(snapshot["running"])
         self.assertEqual(snapshot["status"], "Completed")
         self.assertEqual(snapshot["rows_added"], 2)
+        refresh_snapshot.assert_called_once_with()
 
     def test_data_availability_counts_stocks_on_latest_date(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -117,7 +120,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
         self.assertEqual(summary["Current Stock Files"], 2)
         self.assertEqual(summary["Stock Files"], 3)
 
-    def test_data_availability_uses_consolidated_snapshot_without_scanning_stocks(self):
+    def test_data_availability_uses_current_consolidated_snapshot(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
             snapshot_file = directory / "latest_stock_values.parquet"
@@ -150,8 +153,8 @@ class IncrementalDownloaderTests(unittest.TestCase):
             ]).to_parquet(snapshot_file, index=False)
 
             with patch(
-                "downloader.list_symbol_paths",
-                side_effect=AssertionError("stock files should not be scanned"),
+                "downloader._last_saved_date",
+                side_effect=AssertionError("current stock files should not be read"),
             ):
                 summary = data_availability_summary(
                     directory,
@@ -163,6 +166,41 @@ class IncrementalDownloaderTests(unittest.TestCase):
         self.assertEqual(summary["Stocks On Latest Date"], 2)
         self.assertEqual(summary["Current Stock Files"], 2)
         self.assertEqual(summary["Stock Files"], 3)
+
+    def test_data_availability_reconciles_stock_file_newer_than_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            snapshot_file = directory / "latest_stock_values.parquet"
+            pd.DataFrame([
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "AAA",
+                    "Date": pd.Timestamp("2026-07-27"),
+                },
+                {
+                    "Market": MARKET_INDIA,
+                    "Symbol": "BBB",
+                    "Date": pd.Timestamp("2026-07-27"),
+                },
+            ]).to_parquet(snapshot_file, index=False)
+            os.utime(snapshot_file, ns=(1, 1))
+            (directory / "AAA.json").write_text(json.dumps([
+                {"Date": "2026-07-27", "Close": 100.0},
+                {"Date": "2026-07-28", "Close": 101.0},
+            ]))
+            (directory / "BBB.json").write_text(json.dumps([
+                {"Date": "2026-07-28", "Close": 102.0},
+            ]))
+
+            summary = data_availability_summary(
+                directory,
+                market=MARKET_INDIA,
+                snapshot_file=snapshot_file,
+            )
+
+        self.assertEqual(summary["Latest Date"], pd.Timestamp("2026-07-28"))
+        self.assertEqual(summary["Stocks On Latest Date"], 2)
+        self.assertEqual(summary["Current Stock Files"], 2)
 
     def test_daily_start_skips_weekend_dates(self):
         self.assertEqual(

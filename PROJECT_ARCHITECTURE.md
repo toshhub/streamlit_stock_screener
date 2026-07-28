@@ -108,6 +108,12 @@ Key objects/functions:
   - Downloads data for top symbols.
   - Writes JSON files into timeframe-specific folder.
   - Calls `progress_callback(index, total, downloaded_count, symbol)` after each stock.
+- `data_availability_summary(directory, market=...)`
+  - Reads the consolidated latest-value snapshot for fast status rendering.
+  - Reconciles stock files written after that snapshot so the displayed market
+    date is always the newest candle date actually available.
+  - The background downloader refreshes the consolidated snapshot after each
+    completed daily download.
 
 Important storage note:
 
