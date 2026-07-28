@@ -172,7 +172,7 @@ class InteractiveChartTests(unittest.TestCase):
 
     def test_valuation_drawer_has_screener_style_metric_and_range_controls(self):
         valuation_rows = [{
-            "time": "2026-01-01",
+            "time": "2020-02-01",
             "pe": 18.2,
             "marketCapToSales": 2.4,
             "eps": 5.1,
@@ -191,6 +191,15 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('data-valuation-months="1"', result)
         self.assertIn('data-valuation-months="6"', result)
         self.assertIn('data-valuation-months="120"', result)
+        self.assertNotIn('data-valuation-months="all"', result)
+        self.assertNotIn(">Max</button>", result)
+        self.assertIn('id="valuation-price-toggle"', result)
+        self.assertIn('aria-pressed="true"', result)
+        self.assertIn("valuationPriceEnabled = true", result)
+        self.assertIn('id="valuation-price-legend"', result)
+        self.assertIn('id="valuation-price-cursor-dot"', result)
+        self.assertIn('"price":32.0', result)
+        self.assertIn("Price:", result)
         self.assertIn("TTM EPS", result)
         self.assertIn("TTM Sales", result)
         self.assertIn("medianMarketCapToSales", result)

@@ -548,6 +548,54 @@ def has_positive_current_pe(current_pe):
         return False
 
 
+def _attach_monthly_prices(json_path, valuation_rows):
+    if not valuation_rows:
+        return valuation_rows
+    valuation_dates = pd.to_datetime(
+        [row.get("time") for row in valuation_rows],
+        errors="coerce",
+    )
+    valid_dates = valuation_dates[valuation_dates.notna()]
+    if valid_dates.empty:
+        return valuation_rows
+    try:
+        price_df = load_stock_dataframe(
+            json_path,
+            start=valid_dates.min() - pd.Timedelta(days=2),
+        )
+    except (OSError, ValueError):
+        return valuation_rows
+    if price_df.empty or "Date" not in price_df.columns or "Close" not in price_df.columns:
+        return valuation_rows
+
+    prices = price_df[["Date", "Close"]].copy()
+    prices["Date"] = pd.to_datetime(prices["Date"], errors="coerce")
+    prices["Close"] = pd.to_numeric(prices["Close"], errors="coerce")
+    prices = prices.dropna(subset=["Date", "Close"]).sort_values("Date")
+    if prices.empty:
+        return valuation_rows
+    valuation_frame = pd.DataFrame({
+        "valuation_index": range(len(valuation_rows)),
+        "Date": valuation_dates,
+    }).dropna(subset=["Date"]).sort_values("Date")
+    aligned = pd.merge_asof(
+        valuation_frame,
+        prices,
+        on="Date",
+        direction="forward",
+        tolerance=pd.Timedelta(days=7),
+    )
+    price_by_index = {
+        int(row.valuation_index): round(float(row.Close), 4)
+        for row in aligned.itertuples()
+        if pd.notna(row.Close)
+    }
+    return [
+        {**row, "price": price_by_index.get(index)}
+        for index, row in enumerate(valuation_rows)
+    ]
+
+
 def interactive_stock_chart_html(
     symbol,
     json_path,
@@ -570,7 +618,10 @@ def interactive_stock_chart_html(
         ma_periods=ma_periods,
         history_years=history_years,
     )
-    monthly_valuations = valuation_chart_payload(symbol, alert_market)
+    monthly_valuations = _attach_monthly_prices(
+        json_path,
+        valuation_chart_payload(symbol, alert_market),
+    )
     payload["monthlyValuations"] = monthly_valuations
     if isinstance(restore_visible_range, dict):
         visible_from = str(restore_visible_range.get("from") or "")
@@ -760,21 +811,24 @@ def interactive_stock_chart_html(
             '<div class="valuation-metrics">'
             '<button class="is-active" type="button" data-valuation-metric="pe">PE Ratio</button>'
             '<button type="button" data-valuation-metric="sales">Market Cap / Sales</button>'
-            '</div><div class="valuation-ranges">'
+            '</div><button class="valuation-price-toggle is-active" '
+            'id="valuation-price-toggle" type="button" aria-pressed="true">'
+            '<span aria-hidden="true">✓</span> Price</button>'
+            '<div class="valuation-ranges">'
             '<button type="button" data-valuation-months="1">1M</button>'
             '<button type="button" data-valuation-months="6">6M</button>'
             '<button type="button" data-valuation-months="12">1Yr</button>'
             '<button type="button" data-valuation-months="36">3Yr</button>'
             '<button class="is-active" type="button" data-valuation-months="60">5Yr</button>'
             '<button type="button" data-valuation-months="120">10Yr</button>'
-            '<button type="button" data-valuation-months="all">Max</button>'
             '</div></div>'
             '<div class="valuation-chart-wrap"><svg id="valuation-chart" role="img" '
             f'tabindex="0" aria-label="{safe_symbol} monthly valuation chart"></svg>'
             '<div class="valuation-tooltip" id="valuation-tooltip" hidden></div></div>'
             '<div class="valuation-legend"><span id="valuation-bar-legend">■ TTM EPS</span>'
             '<span id="valuation-median-legend">┄ Median PE</span>'
-            '<span id="valuation-line-legend">━ PE ratio</span></div>'
+            '<span id="valuation-line-legend">━ PE ratio</span>'
+            '<span id="valuation-price-legend">━ Price</span></div>'
             '</aside></div>'
         )
     price_alert_html = (
@@ -1167,11 +1221,16 @@ def interactive_stock_chart_html(
           font-size:11px; font-weight:750; cursor:pointer; }}
         .valuation-controls button:last-child {{ border-right:0; }}
         .valuation-controls button.is-active {{ color:#6257ed; background:#f1efff; }}
+        .valuation-controls .valuation-price-toggle {{
+          border:1px solid #d4d8df; border-radius:7px;
+        }}
+        .valuation-price-toggle span {{ display:inline-block; width:12px; }}
         .valuation-chart-wrap {{ position:relative; }}
         .valuation-legend {{ display:flex; justify-content:center; flex-wrap:wrap; gap:18px;
           color:#53657a; font-size:11px; font-weight:700; }}
         #valuation-bar-legend {{ color:#6abbe7; }}
         #valuation-line-legend {{ color:#6558ff; }}
+        #valuation-price-legend {{ color:#d97706; }}
         #valuation-median-legend {{ color:#8b94a3; }}
         .valuation-tooltip {{ position:absolute; z-index:4; min-width:145px; padding:8px 10px;
           border:1px solid #dce2ea; border-radius:8px; background:rgba(255,255,255,.97);
@@ -1553,8 +1612,10 @@ def interactive_stock_chart_html(
           const valuationPanel = document.getElementById("valuation-panel");
           const valuationClose = document.getElementById("valuation-close");
           const valuationScrim = document.getElementById("valuation-scrim");
+          const valuationPriceToggle = document.getElementById("valuation-price-toggle");
           let valuationMetric = "pe";
           let valuationMonths = 60;
+          let valuationPriceEnabled = true;
           let valuationCursorIndex = null;
 
           function drawValuationChart() {{
@@ -1563,10 +1624,10 @@ def interactive_stock_chart_html(
             const allRows = (payload.monthlyValuations || []).filter(r => r && r.time);
             if (!svg || !allRows.length) return;
             const newest = new Date(allRows[allRows.length - 1].time + "T00:00:00");
-            const cutoff = valuationMonths === "all" ? null : new Date(
+            const cutoff = new Date(
               newest.getFullYear(), newest.getMonth() - Number(valuationMonths), newest.getDate()
             );
-            const rows = allRows.filter(r => !cutoff || new Date(r.time + "T00:00:00") >= cutoff);
+            const rows = allRows.filter(r => new Date(r.time + "T00:00:00") >= cutoff);
             const isPe = valuationMetric === "pe";
             const lineKey = isPe ? "pe" : "marketCapToSales";
             const barKey = isPe ? "eps" : "sales";
@@ -1578,6 +1639,7 @@ def interactive_stock_chart_html(
             const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
             const lineValues = rows.map(r => finite(r[lineKey])).filter(v => v !== null);
             const barValues = rows.map(r => finite(r[barKey])).filter(v => v !== null);
+            const priceValues = rows.map(r => finite(r.price)).filter(v => v !== null);
             if (!lineValues.length && !barValues.length) {{
               svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="#64748b">No valuation history available</text>';
               return;
@@ -1587,6 +1649,16 @@ def interactive_stock_chart_html(
             const barMax = barMaxRaw === barMin ? barMin + 1 : barMaxRaw * 1.08;
             const lineY = value => pad.t + plotH - (value-lineMin)/(lineMax-lineMin)*plotH;
             const barY = value => pad.t + plotH - (value-barMin)/(barMax-barMin)*plotH;
+            const priceMinRaw = priceValues.length ? Math.min(...priceValues) : 0;
+            const priceMaxRaw = priceValues.length ? Math.max(...priceValues) : 1;
+            const pricePadding = Math.max(
+              (priceMaxRaw-priceMinRaw)*.08,
+              Math.abs(priceMaxRaw)*.02,
+              .01
+            );
+            const priceMin = priceMinRaw-pricePadding;
+            const priceMax = priceMaxRaw+pricePadding;
+            const priceY = value => pad.t + plotH - (value-priceMin)/(priceMax-priceMin)*plotH;
             const zeroY = barY(0);
             const step = plotW / Math.max(1, rows.length);
             const tickCount = 4;
@@ -1614,6 +1686,14 @@ def interactive_stock_chart_html(
               path += `${{drawing ? "L" : "M"}}${{x.toFixed(1)}},${{y.toFixed(1)}} `;
               drawing=true;
             }});
+            let pricePath = "", priceDrawing = false;
+            if (valuationPriceEnabled) rows.forEach((r,i) => {{
+              const value=finite(r.price);
+              if (value === null) {{ priceDrawing=false; return; }}
+              const x=pad.l+step*(i+.5), y=priceY(value);
+              pricePath += `${{priceDrawing ? "L" : "M"}}${{x.toFixed(1)}},${{y.toFixed(1)}} `;
+              priceDrawing=true;
+            }});
             const sortedLineValues = [...lineValues].sort((a,b) => a-b);
             const medianMiddle = Math.floor(sortedLineValues.length/2);
             const median = !sortedLineValues.length ? null :
@@ -1634,9 +1714,13 @@ def interactive_stock_chart_html(
             svg.setAttribute("viewBox",`0 0 ${{width}} ${{height}}`);
             svg.innerHTML = `${{grid}}${{bars}}${{medianLine}}`
               + `<path d="${{path}}" fill="none" stroke="#6558ff" stroke-width="2.4" stroke-linejoin="round"/>`
+              + (valuationPriceEnabled && pricePath
+                ? `<path d="${{pricePath}}" fill="none" stroke="#d97706" stroke-width="2" stroke-linejoin="round"/>`
+                : "")
               + `<line id="valuation-crosshair" x1="0" y1="${{pad.t}}" x2="0" y2="${{pad.t+plotH}}" `
               + `stroke="#aab2bf" stroke-width="1" visibility="hidden"/>`
               + `<circle id="valuation-cursor-dot" r="5" fill="#5145e5" stroke="#fff" stroke-width="2" visibility="hidden"/>`
+              + `<circle id="valuation-price-cursor-dot" r="4" fill="#d97706" stroke="#fff" stroke-width="2" visibility="hidden"/>`
               + `<rect x="${{pad.l}}" y="${{pad.t}}" width="${{plotW}}" height="${{plotH}}" fill="transparent"/>`
               + `${{dateLabels}}`
               + `<text x="13" y="${{pad.t+plotH/2}}" fill="#64748b" font-size="10" text-anchor="middle" `
@@ -1648,14 +1732,18 @@ def interactive_stock_chart_html(
               const medianName = isPe ? "Median PE" : "Median MCap / Sales";
               medianLegend.textContent = `┄ ${{medianName}}${{median === null ? "" : " = " + median.toFixed(1)}}`;
             }}
+            const priceLegend = document.getElementById("valuation-price-legend");
+            if (priceLegend) priceLegend.hidden = !valuationPriceEnabled;
 
             function showValuationCursor(index, clientX=null, clientY=null) {{
               index = Math.max(0,Math.min(rows.length-1,index));
               valuationCursorIndex = index;
               const row=rows[index], lineValue=finite(row[lineKey]), barValue=finite(row[barKey]);
+              const priceValue=finite(row.price);
               const x=pad.l+step*(index+.5);
               const crosshair=svg.querySelector("#valuation-crosshair");
               const dot=svg.querySelector("#valuation-cursor-dot");
+              const priceDot=svg.querySelector("#valuation-price-cursor-dot");
               if (crosshair) {{
                 crosshair.setAttribute("x1",x); crosshair.setAttribute("x2",x);
                 crosshair.setAttribute("visibility","visible");
@@ -1664,12 +1752,19 @@ def interactive_stock_chart_html(
                 dot.setAttribute("cx",x); dot.setAttribute("cy",lineY(lineValue));
                 dot.setAttribute("visibility","visible");
               }} else if (dot) dot.setAttribute("visibility","hidden");
+              if (priceDot && valuationPriceEnabled && priceValue !== null) {{
+                priceDot.setAttribute("cx",x); priceDot.setAttribute("cy",priceY(priceValue));
+                priceDot.setAttribute("visibility","visible");
+              }} else if (priceDot) priceDot.setAttribute("visibility","hidden");
               if (!tooltip) return;
               const date=new Date(row.time+"T00:00:00");
               const dateLabel=date.toLocaleDateString(undefined,{{day:"numeric",month:"short",year:"2-digit"}});
               tooltip.innerHTML = `<div class="valuation-tooltip__date">${{dateLabel}}</div>`
                 + `<div><strong>${{lineLabel}}: ${{lineValue === null ? "—" : lineValue.toFixed(2)}}</strong></div>`
-                + `<div>${{barLabel}}: ${{barValue === null ? "—" : barValue.toFixed(2)}}</div>`;
+                + `<div>${{barLabel}}: ${{barValue === null ? "—" : barValue.toFixed(2)}}</div>`
+                + (valuationPriceEnabled
+                  ? `<div>Price: ${{priceValue === null ? "—" : priceValue.toFixed(2)}}</div>`
+                  : "");
               tooltip.hidden=false;
               const wrap=svg.parentElement, wrapRect=wrap.getBoundingClientRect();
               const svgRect=svg.getBoundingClientRect();
@@ -1689,8 +1784,10 @@ def interactive_stock_chart_html(
             function hideValuationCursor() {{
               const crosshair=svg.querySelector("#valuation-crosshair");
               const dot=svg.querySelector("#valuation-cursor-dot");
+              const priceDot=svg.querySelector("#valuation-price-cursor-dot");
               if (crosshair) crosshair.setAttribute("visibility","hidden");
               if (dot) dot.setAttribute("visibility","hidden");
+              if (priceDot) priceDot.setAttribute("visibility","hidden");
               if (tooltip) tooltip.hidden=true;
               valuationCursorIndex=null;
             }}
@@ -1745,6 +1842,19 @@ def interactive_stock_chart_html(
               drawValuationChart();
             }});
           }});
+          if (valuationPriceToggle) {{
+            valuationPriceToggle.addEventListener("click", () => {{
+              valuationPriceEnabled = !valuationPriceEnabled;
+              valuationPriceToggle.classList.toggle("is-active", valuationPriceEnabled);
+              valuationPriceToggle.setAttribute(
+                "aria-pressed",
+                valuationPriceEnabled ? "true" : "false"
+              );
+              const check = valuationPriceToggle.querySelector("span");
+              if (check) check.textContent = valuationPriceEnabled ? "✓" : "";
+              drawValuationChart();
+            }});
+          }}
           function setValuationOpen(open) {{
             if (!valuationDrawer || !valuationPanel) return;
             valuationDrawer.classList.toggle("is-open", open);
