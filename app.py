@@ -34,9 +34,12 @@ from charting import (
     sortable_results_table,
 )
 
-if "row_actions" not in inspect.signature(
-    sortable_results_table
-).parameters:
+if (
+    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 2
+    or "row_actions" not in inspect.signature(
+        sortable_results_table
+    ).parameters
+):
     charting_module = importlib.reload(charting_module)
     sortable_results_table = charting_module.sortable_results_table
 from cloud_storage import CloudStorageError, cloud_storage_from_config

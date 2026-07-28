@@ -25,6 +25,9 @@ from price_alerts import create_price_alert
 from screener import required_ma_periods
 
 
+RESULTS_TABLE_RENDERER_VERSION = 2
+
+
 MA_COLORS = [
     "#2563eb",
     "#dc2626",
