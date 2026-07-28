@@ -576,6 +576,42 @@ class InteractiveChartTests(unittest.TestCase):
         )
         self.assertNotIn('class="screener-company-link"', us_result)
 
+    def test_results_table_supports_inline_alert_actions(self):
+        alert_df = pd.DataFrame([
+            {
+                "Symbol": "TEST",
+                "Market": "India",
+                "Condition": "Cross below",
+                "Prices": "Target 100 / Reference 110",
+                "Dates": "Created 28 Jul 2026 / Triggered —",
+                "Actions": "",
+                "ChartSource": "TEST",
+                "Interactive Market": "INDIA",
+                "Alert Date": "2026-07-28T10:00:00+05:30",
+                "Alert Price": 100,
+                "Acknowledge URL": "?alert_id=abc&alert_action=acknowledge",
+                "Remove URL": "?alert_id=abc&alert_action=remove",
+            }
+        ])
+
+        result = results_hover_table_html(
+            alert_df,
+            table_title="New Alerts",
+            row_actions=True,
+            count_label="alert",
+        )
+
+        self.assertIn("New Alerts", result)
+        self.assertIn("1 alert", result)
+        self.assertIn('aria-label="Acknowledge alert"', result)
+        self.assertIn('aria-label="Remove alert"', result)
+        self.assertIn("window.confirm", result)
+        self.assertIn('target="_top"', result)
+        self.assertNotIn("<th>Acknowledge URL</th>", result)
+        self.assertNotIn("<th>Remove URL</th>", result)
+        self.assertIn("alert_date=2026-07-28", result)
+        self.assertIn("alert_marker_price=100", result)
+
 
 class InteractiveChartRouteTests(unittest.TestCase):
     def test_embedded_interactive_chart_route_renders_without_exception(self):

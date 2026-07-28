@@ -200,6 +200,37 @@ def query_param_value(name, default=None):
 
 
 def process_price_alert_request():
+    alert_action = str(
+        query_param_value("alert_action", "") or ""
+    ).strip().lower()
+    if alert_action in {"acknowledge", "remove"}:
+        alert_id = str(query_param_value("alert_id", "") or "").strip()
+        try:
+            if not alert_id:
+                raise ValueError("The selected alert is unavailable.")
+            if alert_action == "acknowledge":
+                changed = acknowledge_price_alerts([alert_id])
+                message = f"Acknowledged {changed} price alert(s)."
+            else:
+                changed = remove_price_alerts([alert_id])
+                message = f"Removed {changed} price alert(s)."
+            st.session_state["price_alert_feedback"] = ("success", message)
+            st.session_state.pop("_cached_price_alerts", None)
+        except PermissionError as exc:
+            st.session_state["price_alert_feedback"] = ("error", str(exc))
+            st.session_state["price_alert_login_required"] = True
+        except (TypeError, ValueError, OSError, RuntimeError) as exc:
+            action_label = (
+                "acknowledge" if alert_action == "acknowledge" else "remove"
+            )
+            st.session_state["price_alert_feedback"] = (
+                "error",
+                f"Could not {action_label} alert: {exc}",
+            )
+        st.session_state["switch_to_alerts_tab"] = True
+        st.query_params.clear()
+        st.rerun()
+
     requested = str(query_param_value("create_price_alert", "") or "").lower()
     if requested not in {"1", "true", "yes"}:
         return
@@ -5144,6 +5175,113 @@ with tab6:
         if app_user is not None and cloud_store is not None:
             st.info("No personal price alerts yet. Move or tap the interactive chart crosshair, then click the + at that price.")
     else:
+        def alert_number_for_table(value):
+            try:
+                number = float(value)
+                if pd.isna(number):
+                    return "—"
+                return f"{number:,.4f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                return "—"
+
+        def alert_date_for_table(value):
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return "—"
+            return parsed.strftime("%d %b %Y")
+
+        def alert_table_dataframe(table_alerts, *, acknowledge=False):
+            table_rows = []
+            for alert in table_alerts:
+                alert_id = str(alert.get("id", ""))
+                symbol = str(alert.get("symbol", "") or "").strip().upper()
+                market = normalize_market(alert.get("market", MARKET_INDIA))
+                direction = (
+                    "Cross above"
+                    if alert.get("direction") == "above"
+                    else "Cross below"
+                )
+                remove_url = "/?" + urlencode({
+                    "alert_id": alert_id,
+                    "alert_action": "remove",
+                })
+                acknowledge_url = ""
+                if acknowledge:
+                    acknowledge_url = "/?" + urlencode({
+                        "alert_id": alert_id,
+                        "alert_action": "acknowledge",
+                    })
+                table_rows.append({
+                    "Symbol": symbol,
+                    "Market": market_label(market),
+                    "Condition": direction,
+                    "Prices": (
+                        f"Target "
+                        f"{alert_number_for_table(alert.get('target_price'))} / "
+                        f"Reference "
+                        f"{alert_number_for_table(alert.get('reference_price'))}"
+                    ),
+                    "Dates": (
+                        f"Created "
+                        f"{alert_date_for_table(alert.get('created_at'))} / "
+                        f"Triggered "
+                        f"{alert_date_for_table(alert.get('triggered_candle_date'))}"
+                    ),
+                    "Actions": "",
+                    "ChartSource": symbol,
+                    "Interactive Market": market,
+                    "Alert Date": alert.get("created_at"),
+                    "Alert Price": alert.get("target_price"),
+                    "Acknowledge URL": acknowledge_url,
+                    "Remove URL": remove_url,
+                })
+            return pd.DataFrame(table_rows)
+
+        def render_results_style_alert_table(
+            table_alerts,
+            title,
+            empty_message,
+            *,
+            acknowledge=False,
+        ):
+            st.subheader(title)
+            if not table_alerts:
+                st.info(empty_message)
+                return
+            sortable_results_table(
+                alert_table_dataframe(
+                    table_alerts,
+                    acknowledge=acknowledge,
+                ),
+                height=700,
+                interactive_ma_periods=[],
+                table_title=title,
+                row_actions=True,
+                count_label=(
+                    "alert" if len(table_alerts) == 1 else "alerts"
+                ),
+            )
+
+        st.session_state.pop("_selected_alert_chart", None)
+        st.session_state.pop("_pending_alert_removal", None)
+        render_results_style_alert_table(
+            active_alerts,
+            "Active Alerts",
+            "No active alerts.",
+        )
+        render_results_style_alert_table(
+            new_alerts,
+            "New Alerts",
+            "No new alerts.",
+            acknowledge=True,
+        )
+        render_results_style_alert_table(
+            old_alerts,
+            "Old Alerts",
+            "No old alerts.",
+        )
+        st.stop()
+
         alert_by_id = {
             str(alert.get("id", "")): alert
             for alert in sorted_alerts

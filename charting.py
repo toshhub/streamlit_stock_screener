@@ -2478,6 +2478,8 @@ def results_hover_table_html(
     interactive_ma_periods=None,
     interactive_symbol_click=False,
     table_title="Screening Results",
+    row_actions=False,
+    count_label=None,
 ):
     visible_df = df.drop(
         columns=[
@@ -2492,6 +2494,8 @@ def results_hover_table_html(
             "Interactive Market",
             "Alert Date",
             "Alert Price",
+            "Acknowledge URL",
+            "Remove URL",
         ],
         errors="ignore",
     )
@@ -2719,6 +2723,46 @@ def results_hover_table_html(
         width: 13px;
         height: 13px;
         pointer-events: none;
+      }
+      .alert-row-actions {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 5px;
+        width: 100%;
+      }
+      .alert-row-action {
+        display: inline-grid;
+        place-items: center;
+        min-width: 26px;
+        height: 26px;
+        padding: 0 7px;
+        border: 1px solid #cbd5e1;
+        border-radius: 7px;
+        background: #ffffff;
+        color: #334155;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+        text-decoration: none;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      .alert-row-action:hover,
+      .alert-row-action:focus {
+        transform: translateY(-1px);
+        outline: none;
+      }
+      .alert-row-action--acknowledge {
+        border-color: #79c99a;
+        background: #ecf9f1;
+        color: #166534;
+      }
+      .alert-row-action--remove {
+        border-color: #efaaaa;
+        background: #fff1f1;
+        color: #b42323;
       }
       .interactive-chart-link.interactive-symbol-button {
         width: auto;
@@ -2960,6 +3004,8 @@ def results_hover_table_html(
         .stock-symbol-cell { gap: 2px; }
         .stock-hover, .stock-symbol-label { gap: 2px; padding: 3px 5px; max-width: calc(100% - 48px); }
         .interactive-chart-link, .screener-company-link { height: 20px; width: 20px; flex-basis: 20px; }
+        .alert-row-actions { gap: 3px; }
+        .alert-row-action { min-width: 22px; height: 22px; padding: 0 5px; font-size: 10px; }
         .chart-panel { max-height: 42vh; padding: 6px; }
         .chart-panel img { max-height: 34vh; }
         .chart-title-row { font-size: 12px; padding: 0 38px; }
@@ -3345,6 +3391,8 @@ def results_hover_table_html(
             f'<th class="sortable" onclick="toggleSymbolSort({index})">'
             f"{html.escape(display_column_label(column))}</th>"
             if column == "Symbol"
+            else f"<th>{html.escape(display_column_label(column))}</th>"
+            if column == "Actions"
             else
             f"<th class=\"sortable\" onclick=\"sortNumericColumn({index})\">"
             f"{html.escape(display_column_label(column))}</th>"
@@ -3389,7 +3437,36 @@ def results_hover_table_html(
         for column in visible_df.columns:
             value = "" if pd.isna(row[column]) else str(row[column])
             escaped_value = html.escape(value)
-            if column == "Symbol":
+            if column == "Actions" and row_actions:
+                acknowledge_url = source_row.get("Acknowledge URL")
+                remove_url = source_row.get("Remove URL")
+                action_items = []
+                if acknowledge_url and not pd.isna(acknowledge_url):
+                    action_items.append(
+                        '<a class="alert-row-action alert-row-action--acknowledge" '
+                        f'href="{html.escape(str(acknowledge_url), quote=True)}" '
+                        'target="_top" title="Acknowledge alert" '
+                        'aria-label="Acknowledge alert">✓</a>'
+                    )
+                if remove_url and not pd.isna(remove_url):
+                    escaped_symbol_for_prompt = html.escape(
+                        str(row.get("Symbol", "this stock")),
+                        quote=True,
+                    )
+                    action_items.append(
+                        '<a class="alert-row-action alert-row-action--remove" '
+                        f'href="{html.escape(str(remove_url), quote=True)}" '
+                        'target="_top" title="Remove alert" '
+                        'aria-label="Remove alert" '
+                        f'onclick="return window.confirm(\'Remove the saved price alert for '
+                        f"{escaped_symbol_for_prompt}? This action cannot be undone.\');\">"
+                        "−</a>"
+                    )
+                escaped_value = (
+                    '<span class="alert-row-actions">'
+                    f"{''.join(action_items)}</span>"
+                )
+            elif column == "Symbol":
                 valuation_state = row_valuation_state
                 valuation_class = row_valuation_class
                 valuation_title = ""
@@ -3470,7 +3547,7 @@ def results_hover_table_html(
                         )
                 screener_company_link = ""
                 if (
-                    str(interactive_market or "").strip().upper() == "INDIA"
+                    str(row_interactive_market or "").strip().upper() == "INDIA"
                     and value
                 ):
                     screener_href = (
@@ -3585,9 +3662,13 @@ def results_hover_table_html(
 
     result_count = len(visible_df)
     count_noun = (
-        f"alert{'s' if result_count != 1 else ''}"
-        if interactive_symbol_click
-        else f"match{'es' if result_count != 1 else ''}"
+        str(count_label)
+        if count_label
+        else (
+            f"alert{'s' if result_count != 1 else ''}"
+            if interactive_symbol_click
+            else f"match{'es' if result_count != 1 else ''}"
+        )
     )
     interaction_help = (
         "Select a stock name for its interactive chart"
@@ -3622,6 +3703,8 @@ def sortable_results_table(
     interactive_ma_periods=None,
     interactive_symbol_click=False,
     table_title="Screening Results",
+    row_actions=False,
+    count_label=None,
 ):
     components.html(
         results_hover_table_html(
@@ -3630,6 +3713,8 @@ def sortable_results_table(
             interactive_ma_periods=interactive_ma_periods,
             interactive_symbol_click=interactive_symbol_click,
             table_title=table_title,
+            row_actions=row_actions,
+            count_label=count_label,
         ),
         height=height,
         scrolling=True,
