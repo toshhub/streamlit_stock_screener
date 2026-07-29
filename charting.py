@@ -1215,16 +1215,24 @@ def interactive_stock_chart_html(
         .fullscreen-exit-icon {{ display: none; }}
         .chart-fullscreen.is-fullscreen .fullscreen-enter-icon {{ display: none; }}
         .chart-fullscreen.is-fullscreen .fullscreen-exit-icon {{ display: block; }}
-        :fullscreen .chart-shell {{
+        :fullscreen .chart-shell,
+        :-webkit-full-screen .chart-shell,
+        html.chart-pseudo-fullscreen .chart-shell {{
           width: 100vw;
           height: 100dvh;
           padding: 0;
           grid-template-rows: auto minmax(0, 1fr) auto;
           background: #ffffff;
         }}
-        :fullscreen .chart-footer {{ display: none; }}
-        :fullscreen .chart-header {{ border-radius: 0; }}
-        :fullscreen .chart-bottom-bar {{ border-bottom: 0; }}
+        :fullscreen .chart-footer,
+        :-webkit-full-screen .chart-footer,
+        html.chart-pseudo-fullscreen .chart-footer {{ display: none; }}
+        :fullscreen .chart-header,
+        :-webkit-full-screen .chart-header,
+        html.chart-pseudo-fullscreen .chart-header {{ border-radius: 0; }}
+        :fullscreen .chart-bottom-bar,
+        :-webkit-full-screen .chart-bottom-bar,
+        html.chart-pseudo-fullscreen .chart-bottom-bar {{ border-bottom: 0; }}
         .chart-toolbar {{
           display: flex;
           align-items: stretch;
@@ -2454,31 +2462,66 @@ def interactive_stock_chart_html(
             }});
           }}
 
+          let pseudoFullscreen = false;
+
+          function nativeFullscreenElement() {{
+            return document.fullscreenElement || document.webkitFullscreenElement || null;
+          }}
+
+          function setPseudoFullscreen(enabled) {{
+            pseudoFullscreen = Boolean(enabled);
+            document.documentElement.classList.toggle(
+              "chart-pseudo-fullscreen",
+              pseudoFullscreen
+            );
+            postChartMessage({{
+              source: "nse-interactive-chart",
+              action: "fullscreen-fallback",
+              enabled: pseudoFullscreen
+            }});
+            refreshFullscreenButton();
+          }}
+
           async function setFullscreenChart() {{
             const fullscreenTarget = document.documentElement;
+            const requestFullscreen = (
+              fullscreenTarget.requestFullscreen
+              || fullscreenTarget.webkitRequestFullscreen
+            );
+            const exitFullscreen = (
+              document.exitFullscreen
+              || document.webkitExitFullscreen
+            );
             try {{
-              if (!document.fullscreenElement) {{
-                await fullscreenTarget.requestFullscreen();
+              if (!nativeFullscreenElement() && !pseudoFullscreen) {{
+                if (typeof requestFullscreen !== "function") {{
+                  setPseudoFullscreen(true);
+                  return;
+                }}
+                await requestFullscreen.call(fullscreenTarget);
                 if (screen.orientation && screen.orientation.lock) {{
                   try {{ await screen.orientation.lock("landscape"); }} catch (error) {{}}
                 }}
+              }} else if (pseudoFullscreen) {{
+                setPseudoFullscreen(false);
               }} else {{
                 if (screen.orientation && screen.orientation.unlock) {{
                   try {{ screen.orientation.unlock(); }} catch (error) {{}}
                 }}
-                await document.exitFullscreen();
+                if (typeof exitFullscreen === "function") {{
+                  await exitFullscreen.call(document);
+                }} else {{
+                  setPseudoFullscreen(false);
+                }}
               }}
             }} catch (error) {{
-              postChartMessage({{
-                source: "nse-interactive-chart",
-                action: "fullscreen-unavailable"
-              }});
+              setPseudoFullscreen(!pseudoFullscreen);
             }}
           }}
 
           function refreshFullscreenButton() {{
             if (!chartFullscreen) return;
-            const isFullscreen = Boolean(document.fullscreenElement);
+            const isFullscreen = Boolean(nativeFullscreenElement() || pseudoFullscreen);
             chartFullscreen.classList.toggle("is-fullscreen", isFullscreen);
             chartFullscreen.setAttribute(
               "aria-label",
@@ -2490,6 +2533,7 @@ def interactive_stock_chart_html(
           if (chartFullscreen) {{
             chartFullscreen.addEventListener("click", setFullscreenChart);
             document.addEventListener("fullscreenchange", refreshFullscreenButton);
+            document.addEventListener("webkitfullscreenchange", refreshFullscreenButton);
           }}
           if (matchedPrevious) {{
             matchedPrevious.addEventListener("click", function() {{
@@ -3590,6 +3634,30 @@ def results_hover_table_html(
         font-size: 10px;
         text-align: center;
       }
+      body.chart-pseudo-fullscreen {
+        overflow: hidden;
+      }
+      .chart-panel.interactive-mode.chart-pseudo-fullscreen {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        width: 100vw;
+        height: 100dvh;
+        max-height: 100dvh;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: #fff;
+      }
+      .chart-panel.interactive-mode.chart-pseudo-fullscreen .interactive-panel-header,
+      .chart-panel.interactive-mode.chart-pseudo-fullscreen .interactive-panel-help {
+        display: none;
+      }
+      .chart-panel.interactive-mode.chart-pseudo-fullscreen .interactive-chart-embed {
+        height: 100%;
+        border: 0;
+        border-radius: 0;
+      }
 
       /* ---- Mobile portrait: smaller fonts and bigger touch-friendly controls ---- */
       @media screen and (max-width: 600px) and (orientation: portrait) {
@@ -3706,6 +3774,25 @@ def results_hover_table_html(
               height: requestedHeight
             }, '*');
           } catch (error) {}
+        }
+
+        function setPseudoFullscreen(enabled) {
+          var panel = document.getElementById('chart-panel');
+          if (!panel) return;
+          var active = Boolean(enabled);
+          panel.classList.toggle('chart-pseudo-fullscreen', active);
+          document.body.classList.toggle('chart-pseudo-fullscreen', active);
+          var viewportHeight = window.visualViewport
+            ? window.visualViewport.height
+            : window.innerHeight;
+          setComponentFrameHeight(
+            active
+              ? viewportHeight
+              : (Number(panel.getAttribute('data-default-height')) || viewportHeight)
+          );
+          if (active) {
+            panel.scrollIntoView({ behavior: 'auto', block: 'start' });
+          }
         }
 
         function setActiveRow(el) {
@@ -3965,6 +4052,8 @@ def results_hover_table_html(
         function clearPanel() {
           var panel = document.getElementById('chart-panel');
           if (panel) {
+            document.body.classList.remove('chart-pseudo-fullscreen');
+            panel.classList.remove('chart-pseudo-fullscreen');
             panel.classList.remove('interactive-mode');
             panel.innerHTML = '<div class="panel-placeholder">📈 Select a stock for the fast chart or use its candle icon for the interactive chart</div>';
             setComponentFrameHeight(
@@ -4039,7 +4128,10 @@ def results_hover_table_html(
               if (['126', '252', '756', 'all'].indexOf(requestedRange) >= 0) {
                 activeInteractiveRange = requestedRange;
               }
+            } else if (message.action === 'fullscreen-fallback') {
+              setPseudoFullscreen(message.enabled);
             } else if (message.action === 'close') {
+              setPseudoFullscreen(false);
               setActiveInteractiveButton(null);
               clearPanel();
             }
