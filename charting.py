@@ -2463,13 +2463,73 @@ def interactive_stock_chart_html(
           }}
 
           let pseudoFullscreen = false;
+          const promotedAncestorFrames = [];
 
           function nativeFullscreenElement() {{
             return document.fullscreenElement || document.webkitFullscreenElement || null;
           }}
 
+          function promoteAncestorFrames(enabled) {{
+            if (!enabled) {{
+              while (promotedAncestorFrames.length) {{
+                const state = promotedAncestorFrames.pop();
+                if (state.frameStyle === null) {{
+                  state.frame.removeAttribute("style");
+                }} else {{
+                  state.frame.setAttribute("style", state.frameStyle);
+                }}
+                state.documentElement.style.overflow = state.htmlOverflow;
+                if (state.body) state.body.style.overflow = state.bodyOverflow;
+                try {{
+                  state.ownerWindow.scrollTo(state.scrollX, state.scrollY);
+                }} catch (error) {{}}
+              }}
+              return;
+            }}
+            if (promotedAncestorFrames.length) return;
+            let contextWindow = window;
+            for (let depth = 0; depth < 8; depth += 1) {{
+              try {{
+                const frame = contextWindow.frameElement;
+                if (!frame || !frame.ownerDocument) break;
+                const ownerDocument = frame.ownerDocument;
+                const ownerWindow = ownerDocument.defaultView;
+                promotedAncestorFrames.push({{
+                  frame: frame,
+                  frameStyle: frame.getAttribute("style"),
+                  documentElement: ownerDocument.documentElement,
+                  htmlOverflow: ownerDocument.documentElement.style.overflow,
+                  body: ownerDocument.body,
+                  bodyOverflow: ownerDocument.body
+                    ? ownerDocument.body.style.overflow
+                    : "",
+                  ownerWindow: ownerWindow,
+                  scrollX: ownerWindow ? ownerWindow.scrollX : 0,
+                  scrollY: ownerWindow ? ownerWindow.scrollY : 0
+                }});
+                frame.style.setProperty("position", "fixed", "important");
+                frame.style.setProperty("inset", "0", "important");
+                frame.style.setProperty("z-index", "2147483647", "important");
+                frame.style.setProperty("display", "block", "important");
+                frame.style.setProperty("width", "100vw", "important");
+                frame.style.setProperty("height", "100dvh", "important");
+                frame.style.setProperty("max-width", "none", "important");
+                frame.style.setProperty("max-height", "none", "important");
+                frame.style.setProperty("border", "0", "important");
+                ownerDocument.documentElement.style.overflow = "hidden";
+                if (ownerDocument.body) ownerDocument.body.style.overflow = "hidden";
+                try {{ if (ownerWindow) ownerWindow.scrollTo(0, 0); }} catch (error) {{}}
+                if (!contextWindow.parent || contextWindow.parent === contextWindow) break;
+                contextWindow = contextWindow.parent;
+              }} catch (error) {{
+                break;
+              }}
+            }}
+          }}
+
           function setPseudoFullscreen(enabled) {{
             pseudoFullscreen = Boolean(enabled);
+            promoteAncestorFrames(pseudoFullscreen);
             document.documentElement.classList.toggle(
               "chart-pseudo-fullscreen",
               pseudoFullscreen
