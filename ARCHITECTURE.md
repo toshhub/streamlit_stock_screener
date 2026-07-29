@@ -58,9 +58,8 @@ Defines all data directories and ensures they exist on startup.
 ```
 BASE_DIR  →  data/
   ├── excel/    →  EXCEL_DIR
-  ├── daily/    →  DAILY_DIR
-  ├── weekly/   →  WEEKLY_DIR
-  ├── monthly/  →  MONTHLY_DIR
+  ├── india/daily/ → DAILY_DIR
+  ├── us/daily/    → US_DAILY_DIR
   ├── charts/   →  CHARTS_DIR
   └── metadata/ →  META_DIR
 ```
@@ -77,9 +76,8 @@ All directories are created via `Path.mkdir(parents=True, exist_ok=True)` at imp
 
 | Timeframe | yfinance `interval` | yfinance `period` | Output Directory |
 |-----------|---------------------|-------------------|------------------|
-| DAY       | `1d`                | `5y`              | `data/daily/`    |
-| WEEK      | `1wk`               | `10y`             | `data/weekly/`   |
-| MONTH     | `1mo`               | `max`             | `data/monthly/`  |
+| India DAY | `1d`                | `10y`             | `data/india/daily/` |
+| US DAY    | `1d`                | `10y`             | `data/us/daily/` |
 
 **Key functions**:
 

@@ -50,7 +50,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
         check_alerts.assert_called_once_with(
             "TEST",
             MARKET_INDIA,
-            stock_file=config["target_dir"] / "TEST",
+            stock_file=config["target_dir"] / "TEST.json",
         )
 
     def test_stock_files_follow_selected_source_order_and_limit(self):
@@ -279,14 +279,14 @@ class IncrementalDownloaderTests(unittest.TestCase):
             self.assertNotIn("period", kwargs)
             self.assertEqual(result["Rows Added"], 1)
             self.assertEqual(result["Status"], "Updated")
-            migrated = load_stock_dataframe(out_file.with_suffix(""))
+            migrated = load_stock_dataframe(out_file)
             self.assertEqual(
                 migrated["Date"].dt.strftime("%Y-%m-%d").tolist(),
                 ["2026-07-16", "2026-07-17"],
             )
-            self.assertFalse(out_file.exists())
+            self.assertTrue(out_file.exists())
 
-    def test_current_file_refreshes_recent_range_and_migrates_to_parquet(self):
+    def test_current_json_file_refreshes_recent_range_in_place(self):
         existing_records = [{"Date": "2026-07-19", "Close": 103.0}]
         fixed_today = pd.Timestamp("2026-07-19")
 
@@ -312,8 +312,8 @@ class IncrementalDownloaderTests(unittest.TestCase):
             yf_download.assert_called_once()
             self.assertEqual(result["Rows Added"], 0)
             self.assertEqual(result["Status"], "Already current")
-            self.assertFalse(out_file.exists())
-            self.assertTrue((out_file.with_suffix("") / "2026.parquet").exists())
+            self.assertTrue(out_file.exists())
+            self.assertFalse(out_file.with_suffix("").is_dir())
 
     def test_market_hours_candle_is_not_considered_completed(self):
         self.assertEqual(
@@ -400,7 +400,7 @@ class IncrementalDownloaderTests(unittest.TestCase):
                     incremental=True,
                     market=MARKET_INDIA,
                 )
-            stored = load_stock_dataframe(out_file.with_suffix(""))
+            stored = load_stock_dataframe(out_file)
 
         self.assertEqual(float(stored.iloc[-1]["Close"]), 107.0)
         self.assertEqual(float(stored.iloc[-1]["Volume"]), 1500.0)

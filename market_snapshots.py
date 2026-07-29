@@ -12,7 +12,7 @@ from config import META_DIR
 from downloader import MARKET_INDIA, normalize_market
 from fundamentals import fetch_screener_valuation_history
 from storage import load_fundamentals, load_pe_ratios
-from stock_data import latest_stock_row, list_symbol_paths
+from stock_data import latest_stock_row, list_symbol_paths, symbol_from_path
 
 
 LATEST_VALUES_FILE = META_DIR / "latest_stock_values.parquet"
@@ -28,20 +28,33 @@ def _write_atomic(df, path):
 
 
 def refresh_latest_stock_values(market_directories):
+    stock_items = [
+        (market, stock_path)
+        for market, directory in market_directories.items()
+        for stock_path in list_symbol_paths(directory)
+    ]
+
+    def latest_value(item):
+        market, stock_path = item
+        latest = latest_stock_row(stock_path)
+        if latest is None:
+            return None
+        return {
+            "Market": normalize_market(market),
+            "Symbol": symbol_from_path(stock_path),
+            "Date": pd.Timestamp(latest["Date"]).normalize(),
+            "Close": float(latest["Close"]),
+            "Volume": float(latest.get("Volume", 0) or 0),
+            "UpdatedAt": datetime.now().astimezone().isoformat(
+                timespec="seconds"
+            ),
+        }
+
     rows = []
-    for market, directory in market_directories.items():
-        for stock_path in list_symbol_paths(directory):
-            latest = latest_stock_row(stock_path)
-            if latest is None:
-                continue
-            rows.append({
-                "Market": normalize_market(market),
-                "Symbol": stock_path.name,
-                "Date": pd.Timestamp(latest["Date"]).normalize(),
-                "Close": float(latest["Close"]),
-                "Volume": float(latest.get("Volume", 0) or 0),
-                "UpdatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
-            })
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        for row in executor.map(latest_value, stock_items):
+            if row is not None:
+                rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
         _write_atomic(result, LATEST_VALUES_FILE)

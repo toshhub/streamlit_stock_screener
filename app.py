@@ -13,13 +13,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
 import charting as charting_module
+from chart_context import (
+    chart_alert_context,
+    interactive_chart_query,
+)
 from backtest import (
     get_backtest_calendar_dates,
     run_backtest,
@@ -35,7 +38,7 @@ from charting import (
 )
 
 if (
-    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 4
+    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 6
     or "row_actions" not in inspect.signature(
         sortable_results_table
     ).parameters
@@ -98,7 +101,7 @@ from storage import (
     update_settings,
 )
 from stock_data import list_symbol_paths, stock_exists, symbol_path
-from user_auth import current_user, render_header_account_controls
+from user_auth import current_user, render_workspace_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
@@ -209,6 +212,24 @@ def query_param_value(name, default=None):
     if isinstance(value, list):
         return value[0] if value else default
     return value
+
+
+def session_price_alerts(max_age_seconds=60):
+    """Load this user's alerts once per short Streamlit session window."""
+    cached_alerts = st.session_state.get("_cached_price_alerts")
+    cached_at = float(
+        st.session_state.get("_cached_price_alerts_at", 0.0) or 0.0
+    )
+    cache_is_fresh = (
+        cached_alerts is not None
+        and (time.monotonic() - cached_at) < max_age_seconds
+    )
+    if cache_is_fresh:
+        return deepcopy(cached_alerts)
+    fresh_alerts = load_price_alerts()
+    st.session_state["_cached_price_alerts"] = deepcopy(fresh_alerts)
+    st.session_state["_cached_price_alerts_at"] = time.monotonic()
+    return fresh_alerts
 
 
 def process_price_alert_request():
@@ -474,6 +495,12 @@ def run_interactive_chart_view():
         "alertDate": query_param_value("alert_date", None),
         "alertPrice": query_param_value("alert_marker_price", None),
     }
+    trade_overlay, alert_markers = chart_alert_context(
+        session_price_alerts(),
+        symbol,
+        market,
+        trade_overlay,
+    )
     growth_metrics, valuation_medians = get_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
@@ -590,6 +617,7 @@ def run_interactive_chart_view():
             growth_metrics=growth_metrics,
             valuation_medians=valuation_medians,
             trade_overlay=trade_overlay,
+            alert_markers=alert_markers,
             alert_market=market,
             height=embedded_chart_height,
             watchlists=chart_watchlists,
@@ -627,7 +655,7 @@ st.markdown(
         --shadow-md: 0 10px 30px rgba(16, 36, 62, 0.09);
         --primary-nav-top: calc(3.65rem + env(safe-area-inset-top, 0px));
         --primary-nav-height: calc(3.15rem + 0.96rem + 2px);
-        --primary-nav-clearance: 0.8rem;
+        --primary-nav-clearance: 0.35rem;
     }
     .results-run-heading {
         margin: 0.4rem 0 1rem;
@@ -675,184 +703,44 @@ st.markdown(
         color: var(--ink);
     }
 
-    /* Product header */
-    .st-key-app_hero_shell {
-        position: relative;
-        overflow: hidden;
-        min-height: 126px;
-        margin: 0 0 1.15rem;
-        padding: 1.55rem 1.8rem;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 22px;
-        background: linear-gradient(118deg, #10243e 0%, #145a73 58%, #1c7c8f 100%);
-        box-shadow: 0 16px 38px rgba(16, 53, 76, 0.20);
-    }
-    .st-key-app_hero_shell::after {
-        content: "";
-        position: absolute;
-        width: 230px;
-        height: 230px;
-        right: -55px;
-        top: -105px;
-        border-radius: 50%;
-        border: 42px solid rgba(255, 255, 255, 0.07);
-    }
-    .st-key-app_hero_shell [data-testid="stHorizontalBlock"] {
-        position: relative;
-        z-index: 1;
-        align-items: center;
-    }
-    .app-hero__content {
-        position: relative;
-        z-index: 1;
-    }
-    .app-hero__eyebrow {
-        margin-bottom: 0.35rem;
-        color: #8de0e4;
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-    }
-    .app-hero__title {
-        margin: 0;
-        color: #ffffff !important;
-        font-size: clamp(1.75rem, 3vw, 2.55rem);
-        font-weight: 800;
-        line-height: 1.1;
-        letter-spacing: -0.035em;
-    }
-    .app-hero__subtitle {
-        max-width: 650px;
-        margin: 0.55rem 0 0;
-        color: rgba(255, 255, 255, 0.78);
-        font-size: 0.96rem;
-    }
-    .st-key-hero_account_panel {
-        position: relative;
-        z-index: 1;
-        padding: 0.9rem 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.22);
-        border-radius: 16px;
-        background: rgba(255, 255, 255, 0.11);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20);
-    }
-    .hero-account__label {
-        margin-bottom: 0.18rem;
-        color: #8de0e4;
-        font-size: 0.68rem;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-    }
-    .hero-account__name {
-        color: #ffffff;
-        font-size: 0.98rem;
-        font-weight: 800;
-    }
-    .st-key-hero_account_panel .stCaption {
-        color: rgba(255, 255, 255, 0.72) !important;
-    }
-    .st-key-hero_account_panel .stButton > button {
-        min-height: 2.55rem;
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        background: #ffffff;
-        color: #124e67;
-        font-weight: 800;
-    }
-    .st-key-hero_account_panel .stButton > button:hover {
-        border-color: #8de0e4;
-        background: #eafcfd;
-        color: #103f55;
-    }
-
-    /* Workflow overview */
-    .workflow-rail {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 0.65rem;
-        position: relative;
-        z-index: 1;
-        margin: 1.15rem 0 0;
-    }
-    .workflow-step {
-        display: flex;
-        align-items: center;
-        gap: 0.7rem;
-        min-width: 0;
-        padding: 0.7rem 0.8rem;
-        border: 1px solid rgba(255, 255, 255, 0.20);
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.10);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-        backdrop-filter: blur(8px);
-    }
-    .workflow-step__number {
-        display: grid;
-        place-items: center;
-        width: 1.8rem;
-        height: 1.8rem;
-        flex: 0 0 1.8rem;
-        border-radius: 8px;
-        font-size: 0.72rem;
-        font-weight: 850;
-    }
-    .workflow-step__copy { min-width: 0; }
-    .workflow-step__title {
-        color: #ffffff;
-        font-size: 0.78rem;
-        font-weight: 800;
-        line-height: 1.15;
-    }
-    .workflow-step__detail {
-        margin-top: 0.14rem;
-        overflow: hidden;
-        color: rgba(255, 255, 255, 0.70);
-        font-size: 0.68rem;
-        line-height: 1.2;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    .workflow-step--data .workflow-step__number { background: #dceeff; color: #205f9b; }
-    .workflow-step--screen .workflow-step__number { background: #eee5ff; color: #6540a5; }
-    .workflow-step--test .workflow-step__number { background: #ffead0; color: #a95814; }
-    .workflow-step--review .workflow-step__number { background: #dcf5e8; color: #126b43; }
-
     /* Tab-level context banners */
-    .workspace-banner {
+    [class*="st-key-workspace_banner_shell_"] {
         --banner-accent: #176b87;
         --banner-soft: #e9f6f8;
         --banner-border: #c6e3e9;
         position: relative;
         overflow: hidden;
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        align-items: center;
-        gap: 1rem;
-        min-height: 108px;
-        margin: 0.1rem 0 1.15rem;
-        padding: 1.15rem 1.3rem;
+        margin: -0.55rem 0 0.8rem;
+        padding: 0.45rem 0.6rem;
         border: 1px solid var(--banner-border);
         border-left: 5px solid var(--banner-accent);
         border-radius: 16px;
         background: linear-gradient(112deg, #ffffff 0%, var(--banner-soft) 100%);
         box-shadow: 0 8px 24px rgba(16, 36, 62, 0.07);
     }
-    .workspace-banner::after {
-        content: "";
-        position: absolute;
-        right: -38px;
-        bottom: -66px;
-        width: 150px;
-        height: 150px;
-        border: 28px solid color-mix(in srgb, var(--banner-accent) 9%, transparent);
-        border-radius: 50%;
-        pointer-events: none;
+    [class*="st-key-workspace_banner_shell_data"] { --banner-accent: #2878b8; --banner-soft: #edf6fd; --banner-border: #c9e0f2; }
+    [class*="st-key-workspace_banner_shell_screener"] { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
+    [class*="st-key-workspace_banner_shell_backtest"] { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
+    [class*="st-key-workspace_banner_shell_results"] { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    [class*="st-key-workspace_banner_shell_watchlists"] { --banner-accent: #a17818; --banner-soft: #fff9e9; --banner-border: #eadcae; }
+    [class*="st-key-workspace_banner_shell_alerts"] { --banner-accent: #b66a16; --banner-soft: #fff7e8; --banner-border: #efd6aa; }
+    [class*="st-key-workspace_banner_shell_"] [data-testid="stHorizontalBlock"] {
+        align-items: center;
+    }
+    .workspace-banner {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.8rem;
+        margin: 0;
+        padding: 0.35rem 0.45rem;
     }
     .workspace-banner--data { --banner-accent: #2878b8; --banner-soft: #edf6fd; --banner-border: #c9e0f2; }
     .workspace-banner--screener { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
     .workspace-banner--backtest { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
     .workspace-banner--results { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    .workspace-banner--watchlists { --banner-accent: #a17818; --banner-soft: #fff9e9; --banner-border: #eadcae; }
     .workspace-banner--alerts { --banner-accent: #b66a16; --banner-soft: #fff7e8; --banner-border: #efd6aa; }
     .workspace-banner__icon {
         display: grid;
@@ -899,6 +787,47 @@ st.markdown(
         font-size: 0.7rem;
         font-weight: 800;
         white-space: nowrap;
+    }
+    [class*="st-key-workspace_account_"] {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.45rem;
+        min-height: 0;
+        padding: 0.3rem 0.2rem 0.3rem 0.8rem;
+        border-left: 1px solid color-mix(in srgb, var(--banner-accent) 24%, white);
+        background: transparent;
+    }
+    .workspace-account__label {
+        color: var(--brand);
+        font-size: 0.62rem;
+        font-weight: 850;
+        letter-spacing: 0.09em;
+        line-height: 1;
+        text-transform: uppercase;
+    }
+    .workspace-account__name {
+        margin-top: 0.18rem;
+        overflow: hidden;
+        color: var(--ink-strong);
+        font-size: 0.82rem;
+        font-weight: 800;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .workspace-account__email {
+        overflow: hidden;
+        color: var(--ink-muted);
+        font-size: 0.64rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    [class*="st-key-workspace_account_"] .stButton > button {
+        width: auto;
+        min-height: 1.9rem;
+        margin-top: 0;
+        padding: 0.25rem 0.55rem;
+        font-size: 0.72rem;
     }
 
     /* Buttons */
@@ -1063,10 +992,7 @@ st.markdown(
     }
     div.stTabs [role="tabpanel"] {
         min-height: calc(100vh - 9rem);
-        padding-top: calc(
-            var(--primary-nav-height)
-            + var(--primary-nav-clearance)
-        );
+        padding-top: 0;
         scroll-margin-top: calc(
             var(--primary-nav-top)
             + var(--primary-nav-height)
@@ -1506,36 +1432,33 @@ st.markdown(
         :root {
             --primary-nav-top: calc(3.45rem + env(safe-area-inset-top, 0px));
             --primary-nav-height: calc(2.8rem + 0.76rem + 2px);
-            --primary-nav-clearance: 0.7rem;
+            --primary-nav-clearance: 0.3rem;
         }
-        .st-key-app_hero_shell {
-            min-height: 196px;
-            padding: 1.25rem;
-            border-radius: 17px;
-        }
-        .app-hero__subtitle {
-            font-size: 0.86rem;
-        }
-        .st-key-app_hero_shell [data-testid="stHorizontalBlock"] {
+        [class*="st-key-workspace_banner_shell_"] [data-testid="stHorizontalBlock"] {
             flex-wrap: wrap;
         }
-        .st-key-hero_account_panel {
-            padding: 0.75rem 0.85rem;
-        }
-        .workflow-rail {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+        [class*="st-key-workspace_banner_shell_"] [data-testid="column"] {
+            min-width: min(100%, 270px);
+            flex: 1 1 270px;
         }
         .workspace-banner {
             grid-template-columns: auto minmax(0, 1fr);
-            min-height: 96px;
-            padding: 1rem;
+            padding: 0.45rem;
         }
+        .workspace-banner__description { display: none; }
         .workspace-banner__badge { display: none; }
         .workspace-banner__icon {
             width: 2.7rem;
             height: 2.7rem;
         }
         .workspace-banner__title { font-size: 1.2rem; }
+        [class*="st-key-workspace_account_"] {
+            grid-template-columns: minmax(0, 1fr) auto;
+            min-height: 0;
+            padding: 0.35rem 0.45rem;
+            border-top: 1px solid color-mix(in srgb, var(--banner-accent) 20%, white);
+            border-left: 0;
+        }
         div.stTabs [role="tablist"] {
             width: calc(100vw - 1rem);
             gap: clamp(0.2rem, 1.5vw, 0.45rem);
@@ -1557,10 +1480,6 @@ st.markdown(
         }
     }
     @media (max-width: 460px) {
-        .workflow-rail { gap: 0.45rem; }
-        .workflow-step { padding: 0.55rem 0.6rem; }
-        .workflow-step__detail { display: none; }
-        .workflow-step__title { font-size: 0.7rem; }
         .workspace-banner__icon { display: none; }
         .workspace-banner { grid-template-columns: 1fr; }
     }
@@ -1568,7 +1487,7 @@ st.markdown(
         :root {
             --primary-nav-top: calc(3.05rem + env(safe-area-inset-top, 0px));
             --primary-nav-height: calc(2.35rem + 0.56rem + 2px);
-            --primary-nav-clearance: 0.55rem;
+            --primary-nav-clearance: 0.25rem;
         }
         div.stTabs [role="tablist"] {
             width: auto;
@@ -1586,15 +1505,9 @@ st.markdown(
         div.stTabs [role="tab"] p::before {
             font-size: 1.08rem;
         }
-        .st-key-app_hero_shell {
-            min-height: 142px;
-            padding: 0.85rem 1rem;
-        }
-        .workflow-rail {
-            margin-top: 0.7rem;
-        }
-        .workflow-step {
-            padding: 0.45rem 0.55rem;
+        [class*="st-key-workspace_account_"] {
+            min-height: 76px;
+            padding: 0.45rem 0.6rem;
         }
     }
     </style>
@@ -1603,80 +1516,35 @@ st.markdown(
 )
 
 def render_workspace_banner(tone, eyebrow, title, description, icon, badge):
-    """Render a visual-only banner that gives each workspace clear context."""
-    st.markdown(
-        f"""
-        <section class="workspace-banner workspace-banner--{html.escape(tone)}">
-            <div class="workspace-banner__icon" aria-hidden="true">{html.escape(icon)}</div>
-            <div class="workspace-banner__content">
-                <div class="workspace-banner__eyebrow">{html.escape(eyebrow)}</div>
-                <h2 class="workspace-banner__title">{html.escape(title)}</h2>
-                <p class="workspace-banner__description">{html.escape(description)}</p>
-            </div>
-            <div class="workspace-banner__badge">{html.escape(badge)}</div>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with st.container(key="app_hero_shell"):
-    hero_copy_col, hero_account_col = st.columns(
-        [4.2, 1.45],
-        gap="large",
-        vertical_alignment="center",
-    )
-    with hero_copy_col:
-        st.markdown(
-            """
-            <div class="app-hero__content">
-                <div class="app-hero__eyebrow">Market intelligence workspace</div>
-                <h1 class="app-hero__title">NSE Stock Screener</h1>
-                <p class="app-hero__subtitle">
-                    Download market data, build precise screeners, validate strategies,
-                    and review opportunities in one focused workspace.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    """Render workspace identity and compact account actions as one banner."""
+    with st.container(key=f"workspace_banner_shell_{tone}"):
+        banner_col, account_col = st.columns(
+            [4.8, 1.35],
+            gap="medium",
+            vertical_alignment="center",
         )
-    with hero_account_col:
-        render_header_account_controls(st, app_user, cloud_store is not None)
-
-    st.markdown(
-        """
-        <div class="workflow-rail" aria-label="Analysis workflow">
-            <div class="workflow-step workflow-step--data">
-                <div class="workflow-step__number">01</div>
-                <div class="workflow-step__copy">
-                    <div class="workflow-step__title">Prepare data</div>
-                    <div class="workflow-step__detail">Keep the market universe current</div>
-                </div>
-            </div>
-            <div class="workflow-step workflow-step--screen">
-                <div class="workflow-step__number">02</div>
-                <div class="workflow-step__copy">
-                    <div class="workflow-step__title">Build a screen</div>
-                    <div class="workflow-step__detail">Combine technical and custom rules</div>
-                </div>
-            </div>
-            <div class="workflow-step workflow-step--test">
-                <div class="workflow-step__number">03</div>
-                <div class="workflow-step__copy">
-                    <div class="workflow-step__title">Validate strategy</div>
-                    <div class="workflow-step__detail">Measure historical performance</div>
-                </div>
-            </div>
-            <div class="workflow-step workflow-step--review">
-                <div class="workflow-step__number">04</div>
-                <div class="workflow-step__copy">
-                    <div class="workflow-step__title">Review results</div>
-                    <div class="workflow-step__detail">Compare candidates and charts</div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        with banner_col:
+            st.markdown(
+                f"""
+                <section class="workspace-banner workspace-banner--{html.escape(tone)}">
+                    <div class="workspace-banner__icon" aria-hidden="true">{html.escape(icon)}</div>
+                    <div class="workspace-banner__content">
+                        <div class="workspace-banner__eyebrow">{html.escape(eyebrow)}</div>
+                        <h2 class="workspace-banner__title">{html.escape(title)}</h2>
+                        <p class="workspace-banner__description">{html.escape(description)}</p>
+                    </div>
+                    <div class="workspace-banner__badge">{html.escape(badge)}</div>
+                </section>
+                """,
+                unsafe_allow_html=True,
+            )
+        with account_col:
+            render_workspace_account_controls(
+                st,
+                app_user,
+                cloud_store is not None,
+                tone,
+            )
 
 
 def sync_pattern_lookback_from_slider():
@@ -2510,29 +2378,43 @@ def render_backtest_results_table(
                     chart_row["ChartSrc"] = ""
             chart_source = chart_row.get("ChartSource") or chart_row.get("Symbol")
             if chart_source and interactive_market:
-                query = {
-                    "interactive_chart": chart_source,
-                    "market": interactive_market,
-                    "embedded": "1",
-                    "range": "all",
-                    "buy_date": pd.to_datetime(chart_row.get("Buy Date"), dayfirst=True).strftime("%Y-%m-%d"),
-                    "exit_date": pd.to_datetime(chart_row.get("Exit Date"), dayfirst=True).strftime("%Y-%m-%d"),
-                    "window_start": chart_row.get("Chart Start Date"),
-                    "window_end": chart_row.get("Chart End Date"),
-                    "buy_price": chart_row.get("Chart Buy Price", chart_row.get("Buy Price")),
-                    "exit_price": chart_row.get("Chart Exit Price", chart_row.get("Exit Price")),
-                    "exit_reason": chart_row.get("Exit Reason"),
-                }
                 ma_periods = chart_row.get("Chart MA Periods") or []
-                if ma_periods:
-                    query["ma"] = ",".join(str(period) for period in ma_periods)
-                target_price = chart_row.get("Chart Target Price", chart_row.get("Target Price"))
-                stop_price = chart_row.get("Chart Stop Loss Price", chart_row.get("Stop Loss Price"))
-                if target_price is not None:
-                    query["target_price"] = target_price
-                if stop_price is not None:
-                    query["stop_price"] = stop_price
-                chart_row["InteractiveSrc"] = "?" + urlencode(query)
+                chart_row["InteractiveSrc"] = interactive_chart_query(
+                    chart_source,
+                    interactive_market,
+                    ma_periods=ma_periods,
+                    embedded=True,
+                    initial_range="all",
+                    trade_overlay={
+                        "buyDate": pd.to_datetime(
+                            chart_row.get("Buy Date"),
+                            dayfirst=True,
+                        ).strftime("%Y-%m-%d"),
+                        "exitDate": pd.to_datetime(
+                            chart_row.get("Exit Date"),
+                            dayfirst=True,
+                        ).strftime("%Y-%m-%d"),
+                        "windowStart": chart_row.get("Chart Start Date"),
+                        "windowEnd": chart_row.get("Chart End Date"),
+                        "buyPrice": chart_row.get(
+                            "Chart Buy Price",
+                            chart_row.get("Buy Price"),
+                        ),
+                        "targetPrice": chart_row.get(
+                            "Chart Target Price",
+                            chart_row.get("Target Price"),
+                        ),
+                        "stopPrice": chart_row.get(
+                            "Chart Stop Loss Price",
+                            chart_row.get("Stop Loss Price"),
+                        ),
+                        "exitPrice": chart_row.get(
+                            "Chart Exit Price",
+                            chart_row.get("Exit Price"),
+                        ),
+                        "exitReason": chart_row.get("Exit Reason"),
+                    },
+                )
             chart_rows.append(chart_row)
         chart_details_by_filter[filter_name] = chart_rows
     stock_payload = json.dumps(chart_details_by_filter, default=str)
@@ -3434,23 +3316,6 @@ def switch_to_tab(tab_index):
         """,
         height=0,
     )
-
-
-def session_price_alerts(max_age_seconds=60):
-    cached_alerts = st.session_state.get("_cached_price_alerts")
-    cached_at = float(
-        st.session_state.get("_cached_price_alerts_at", 0.0) or 0.0
-    )
-    cache_is_fresh = (
-        cached_alerts is not None
-        and (time.monotonic() - cached_at) < max_age_seconds
-    )
-    if cache_is_fresh:
-        return deepcopy(cached_alerts)
-    fresh_alerts = load_price_alerts()
-    st.session_state["_cached_price_alerts"] = deepcopy(fresh_alerts)
-    st.session_state["_cached_price_alerts_at"] = time.monotonic()
-    return fresh_alerts
 
 
 price_alerts_snapshot = session_price_alerts()
@@ -5215,12 +5080,9 @@ with tab5:
                             ),
                         )
                         symbol_col, remove_col = st.columns([5, 1])
-                        params = urlencode({
-                            "interactive_chart": item_symbol,
-                            "market": item_market,
-                        })
                         symbol_col.markdown(
-                            f"**[{html.escape(item_symbol)}](?{params})**  \n"
+                            f"**[{html.escape(item_symbol)}]"
+                            f"({interactive_chart_query(item_symbol, item_market)})**  \n"
                             f"{html.escape(market_label(item_market))}"
                         )
                         if remove_col.button(
@@ -5274,7 +5136,7 @@ with tab5:
 with tab6:
     render_workspace_banner(
         "alerts",
-        "Workspace 05 · Price monitoring",
+        "Workspace 06 · Price monitoring",
         "Price Alerts",
         "Monitor price levels created from interactive charts. Alerts are evaluated whenever daily stock data is downloaded.",
         "🔔",
@@ -5586,13 +5448,20 @@ with tab6:
             if stock_file.parent != target_dir or not stock_exists(stock_file):
                 st.error(f"Daily chart data is unavailable for {symbol}.")
                 return
-            render_interactive_stock_chart(
+            selected_overlay, selected_alert_markers = chart_alert_context(
+                alerts,
                 symbol,
-                stock_file,
-                trade_overlay={
+                market,
+                {
                     "alertDate": selected_alert.get("created_at"),
                     "alertPrice": selected_alert.get("target_price"),
                 },
+            )
+            render_interactive_stock_chart(
+                symbol,
+                stock_file,
+                trade_overlay=selected_overlay,
+                alert_markers=selected_alert_markers,
                 alert_market=market,
                 height=780,
             )

@@ -110,15 +110,22 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('title="Price-to-Earnings ratio">PE 24.57</span>', result)
         self.assertIn("Interactive candlestick chart", result)
         self.assertIn("Selected stock", result)
-        self.assertIn("Browse matches", result)
+        self.assertIn("Interactive chart navigation", result)
         self.assertIn("Time range", result)
         self.assertNotIn("Chart view", result)
         self.assertNotIn('id="zoom-out"', result)
         self.assertNotIn('id="zoom-in"', result)
         self.assertNotIn('id="reset-chart"', result)
-        self.assertIn('aria-label="Previous matched stock"', result)
-        self.assertIn('aria-label="Next matched stock"', result)
+        self.assertIn('aria-label="Previous stock"', result)
+        self.assertIn('aria-label="Next stock"', result)
         self.assertIn('aria-label="Close interactive chart"', result)
+        self.assertIn('id="chart-symbol-input"', result)
+        self.assertIn('id="chart-fullscreen"', result)
+        self.assertIn("requestFullscreen", result)
+        self.assertIn('screen.orientation.lock("landscape")', result)
+        self.assertIn("fullscreen-exit-icon", result)
+        self.assertIn("Not in table", result)
+        self.assertIn("symbol-select", result)
         self.assertIn("2 / 8", result)
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("range-change", result)
@@ -234,7 +241,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("display: contents", result)
         self.assertIn("order: 4", result)
         self.assertIn(
-            "flex: 0 0 max(240px, calc(100dvh - 126px))",
+            "flex: 0 0 max(240px, calc(100dvh - 193px))",
             result,
         )
         self.assertIn("overflow-y: auto", result)
@@ -262,6 +269,19 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('id="chart-watchlist-add"', result)
         self.assertIn('action: "add-to-watchlist"', result)
         self.assertIn("watchlistId: watchlistId", result)
+
+    def test_new_price_alert_refreshes_cached_chart_markers(self):
+        source = Path("charting.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'st.session_state.pop("_cached_price_alerts", None)',
+            source,
+        )
+        self.assertIn(
+            'st.session_state.pop("_cached_price_alerts_at", None)',
+            source,
+        )
+        self.assertIn("if created:", source)
 
     def test_valuation_drawer_has_screener_style_metric_and_range_controls(self):
         valuation_rows = [{
@@ -348,16 +368,54 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertIn('"alertDate":"2020-01-12"', result)
         self.assertIn('"alertPrice":12.25', result)
-        self.assertIn('key: "alertPrice", title: "ALERT"', result)
-        self.assertIn("lineWidth: level.width || 2", result)
+        self.assertIn("const legacyAlertPrice", result)
+        self.assertIn('title: isBelow ? "ALERT ↓" : "ALERT ↑"', result)
+        self.assertIn("lineWidth: 1", result)
         self.assertIn("const alertAnchorSeries", result)
-        self.assertIn("value: alertMarkerPrice", result)
-        self.assertIn('position: "belowBar"', result)
-        self.assertIn('shape: "arrowUp"', result)
-        self.assertIn('text: ""', result)
+        self.assertIn("value: marker.price", result)
+        self.assertIn('position: isBelow ? "aboveBar" : "belowBar"', result)
+        self.assertIn('shape: isBelow ? "arrowDown" : "arrowUp"', result)
+        self.assertIn('text: isBelow ? "A↓" : "A↑"', result)
         self.assertIn("[...candleTimes].reverse().find", result)
-        self.assertIn("time <= requestedAlertDate", result)
+        self.assertIn("time <= marker.date", result)
         self.assertNotIn("time >= requestedAlertDate", result)
+
+    def test_interactive_chart_renders_every_active_alert_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "TEST.json"
+            path.write_text(json.dumps(self._price_rows(40)), encoding="utf-8")
+            result = interactive_stock_chart_html(
+                "TEST",
+                path,
+                alert_markers=[
+                    {
+                        "id": "above",
+                        "date": "2020-01-12",
+                        "price": 12.25,
+                        "direction": "above",
+                    },
+                    {
+                        "id": "below",
+                        "date": "2020-01-18",
+                        "price": 9.75,
+                        "direction": "below",
+                    },
+                ],
+            )
+
+        self.assertIn('"alertMarkers":[', result)
+        self.assertIn(
+            '"id":"above","date":"2020-01-12","price":12.25,'
+            '"direction":"above"',
+            result,
+        )
+        self.assertIn(
+            '"id":"below","date":"2020-01-18","price":9.75,'
+            '"direction":"below"',
+            result,
+        )
+        self.assertIn("uniqueAlertMarkers.forEach", result)
+        self.assertIn("const alertLinePrices = new Set()", result)
 
     def test_alert_table_stock_name_opens_embedded_chart_with_marker_params(self):
         result = results_hover_table_html(
@@ -656,6 +714,10 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn(".interactive-panel-header { display: none; }", result)
         self.assertIn("revealInteractiveHeader", result)
         self.assertIn("embeddedFrame.addEventListener('load'", result)
+        self.assertIn('allow="fullscreen; screen-orientation" allowfullscreen', result)
+        self.assertIn("source: 'nse-chart-host'", result)
+        self.assertIn("symbols: items.map", result)
+        self.assertIn("message.action === 'symbol-select'", result)
         self.assertIn("table-layout: fixed", result)
         self.assertIn("overflow-x: hidden", result)
         self.assertNotIn("min-width: 560px", result)
@@ -762,10 +824,7 @@ class InteractiveChartTests(unittest.TestCase):
 
 class InteractiveChartRouteTests(unittest.TestCase):
     def test_embedded_interactive_chart_route_renders_without_exception(self):
-        stock_files = sorted(
-            path for path in Path("data/daily").iterdir()
-            if path.is_dir() and any(path.glob("*.parquet"))
-        )
+        stock_files = sorted(Path("data/india/daily").glob("*.json"))
         if not stock_files:
             self.skipTest("No daily stock fixture is available.")
 

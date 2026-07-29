@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,24 +21,28 @@ def candle(date, close):
     }
 
 
+def write_candles(path, rows):
+    serializable = []
+    for row in rows:
+        item = dict(row)
+        item["Date"] = pd.Timestamp(item["Date"]).strftime("%Y-%m-%d")
+        serializable.append(item)
+    Path(path).write_text(json.dumps(serializable), encoding="utf-8")
+
+
 class HistoryWindowTests(unittest.TestCase):
     def test_screener_loads_only_five_year_window_from_current_date(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            symbol_dir = Path(temp_dir) / "TEST"
-            symbol_dir.mkdir()
-            pd.DataFrame([candle("2020-07-27", 10)]).to_parquet(
-                symbol_dir / "2020.parquet",
-                index=False,
-            )
-            pd.DataFrame(
-                [candle("2021-07-26", 20), candle("2021-07-27", 30)]
-            ).to_parquet(symbol_dir / "2021.parquet", index=False)
-            pd.DataFrame(
-                [candle("2026-07-27", 40)]
-            ).to_parquet(symbol_dir / "2026.parquet", index=False)
+            stock_file = Path(temp_dir) / "TEST.json"
+            write_candles(stock_file, [
+                candle("2020-07-27", 10),
+                candle("2021-07-26", 20),
+                candle("2021-07-27", 30),
+                candle("2026-07-27", 40),
+            ])
 
             result = load_price_dataframe(
-                symbol_dir,
+                stock_file,
                 years=5,
                 as_of="2026-07-27",
             )
@@ -49,29 +54,21 @@ class HistoryWindowTests(unittest.TestCase):
 
     def test_chart_starts_at_five_years_and_reports_older_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            symbol_dir = Path(temp_dir) / "TEST"
-            symbol_dir.mkdir()
-            pd.DataFrame([candle("2016-07-27", 10)]).to_parquet(
-                symbol_dir / "2016.parquet",
-                index=False,
-            )
-            pd.DataFrame([candle("2021-07-27", 20)]).to_parquet(
-                symbol_dir / "2021.parquet",
-                index=False,
-            )
-            pd.DataFrame([candle("2026-07-27", 30)]).to_parquet(
-                symbol_dir / "2026.parquet",
-                index=False,
-            )
+            stock_file = Path(temp_dir) / "TEST.json"
+            write_candles(stock_file, [
+                candle("2016-07-27", 10),
+                candle("2021-07-27", 20),
+                candle("2026-07-27", 30),
+            ])
 
             payload = interactive_chart_payload(
-                symbol_dir,
+                stock_file,
                 [50],
                 history_years=5,
             )
             chart_html = interactive_stock_chart_html(
                 "TEST",
-                symbol_dir,
+                stock_file,
                 ma_periods=[50],
             )
 
@@ -83,15 +80,17 @@ class HistoryWindowTests(unittest.TestCase):
 
     def test_plain_ma_screen_reads_a_smaller_window_than_five_years(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            symbol_dir = Path(temp_dir) / "TEST"
-            symbol_dir.mkdir()
-            for year in range(2021, 2027):
-                pd.DataFrame([
+            stock_file = Path(temp_dir) / "TEST.json"
+            write_candles(
+                stock_file,
+                [
                     candle(f"{year}-07-27", float(year))
-                ]).to_parquet(symbol_dir / f"{year}.parquet", index=False)
+                    for year in range(2021, 2027)
+                ],
+            )
 
             result = load_price_dataframe(
-                symbol_dir,
+                stock_file,
                 as_of="2026-07-27",
                 filter_set=[{
                     "id": 1,
@@ -112,20 +111,14 @@ class HistoryWindowTests(unittest.TestCase):
             for index, date in enumerate(dates)
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
-            symbol_dir = Path(temp_dir) / "TEST"
-            symbol_dir.mkdir()
-            frame = pd.DataFrame(rows)
-            for year, year_frame in frame.groupby(frame["Date"].dt.year):
-                year_frame.to_parquet(
-                    symbol_dir / f"{year}.parquet",
-                    index=False,
-                )
+            stock_file = Path(temp_dir) / "TEST.json"
+            write_candles(stock_file, rows)
             with patch(
                 "screener.get_pe_ratio",
                 side_effect=AssertionError("network PE should not be requested"),
             ) as get_pe:
                 result = screen_json_file(
-                    symbol_dir,
+                    stock_file,
                     filter_set=[{
                         "id": 1,
                         "type": "price_near_long",

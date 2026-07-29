@@ -16,10 +16,9 @@ from stock_data import (
     latest_stock_date,
     list_symbol_paths,
     load_stock_dataframe,
-    migrate_legacy_json,
     stock_exists,
     symbol_path,
-    write_yearly_stock_data,
+    write_stock_data,
 )
 
 MARKET_INDIA = "INDIA"
@@ -155,10 +154,7 @@ def _data_availability_from_snapshot(snapshot_file, market):
 def _stock_data_mtime_ns(path):
     """Return the newest storage-file timestamp for one stock."""
     path = Path(path)
-    candidates = list(path.glob("*.parquet")) if path.is_dir() else []
-    json_file = path if path.suffix.lower() == ".json" else path.parent / f"{path.name}.json"
-    if json_file.exists():
-        candidates.append(json_file)
+    candidates = [path] if path.is_file() else list(path.glob("*.parquet"))
     mtimes = []
     for candidate in candidates:
         try:
@@ -300,7 +296,7 @@ def _prepare_downloaded_dataframe(data):
 
 
 def _write_records_atomic(out_file, df):
-    return write_yearly_stock_data(out_file, df, keep_years=MAX_HISTORY_YEARS)
+    return write_stock_data(out_file, df, keep_years=MAX_HISTORY_YEARS)
 
 
 def _merge_price_data(existing_df, downloaded_df):
@@ -366,12 +362,8 @@ def download_symbol(
     market=MARKET_INDIA,
 ):
     out_file = Path(out_file)
-    if out_file.suffix.lower() == ".json":
-        out_file = out_file.with_suffix("")
     today = pd.Timestamp.today().normalize()
     reliable_date = last_reliable_completed_candle(market=market)
-    if incremental:
-        migrate_legacy_json(out_file, keep_years=MAX_HISTORY_YEARS)
     existing_df = _load_existing_dataframe(out_file) if incremental else pd.DataFrame()
     # Each symbol can have a different last saved candle. Start immediately
     # after this file's own latest date so no already-stored history is fetched.
@@ -470,10 +462,6 @@ def clear_downloaded_json_files(timeframe, market=MARKET_INDIA):
     for json_file in target_dir.glob("*.json"):
         json_file.unlink()
         deleted_count += 1
-    for stock_dir in list_symbol_paths(target_dir):
-        for parquet_file in stock_dir.glob("*.parquet"):
-            parquet_file.unlink()
-            deleted_count += 1
 
     return deleted_count
 

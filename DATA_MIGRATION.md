@@ -2,17 +2,18 @@
 
 ## Canonical candle layout
 
-Daily candles are stored as yearly Parquet partitions:
+Daily candles are stored as one JSON file per stock:
 
 ```text
-data/daily/<INDIA_SYMBOL>/<YEAR>.parquet
-data/us/daily/<US_SYMBOL>/<YEAR>.parquet
+data/india/daily/<INDIA_SYMBOL>.json
+data/us/daily/<US_SYMBOL>.json
 ```
 
-`migrate_stock_data.py` converts legacy symbol JSON files atomically. The
-application can still read a legacy JSON file during rollout, but all writes
-use Parquet. A normal update re-downloads a 10-day overlap and rewrites only a
-year whose contents changed.
+`migrate_stock_data.py` converts the former yearly Parquet directories to the
+canonical JSON files. It reloads and verifies each JSON file before removing
+that stock's Parquet partitions. A normal update re-downloads the recent
+reconciliation window, merges by candle date, and atomically replaces only the
+JSON files whose candles changed.
 
 `backfill_stock_history.py` performs a resumable true 10-year Yahoo backfill
 for existing datasets that were originally downloaded with a shorter period:
@@ -44,7 +45,7 @@ subject.
 and US sessions. The job:
 
 1. re-fetches recent candles and excludes the current intraday candle;
-2. writes changed yearly Parquet partitions;
+2. atomically writes changed per-stock JSON files;
 3. refreshes `latest_stock_values.parquet`;
 4. checks alerts without allowing alert failures to fail candle downloads;
 5. fills the current month's consolidated valuation observations once;

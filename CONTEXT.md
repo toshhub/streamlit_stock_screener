@@ -45,7 +45,7 @@ Common verification command:
    - India yfinance symbols append `.NS`.
    - US yfinance symbols are used as-is.
 4. Downloaded India data is written as JSON files under one of:
-   - `data/daily/`
+   - `data/india/daily/`
    - `data/weekly/`
    - `data/monthly/`
 5. Downloaded US data is written as JSON files under `data/us/daily/`, `data/us/weekly/`, or `data/us/monthly/`.
@@ -131,13 +131,9 @@ Responsibilities:
 
 - Defines timeframe mapping:
 - India:
-  - `DAY` -> interval `1d`, period `5y`, output `data/daily/`
-  - `WEEK` -> interval `1wk`, period `10y`, output `data/weekly/`
-  - `MONTH` -> interval `1mo`, period `max`, output `data/monthly/`
+  - `DAY` -> interval `1d`, period `10y`, output `data/india/daily/`
 - US:
-  - `DAY` -> interval `1d`, period `5y`, output `data/us/daily/`
-  - `WEEK` -> interval `1wk`, period `10y`, output `data/us/weekly/`
-  - `MONTH` -> interval `1mo`, period `max`, output `data/us/monthly/`
+  - `DAY` -> interval `1d`, period `10y`, output `data/us/daily/`
 - Downloads India symbols from Yahoo Finance using `symbol + ".NS"`.
 - Downloads US symbols from Yahoo Finance without a suffix.
 - Cleans and normalizes NSE symbols from Excel values.
@@ -322,10 +318,10 @@ Responsibilities:
 
 - Ignores Python cache files.
 - Ignores virtual environments.
-- Ignores generated/downloaded data directories:
-  - `data/daily/`
-  - `data/weekly/`
-  - `data/monthly/`
+- Versions the canonical candle files:
+  - `data/india/daily/*.json`
+  - `data/us/daily/*.json`
+- Ignores generated/runtime directories:
   - `data/charts/`
   - `data/metadata/`
 - Ignores `.streamlit/secrets.toml`.
@@ -337,13 +333,12 @@ When changing this file:
 
 ## Generated / Local Data Directories
 
-These directories are created by `config.py` but ignored by Git:
+The daily JSON directories are created by `config.py` and deliberately
+versioned so the cron update is available to the deployed app:
 
 - `data/excel/` - expected location for `MCAP_JUGAAD.xlsx`.
-- `data/daily/` - downloaded daily JSON stock data.
-- `data/weekly/` - downloaded weekly JSON stock data.
-- `data/monthly/` - downloaded monthly JSON stock data.
-- `data/us/` - downloaded US JSON stock data, with daily/weekly/monthly subfolders.
+- `data/india/daily/` - one ten-year JSON candle file per India stock.
+- `data/us/daily/` - one ten-year JSON candle file per US stock.
 - `data/charts/` - generated PNG chart files.
 - `data/metadata/` - app settings, favourite filters, P/E cache, and last results.
 

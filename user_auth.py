@@ -45,43 +45,49 @@ def current_user(st):
     )
 
 
-def render_header_account_controls(st, user, cloud_enabled):
-    """Render the primary login or account action inside the application banner."""
-    with st.container(key="hero_account_panel"):
+def render_workspace_account_controls(st, user, cloud_enabled, workspace_key):
+    """Render compact, uniquely keyed account controls in a workspace banner."""
+    clean_key = "".join(
+        character if character.isalnum() or character == "_" else "_"
+        for character in str(workspace_key)
+    )
+    with st.container(key=f"workspace_account_{clean_key}"):
         if user:
             st.markdown(
-                '<div class="hero-account__label">Signed in</div>'
-                f'<div class="hero-account__name">{html.escape(user.name)}</div>',
+                '<div class="workspace-account__label">Signed in</div>'
+                f'<div class="workspace-account__name">{html.escape(user.name)}</div>'
+                + (
+                    f'<div class="workspace-account__email">{html.escape(user.email)}</div>'
+                    if user.email
+                    else ""
+                ),
                 unsafe_allow_html=True,
             )
-            if user.email:
-                st.caption(user.email)
             if not cloud_enabled:
-                st.warning("Personal cloud saves are unavailable.")
+                st.caption("Cloud saves unavailable")
             st.button(
-                "Sign out",
-                key="hero_sign_out",
+                "Log out",
+                key=f"workspace_sign_out_{clean_key}",
                 on_click=st.logout,
                 use_container_width=True,
             )
         elif auth_configured(st):
             st.markdown(
-                '<div class="hero-account__label">Guest access</div>'
-                '<div class="hero-account__name">Browsing as Guest</div>',
+                '<div class="workspace-account__label">Guest access</div>'
+                '<div class="workspace-account__name">Browsing as Guest</div>',
                 unsafe_allow_html=True,
             )
-            st.caption("Log in to save favorites and alerts.")
             st.button(
                 "Log in with Google",
-                key="hero_google_login",
+                key=f"workspace_google_login_{clean_key}",
                 type="primary",
                 on_click=st.login,
                 use_container_width=True,
             )
         else:
             st.markdown(
-                '<div class="hero-account__label">Guest access</div>'
-                '<div class="hero-account__name">Browsing as Guest</div>',
+                '<div class="workspace-account__label">Guest access</div>'
+                '<div class="workspace-account__name">Browsing as Guest</div>',
                 unsafe_allow_html=True,
             )
-            st.caption("Google login is not configured.")
+            st.caption("Login unavailable")

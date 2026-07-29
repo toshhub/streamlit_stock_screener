@@ -24,6 +24,10 @@ Streamlit UI and orchestration layer.
 
 Responsibilities:
 
+- Starts every main tab directly with its workspace-specific banner instead of
+  repeating a global product banner.
+- Shows compact signed-in user details and the login/logout action inside each
+  workspace banner, with responsive wrapping for phone layouts.
 - Defines the page layout and four tabs:
   - `Data`
   - `MA Screener`
@@ -59,7 +63,9 @@ Defines:
 - `BASE_DIR`
 - `DATA_DIR`
 - `EXCEL_DIR`
+- `INDIA_DATA_DIR`
 - `DAILY_DIR`
+- `US_DAILY_DIR`
 - `WEEKLY_DIR`
 - `MONTHLY_DIR`
 - `CHARTS_DIR`
@@ -74,12 +80,8 @@ Stock data download and Excel symbol extraction logic.
 Key objects/functions:
 
 - `TIMEFRAME_CONFIG`
-  - India `DAY`: interval `1d`, period `5y`, output folder `data/daily`
-  - India `WEEK`: interval `1wk`, period `10y`, output folder `data/weekly`
-  - India `MONTH`: interval `1mo`, period `max`, output folder `data/monthly`
-  - US `DAY`: interval `1d`, period `5y`, output folder `data/us/daily`
-  - US `WEEK`: interval `1wk`, period `10y`, output folder `data/us/weekly`
-  - US `MONTH`: interval `1mo`, period `max`, output folder `data/us/monthly`
+  - India `DAY`: interval `1d`, period `10y`, output folder `data/india/daily`
+  - US `DAY`: interval `1d`, period `10y`, output folder `data/us/daily`
 - `MARKET_INDIA` and `MARKET_US`
   - Supported market IDs saved in settings.
 - `flatten_columns(df)`
@@ -89,9 +91,10 @@ Key objects/functions:
   - Uses plain symbols for US.
 - `download_symbol(symbol, interval, period, out_file, market=...)`
   - Downloads one symbol for the selected market.
-  - Incrementally loads the existing stock JSON when present.
+  - Incrementally loads the existing per-stock JSON file.
   - Requests only missing candles after the latest saved date when possible.
   - Merges, de-duplicates by `Date`, and atomically saves records to JSON.
+  - Keeps a rolling ten years of daily candles.
   - Returns a status dictionary with `Downloaded`, `Rows Added`, and `Status`.
 - `timeframe_config(timeframe)`
   - Returns the config for `DAY`, `WEEK`, or `MONTH`.
@@ -272,6 +275,27 @@ Key functions:
 - `results_hover_table_html(df)`
   - Builds an HTML results table.
   - When a row has `ChartPath`, hovering the stock symbol displays the chart.
+- `interactive_stock_chart_html(...)` and `render_interactive_stock_chart(...)`
+  - Provide the shared candlestick renderer used by Results, Alerts,
+    Watchlists, and Backtest entry points.
+  - Render every active alert for the current user that matches the chart's
+    market and symbol, including its target-price line and creation marker.
+  - Provide a shared bottom navigation bar with symbol lookup, table-aware
+    previous/next states, close, and fullscreen/restore controls.
+  - Fullscreen requests landscape orientation where the browser supports the
+    Screen Orientation API and otherwise still expands to the available screen.
+  - Do not add earnings or dividend event markers.
+
+### `chart_context.py`
+
+Pure shared helpers for interactive-chart URLs and alert context.
+
+- `interactive_chart_query(...)` creates the canonical chart URL for every
+  caller instead of duplicating query-parameter construction.
+- `active_alert_markers(...)` filters and normalizes the current user's cached
+  alert snapshot for a single market and symbol.
+- `chart_alert_context(...)` merges a selected historical alert with active
+  markers without drawing duplicates.
 
 Streamlit note: `st.dataframe` does not support custom hover popups, so chart-enabled results use an HTML table rendered through `st.markdown(..., unsafe_allow_html=True)`.
 
@@ -295,10 +319,9 @@ Ignores generated/runtime files:
 
 - Python cache files.
 - Virtual environments.
-- Downloaded stock JSON data:
-  - `data/daily/`
-  - `data/weekly/`
-  - `data/monthly/`
+- Versioned stock JSON data:
+  - `data/india/daily/*.json`
+  - `data/us/daily/*.json`
 - Generated charts.
 - Local metadata/settings.
 - Local Streamlit secrets file.
@@ -321,23 +344,13 @@ Behavior:
 - User can upload a new `.xlsx` file to replace it.
 - The app keeps using the previous/default Excel until a new one is uploaded.
 
-### `data/daily/`
+### `data/india/daily/`
 
-Stores downloaded daily JSON files.
+Stores one ten-year daily JSON candle file per India stock.
 
-Used when timeframe is `DAY`.
+### `data/us/daily/`
 
-### `data/weekly/`
-
-Stores downloaded weekly JSON files.
-
-Used when timeframe is `WEEK`.
-
-### `data/monthly/`
-
-Stores downloaded monthly JSON files.
-
-Used when timeframe is `MONTH`.
+Stores one ten-year daily JSON candle file per US stock.
 
 ### `data/metadata/`
 
@@ -370,8 +383,8 @@ Download behavior:
 - Downloads each symbol using yfinance.
 - India symbols use the `.NS` suffix.
 - US symbols use no suffix.
-- India data is stored in `data/daily`, `data/weekly`, or `data/monthly`.
-- US data is stored in `data/us/daily`, `data/us/weekly`, or `data/us/monthly`.
+- India data is stored in `data/india/daily`.
+- US data is stored in `data/us/daily`.
 - Shows progress bar.
 - Shows live text like:
 
@@ -469,6 +482,9 @@ price field is used. Alerts are persisted in
 cross-above or cross-below alert relative to the latest close. Only candles
 after the alert's creation candle are evaluated: `High >= target` triggers an
 above alert and `Low <= target` triggers a below alert.
+Opening an interactive chart from any workspace uses the same session-cached
+alert snapshot, so all active alerts for that chart's stock are visible without
+an additional cloud read per marker.
 
 Every successful manual or scheduled stock download checks alerts for that
 symbol. A triggered alert changes state once, so repeated downloads do not

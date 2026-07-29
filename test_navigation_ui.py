@@ -1,4 +1,5 @@
 import unittest
+import re
 from pathlib import Path
 
 
@@ -14,21 +15,54 @@ class NavigationUiTests(unittest.TestCase):
         self.assertIn('p::before { content: "🔔"; }', self.app_source)
         self.assertIn("font-size: 0 !important;", self.app_source)
 
-    def test_workflow_is_rendered_inside_the_main_hero(self):
-        hero_start = self.app_source.index(
-            'with st.container(key="app_hero_shell"):'
-        )
-        next_function = self.app_source.index(
-            "def sync_pattern_lookback_from_slider():",
-            hero_start,
-        )
-        hero_source = self.app_source[hero_start:next_function]
+    def test_global_product_banner_is_removed(self):
+        self.assertNotIn('key="app_hero_shell"', self.app_source)
+        self.assertNotIn('class="app-hero__title"', self.app_source)
+        self.assertNotIn('class="workflow-rail"', self.app_source)
 
-        self.assertIn('class="workflow-rail"', hero_source)
-        self.assertIn("Prepare data", hero_source)
-        self.assertIn("Build a screen", hero_source)
-        self.assertIn("Validate strategy", hero_source)
-        self.assertIn("Review results", hero_source)
+    def test_every_tab_starts_with_its_workspace_banner(self):
+        for tab_number in (1, 3, 4, 5, 6):
+            self.assertRegex(
+                self.app_source,
+                re.compile(
+                    rf"with tab{tab_number}:\n"
+                    rf"(?:    [^\n]+\n){{0,3}}"
+                    rf"    render_workspace_banner\("
+                ),
+            )
+        self.assertIn(
+            "def render_screener_workspace():\n"
+            "    fragment_fast_favorite_selection",
+            self.app_source,
+        )
+        screener_fragment = self.app_source[
+            self.app_source.index("def render_screener_workspace():"):
+            self.app_source.index("with tab2:")
+        ]
+        self.assertLess(
+            screener_fragment.index("render_workspace_banner("),
+            screener_fragment.index("st.markdown("),
+        )
+        self.assertIn(
+            "with tab2:\n"
+            "    render_screener_workspace()",
+            self.app_source,
+        )
+
+    def test_workspace_banner_contains_compact_account_controls(self):
+        auth_source = Path("user_auth.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'with st.container(key=f"workspace_banner_shell_{tone}")',
+            self.app_source,
+        )
+        self.assertIn(
+            "render_workspace_account_controls(",
+            self.app_source,
+        )
+        self.assertIn("Signed in", auth_source)
+        self.assertIn('"Log out"', auth_source)
+        self.assertIn("workspace_sign_out_", auth_source)
 
     def test_alert_badge_is_attached_to_alert_icon(self):
         self.assertIn(

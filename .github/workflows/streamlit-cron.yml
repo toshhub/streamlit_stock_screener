@@ -39,15 +39,15 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python daily_update.py
 
-      - name: Commit updated Parquet data
+      - name: Commit updated JSON candle data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- data
           if git diff --cached --quiet; then
-            echo "No Parquet changes to commit."
+            echo "No JSON candle changes to commit."
           else
-            git commit -m "data: refresh daily stock parquet files"
+            git commit -m "data: refresh daily stock JSON files"
             git pull --rebase
             git push
           fi

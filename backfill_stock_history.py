@@ -1,7 +1,7 @@
 """Resumable all-stock 10-year candle backfill.
 
 Yahoo is queried in batches for efficiency. Each returned ticker is merged
-independently and written to yearly Parquet partitions, so one failed symbol
+independently and written to one JSON file per stock, so one failed symbol
 never prevents successful symbols in the same market from being saved.
 """
 
@@ -29,7 +29,7 @@ from downloader import (
     yfinance_symbol,
 )
 from price_alerts import check_price_alerts_for_symbol
-from stock_data import load_stock_dataframe, symbol_path, write_yearly_stock_data
+from stock_data import load_stock_dataframe, symbol_path, write_stock_data
 
 
 CHECKPOINT_FILE = META_DIR / ".ten_year_backfill_checkpoint.json"
@@ -91,7 +91,7 @@ def _store_symbol(symbol, market, downloaded):
     merged = _merge_price_data(existing, downloaded)
     merged["Date"] = pd.to_datetime(merged["Date"], errors="coerce")
     merged = merged[merged["Date"] <= reliable_date]
-    changed_files = write_yearly_stock_data(
+    changed_files = write_stock_data(
         target,
         merged,
         keep_years=MAX_HISTORY_YEARS,

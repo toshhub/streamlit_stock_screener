@@ -203,6 +203,15 @@ class AlertTabPerformanceTests(unittest.TestCase):
         self.assertIn("def session_price_alerts(max_age_seconds=60):", app_source)
         self.assertIn("price_alerts_snapshot = session_price_alerts()", app_source)
         self.assertIn("alerts = session_price_alerts()", app_source)
+        self.assertLess(
+            app_source.index("def session_price_alerts(max_age_seconds=60):"),
+            app_source.index("def run_interactive_chart_view():"),
+        )
+        self.assertIn(
+            "trade_overlay, alert_markers = chart_alert_context(",
+            app_source,
+        )
+        self.assertIn("alert_markers=alert_markers", app_source)
         self.assertNotIn("refresh_alerts_when_tab_is_clicked()", app_source)
         self.assertNotIn("alerts_refresh_trigger", app_source)
 
