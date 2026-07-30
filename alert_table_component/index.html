@@ -85,6 +85,22 @@
         });
       }
 
+      function emitChartRequest(message) {
+        sendToStreamlit("streamlit:setComponentValue", {
+          value: {
+            chartRequest: {
+              symbol: String(message.symbol || ""),
+              market: String(message.market || ""),
+              interactiveSrc: String(message.interactiveSrc || ""),
+              symbols: Array.isArray(message.symbols) ? message.symbols : [],
+              index: Number(message.index)
+            },
+            nonce: Date.now() + "-" + Math.random().toString(16).slice(2)
+          },
+          dataType: "json"
+        });
+      }
+
       window.addEventListener("message", function (event) {
         const message = event && event.data;
         if (!message) return;
@@ -106,6 +122,14 @@
 
         if (message.source === "alert-table-action") {
           emitAction(message.actionKey);
+          return;
+        }
+
+        if (
+          message.source === "chart-workspace-open"
+          && event.source === frame.contentWindow
+        ) {
+          emitChartRequest(message);
           return;
         }
 

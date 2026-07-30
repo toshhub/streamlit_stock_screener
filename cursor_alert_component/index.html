@@ -44,6 +44,11 @@
           message.action === "create-price-alert"
           || message.action === "load-history"
           || message.action === "add-to-watchlist"
+          || message.action === "previous"
+          || message.action === "next"
+          || message.action === "close"
+          || message.action === "symbol-select"
+          || message.action === "symbol-search"
         ) {
           sendToStreamlit("streamlit:setComponentValue", {
             value: message,

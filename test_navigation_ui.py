@@ -21,7 +21,7 @@ class NavigationUiTests(unittest.TestCase):
         self.assertNotIn('class="workflow-rail"', self.app_source)
 
     def test_every_tab_starts_with_its_workspace_banner(self):
-        for tab_number in (1, 3, 4, 5, 6):
+        for tab_number in (1, 3, 4, 5, 6, 7):
             self.assertRegex(
                 self.app_source,
                 re.compile(
@@ -66,9 +66,16 @@ class NavigationUiTests(unittest.TestCase):
 
     def test_alert_badge_is_attached_to_alert_icon(self):
         self.assertIn(
-            '[role="tablist"] > [role="tab"]:nth-child(6)::after',
+            '[role="tablist"] > [role="tab"]:nth-child(7)::after',
             self.app_source,
         )
+
+    def test_chart_has_a_dedicated_workspace_tab(self):
+        self.assertIn('"📈 Chart"', self.app_source)
+        self.assertIn("with tab5:", self.app_source)
+        self.assertIn('"Workspace 05 · Market chart"', self.app_source)
+        self.assertIn("activate_chart_workspace(", self.app_source)
+        self.assertIn("navigation_callback=handle_chart_navigation", self.app_source)
 
     def test_navigation_has_phone_and_landscape_layouts(self):
         self.assertIn("@media (max-width: 768px)", self.app_source)

@@ -94,7 +94,7 @@ class LiveScreenerPipelineTests(unittest.TestCase):
     def test_results_are_hidden_and_do_not_force_reruns_while_screening(self):
         results_section = self.source[
             self.source.index("# TAB 4: RESULTS"):
-            self.source.index("# TAB 5: PRICE ALERTS")
+            self.source.index("# TAB 5: CHART")
         ]
         self.assertIn(
             "rows\n"

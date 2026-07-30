@@ -25,6 +25,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("message.source === \"nse-interactive-chart\"", component_html)
         self.assertIn("allow-popups-to-escape-sandbox", component_html)
         self.assertIn('message.action === "add-to-watchlist"', component_html)
+        self.assertIn('message.action === "symbol-search"', component_html)
 
     @staticmethod
     def _price_rows(count):
@@ -132,8 +133,12 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("ownerWindow.scrollTo(0, 0)", result)
         self.assertIn('screen.orientation.lock("landscape")', result)
         self.assertIn("fullscreen-exit-icon", result)
-        self.assertIn("Not in table", result)
+        self.assertIn("No match", result)
+        self.assertIn('aria-label="Type any stock symbol"', result)
+        self.assertIn('id="chart-symbol-suggestions"', result)
+        self.assertIn("availableSymbols", result)
         self.assertIn("symbol-select", result)
+        self.assertIn("symbol-search", result)
         self.assertIn("2 / 8", result)
         self.assertIn("nse-interactive-chart", result)
         self.assertIn("range-change", result)

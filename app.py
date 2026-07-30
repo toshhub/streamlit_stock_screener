@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import streamlit as st
@@ -38,7 +39,7 @@ from charting import (
 )
 
 if (
-    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 6
+    getattr(charting_module, "RESULTS_TABLE_RENDERER_VERSION", 0) < 9
     or "row_actions" not in inspect.signature(
         sortable_results_table
     ).parameters
@@ -100,10 +101,20 @@ from storage import (
     save_favourite_filter_sets,
     update_settings,
 )
-from stock_data import list_symbol_paths, stock_exists, symbol_path
+from stock_data import (
+    list_symbol_paths,
+    stock_exists,
+    symbol_from_path,
+    symbol_path,
+)
 from user_auth import current_user, render_workspace_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
+
+_APP_CHART_EVENT_COMPONENT = components.declare_component(
+    "app_chart_events",
+    path=str(Path(__file__).parent / "alert_table_component"),
+)
 
 shared_settings = load_settings()
 shared_favorite_filter_sets = load_favourite_filter_sets()
@@ -628,8 +639,8 @@ def run_interactive_chart_view():
     st.stop()
 
 
-if query_param_value("interactive_chart", ""):
-    run_interactive_chart_view()
+# Interactive-chart URLs from older bookmarks are converted into the shared
+# Chart workspace after the main tab navigation is initialized below.
 
 # ---- Inject custom CSS ----
 st.markdown(
@@ -722,6 +733,7 @@ st.markdown(
     [class*="st-key-workspace_banner_shell_screener"] { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
     [class*="st-key-workspace_banner_shell_backtest"] { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
     [class*="st-key-workspace_banner_shell_results"] { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    [class*="st-key-workspace_banner_shell_chart"] { --banner-accent: #176b87; --banner-soft: #e9f6f8; --banner-border: #c6e3e9; }
     [class*="st-key-workspace_banner_shell_watchlists"] { --banner-accent: #a17818; --banner-soft: #fff9e9; --banner-border: #eadcae; }
     [class*="st-key-workspace_banner_shell_alerts"] { --banner-accent: #b66a16; --banner-soft: #fff7e8; --banner-border: #efd6aa; }
     [class*="st-key-workspace_banner_shell_"] [data-testid="stHorizontalBlock"] {
@@ -740,6 +752,7 @@ st.markdown(
     .workspace-banner--screener { --banner-accent: #7652b6; --banner-soft: #f4effc; --banner-border: #ddd0f2; }
     .workspace-banner--backtest { --banner-accent: #c56d22; --banner-soft: #fff5e8; --banner-border: #f0d7b8; }
     .workspace-banner--results { --banner-accent: #27805a; --banner-soft: #ecf8f2; --banner-border: #c7e7d8; }
+    .workspace-banner--chart { --banner-accent: #176b87; --banner-soft: #e9f6f8; --banner-border: #c6e3e9; }
     .workspace-banner--watchlists { --banner-accent: #a17818; --banner-soft: #fff9e9; --banner-border: #eadcae; }
     .workspace-banner--alerts { --banner-accent: #b66a16; --banner-soft: #fff7e8; --banner-border: #efd6aa; }
     .workspace-banner__icon {
@@ -965,8 +978,9 @@ st.markdown(
     div.stTabs [role="tab"]:nth-child(2) p::before { content: "🔎"; }
     div.stTabs [role="tab"]:nth-child(3) p::before { content: "🧪"; }
     div.stTabs [role="tab"]:nth-child(4) p::before { content: "📊"; }
-    div.stTabs [role="tab"]:nth-child(5) p::before { content: "⭐"; }
-    div.stTabs [role="tab"]:nth-child(6) p::before { content: "🔔"; }
+    div.stTabs [role="tab"]:nth-child(5) p::before { content: "📈"; }
+    div.stTabs [role="tab"]:nth-child(6) p::before { content: "⭐"; }
+    div.stTabs [role="tab"]:nth-child(7) p::before { content: "🔔"; }
     div.stTabs [role="tab"]:focus-visible {
         outline: 3px solid rgba(23, 107, 135, 0.20);
         outline-offset: 2px;
@@ -2891,52 +2905,24 @@ def render_backtest_results_table(
       }}
 
       function renderInteractiveStockChart(section, button) {{
-        const chartPanel = section.querySelector(".stock-chart-panel");
         const buttons = Array.from(section.querySelectorAll(".stock-interactive-link"));
         const index = buttons.indexOf(button);
-        if (!chartPanel || !button || index < 0) return;
-        document.querySelectorAll(".stock-chart-panel").forEach(panel => {{
-          if (panel !== chartPanel) resetStockChartPanel(panel);
-        }});
-        document.querySelectorAll(".stock-chart-link, .stock-interactive-link").forEach(item => item.classList.remove("active"));
-        button.classList.add("active");
-        chartPanel.classList.add("active");
-        const symbol = escapeHtml(button.dataset.symbol);
-        const prevDisabled = index <= 0 ? "disabled" : "";
-        const nextDisabled = index >= buttons.length - 1 ? "disabled" : "";
-        const separator = button.dataset.interactiveSrc.includes("?") ? "&" : "?";
-        const interactiveSrc = button.dataset.interactiveSrc + separator
-          + "position=" + encodeURIComponent(index + 1)
-          + "&total=" + encodeURIComponent(buttons.length)
-          + "&has_previous=" + (index > 0 ? "1" : "0")
-          + "&has_next=" + (index < buttons.length - 1 ? "1" : "0");
-        chartPanel.innerHTML = `
-          <div class="stock-chart-frame">
-            <div class="stock-chart-title-row">
-              <span class="stock-chart-symbol">${{symbol}} interactive trade chart</span>
-              <span class="stock-chart-counter">${{index + 1}} / ${{buttons.length}}</span>
-              <button type="button" class="stock-chart-close" data-chart-close aria-label="Close chart">&times;</button>
-            </div>
-            <button type="button" class="stock-chart-nav stock-chart-prev" data-interactive-nav="prev" aria-label="Previous interactive chart" ${{prevDisabled}}>&lsaquo;</button>
-            <button type="button" class="stock-chart-nav stock-chart-next" data-interactive-nav="next" aria-label="Next interactive chart" ${{nextDisabled}}>&rsaquo;</button>
-            <iframe class="stock-interactive-frame" src="${{interactiveSrc}}" title="${{symbol}} interactive trade chart"></iframe>
-          </div>
-        `;
-        const closeButton = chartPanel.querySelector("[data-chart-close]");
-        if (closeButton) closeButton.addEventListener("click", event => {{
-          event.preventDefault();
-          event.stopPropagation();
-          closeStockChart(section);
-        }});
-        chartPanel.querySelectorAll("[data-interactive-nav]").forEach(navButton => {{
-          navButton.addEventListener("click", event => {{
-            event.preventDefault();
-            event.stopPropagation();
-            const offset = navButton.dataset.interactiveNav === "next" ? 1 : -1;
-            const nextIndex = Math.max(0, Math.min(buttons.length - 1, index + offset));
-            if (nextIndex !== index) renderInteractiveStockChart(section, buttons[nextIndex]);
-          }});
-        }});
+        if (!button || index < 0) return;
+        let market = "";
+        try {{
+          market = new URL(
+            button.dataset.interactiveSrc,
+            window.location.href
+          ).searchParams.get("market") || "";
+        }} catch (error) {{}}
+        window.parent.postMessage({{
+          source: "chart-workspace-open",
+          symbol: button.dataset.symbol || "",
+          market: market,
+          interactiveSrc: button.dataset.interactiveSrc || "",
+          symbols: buttons.map(item => item.dataset.symbol || ""),
+          index: index
+        }}, "*");
       }}
 
       function navigateActiveInteractiveChart(offset) {{
@@ -3263,7 +3249,27 @@ def render_backtest_results_table(
       renderAllStockDetails();
     </script>
     """
-    components.html(component_html, height=height, scrolling=True)
+    chart_event = _APP_CHART_EVENT_COMPONENT(
+        table_html=component_html,
+        default_height=height,
+        key="backtest_results_chart_events",
+        default=None,
+    )
+    chart_request = chart_request_from_component(chart_event)
+    if chart_request:
+        nonce = str(chart_event.get("nonce", ""))
+        if (
+            nonce
+            and nonce
+            != st.session_state.get("_handled_backtest_chart_nonce")
+        ):
+            st.session_state["_handled_backtest_chart_nonce"] = nonce
+            if activate_chart_workspace(
+                chart_request,
+                fallback_market=interactive_market or MARKET_INDIA,
+                origin_tab=2,
+            ):
+                st.rerun()
 
 
 @st.cache_data(show_spinner=False)
@@ -3328,11 +3334,11 @@ if triggered_alert_badge_count:
     st.markdown(
         f"""
         <style>
-        .stTabs [role="tablist"] > [role="tab"]:nth-child(6) {{
+        .stTabs [role="tablist"] > [role="tab"]:nth-child(7) {{
             position: relative;
             padding-right: 1.75rem;
         }}
-        .stTabs [role="tablist"] > [role="tab"]:nth-child(6)::after {{
+        .stTabs [role="tablist"] > [role="tab"]:nth-child(7)::after {{
             content: "{triggered_alert_badge_count}";
             position: absolute;
             top: 0.2rem;
@@ -3362,9 +3368,131 @@ MAIN_TAB_LABELS = [
     "🔍 Screener",
     "🧪 Backtest",
     "📊 Results",
+    "📈 Chart",
     "⭐ Watchlists",
     "🔔 Alerts",
 ]
+
+CHART_TAB_INDEX = 4
+WATCHLISTS_TAB_INDEX = 5
+ALERTS_TAB_INDEX = 6
+
+
+def chart_workspace_context(request, fallback_market=MARKET_INDIA, origin_tab=3):
+    """Normalize any chart launch into the shared Chart workspace state."""
+    request = request if isinstance(request, dict) else {}
+    source = str(request.get("interactiveSrc", "") or "")
+    query = parse_qs(urlparse(source).query) if source else {}
+
+    def query_value(name, default=""):
+        values = query.get(name, [])
+        return str(values[0]) if values else str(default or "")
+
+    symbol = str(
+        request.get("symbol")
+        or query_value("interactive_chart")
+        or ""
+    ).strip().upper()
+    market = normalize_market(
+        request.get("market")
+        or query_value("market")
+        or fallback_market
+    )
+    symbols = []
+    seen = set()
+    for item in request.get("symbols", []) or []:
+        clean = str(item or "").strip().upper()
+        if clean and clean not in seen:
+            symbols.append(clean)
+            seen.add(clean)
+    if symbol and symbol not in seen:
+        symbols.append(symbol)
+    try:
+        requested_index = int(request.get("index", -1))
+    except (TypeError, ValueError):
+        requested_index = -1
+    index = (
+        requested_index
+        if 0 <= requested_index < len(symbols)
+        and symbols[requested_index] == symbol
+        else symbols.index(symbol)
+        if symbol in symbols
+        else -1
+    )
+    ma_periods = []
+    for token in query_value("ma").split(","):
+        try:
+            period = int(token)
+        except (TypeError, ValueError):
+            continue
+        if period > 0 and period not in ma_periods:
+            ma_periods.append(period)
+    overlay = {
+        "buyDate": query_value("buy_date"),
+        "exitDate": query_value("exit_date"),
+        "windowStart": query_value("window_start"),
+        "windowEnd": query_value("window_end"),
+        "buyPrice": query_value("buy_price"),
+        "targetPrice": query_value("target_price"),
+        "stopPrice": query_value("stop_price"),
+        "exitPrice": query_value("exit_price"),
+        "exitReason": query_value("exit_reason"),
+        "alertDate": query_value("alert_date"),
+        "alertPrice": query_value("alert_marker_price"),
+    }
+    return {
+        "symbol": symbol,
+        "market": market,
+        "symbols": symbols,
+        "index": index,
+        "ma_periods": ma_periods,
+        "initial_range": query_value("range", "252") or "252",
+        "trade_overlay": {
+            key: value for key, value in overlay.items() if value
+        },
+        "origin_tab": int(origin_tab),
+    }
+
+
+def activate_chart_workspace(request, fallback_market=MARKET_INDIA, origin_tab=3):
+    context = chart_workspace_context(
+        request,
+        fallback_market=fallback_market,
+        origin_tab=origin_tab,
+    )
+    if not context["symbol"]:
+        return False
+    st.session_state["_chart_workspace_context"] = context
+    st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[CHART_TAB_INDEX]
+    st.session_state["_pending_main_tab_switch"] = CHART_TAB_INDEX
+    return True
+
+
+def chart_request_from_component(event):
+    if not isinstance(event, dict):
+        return None
+    request = event.get("chartRequest")
+    return request if isinstance(request, dict) else None
+
+
+legacy_chart_symbol = str(
+    query_param_value("interactive_chart", "") or ""
+).strip()
+if legacy_chart_symbol:
+    activate_chart_workspace(
+        {
+            "symbol": legacy_chart_symbol,
+            "market": query_param_value("market", MARKET_INDIA),
+            "symbols": [legacy_chart_symbol],
+            "index": 0,
+        },
+        origin_tab=3,
+    )
+    try:
+        del st.query_params["interactive_chart"]
+    except KeyError:
+        pass
+
 switch_to_results_requested = st.session_state.pop(
     "switch_to_results_tab",
     False,
@@ -3372,17 +3500,24 @@ switch_to_results_requested = st.session_state.pop(
 if switch_to_results_requested:
     st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[3]
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
     MAIN_TAB_LABELS,
     key="_main_workspace_tab",
     on_change="ignore",
 )
 
+pending_main_tab_switch = st.session_state.pop(
+    "_pending_main_tab_switch",
+    None,
+)
+if pending_main_tab_switch is not None:
+    switch_to_tab(int(pending_main_tab_switch))
+
 if switch_to_results_requested:
     switch_to_tab(3)
 
 if st.session_state.pop("switch_to_alerts_tab", False) or query_param_value("open_alerts", ""):
-    switch_to_tab(5)
+    switch_to_tab(ALERTS_TAB_INDEX)
 
 price_alert_feedback = st.session_state.pop("price_alert_feedback", None)
 if price_alert_feedback:
@@ -4921,17 +5056,36 @@ with tab4:
             chart_df["ChartPath"] = df["ChartPath"]
             if "ChartSource" in df.columns:
                 chart_df["ChartSource"] = df["ChartSource"]
-            sortable_results_table(
+            result_chart_event = sortable_results_table(
                 chart_df,
                 interactive_market=result_market,
                 interactive_ma_periods=required_ma_periods(repair_filter_set),
+                component_key=f"results_table_{result_market}",
             )
         else:
-            sortable_results_table(
+            result_chart_event = sortable_results_table(
                 table_df,
                 interactive_market=result_market,
                 interactive_ma_periods=required_ma_periods(repair_filter_set),
+                component_key=f"results_table_{result_market}",
             )
+        result_chart_request = chart_request_from_component(result_chart_event)
+        if result_chart_request:
+            result_chart_nonce = str(result_chart_event.get("nonce", ""))
+            if (
+                result_chart_nonce
+                and st.session_state.get("_handled_results_chart_nonce")
+                != result_chart_nonce
+            ):
+                st.session_state["_handled_results_chart_nonce"] = (
+                    result_chart_nonce
+                )
+                if activate_chart_workspace(
+                    result_chart_request,
+                    fallback_market=result_market,
+                    origin_tab=3,
+                ):
+                    st.rerun()
 
     else:
         if live_screener_job and live_screener_job.get("running"):
@@ -4945,12 +5099,268 @@ with tab4:
             st.info("No results yet. Run the screener from the 'Screener' tab to see results here.")
 
 # =====================================================================
-# TAB 5: PRICE ALERTS
+# TAB 5: CHART
 # =====================================================================
 with tab5:
     render_workspace_banner(
+        "chart",
+        "Workspace 05 · Market chart",
+        "Chart",
+        "Search any downloaded stock, inspect candles and indicators, and review active alert levels.",
+        "▥",
+        "Analyze",
+    )
+
+    chart_workspace = st.session_state.get("_chart_workspace_context")
+    if not isinstance(chart_workspace, dict) or not chart_workspace.get("symbol"):
+        st.info(
+            "Search a stock below, or open its interactive chart from Results, "
+            "Backtest, Watchlists, or Alerts."
+        )
+        search_market_col, search_symbol_col = st.columns([1, 2.2])
+        with search_market_col:
+            chart_search_market = st.selectbox(
+                "Market",
+                [MARKET_INDIA, MARKET_US],
+                format_func=market_label,
+                key="chart_workspace_search_market",
+            )
+        chart_search_dir = timeframe_config(
+            "DAY",
+            chart_search_market,
+        )["target_dir"].resolve()
+        chart_search_symbols = [
+            symbol_from_path(path)
+            for path in list_symbol_paths(
+                chart_search_dir,
+                include_index=False,
+            )
+        ]
+        with search_symbol_col:
+            chart_search_symbol = st.selectbox(
+                "Stock name",
+                chart_search_symbols,
+                index=None,
+                placeholder="Type a stock symbol",
+                key=f"chart_workspace_search_{chart_search_market}",
+            )
+        if chart_search_symbol and activate_chart_workspace(
+            {
+                "symbol": chart_search_symbol,
+                "market": chart_search_market,
+                "symbols": [],
+                "index": -1,
+            },
+            fallback_market=chart_search_market,
+            origin_tab=CHART_TAB_INDEX,
+        ):
+            st.rerun()
+    else:
+        chart_symbol = str(chart_workspace.get("symbol", "")).strip().upper()
+        chart_market = normalize_market(
+            chart_workspace.get("market", MARKET_INDIA)
+        )
+        chart_symbols = [
+            str(item or "").strip().upper()
+            for item in chart_workspace.get("symbols", [])
+            if str(item or "").strip()
+        ]
+        try:
+            chart_index = int(chart_workspace.get("index", -1))
+        except (TypeError, ValueError):
+            chart_index = -1
+        if not (
+            0 <= chart_index < len(chart_symbols)
+            and chart_symbols[chart_index] == chart_symbol
+        ):
+            chart_index = (
+                chart_symbols.index(chart_symbol)
+                if chart_symbol in chart_symbols
+                else -1
+            )
+
+        chart_target_dir = timeframe_config(
+            "DAY",
+            chart_market,
+        )["target_dir"].resolve()
+        chart_stock_file = symbol_path(
+            chart_target_dir,
+            chart_symbol,
+        ).resolve()
+        if (
+            chart_stock_file.parent != chart_target_dir
+            or not stock_exists(chart_stock_file)
+        ):
+            st.error(
+                f"Daily chart data is unavailable for {chart_symbol}."
+            )
+        else:
+            chart_overlay, chart_alert_markers = chart_alert_context(
+                session_price_alerts(),
+                chart_symbol,
+                chart_market,
+                chart_workspace.get("trade_overlay"),
+            )
+            chart_growth, chart_valuations = get_company_fundamentals(
+                chart_symbol,
+                chart_market,
+            )
+            workspace_watchlists = None
+            if app_user is not None and cloud_store is not None:
+                if "_cached_personal_watchlists" in st.session_state:
+                    workspace_watchlists = deepcopy(
+                        st.session_state["_cached_personal_watchlists"]
+                    )
+                else:
+                    try:
+                        workspace_watchlists = cloud_store.load_watchlists(
+                            app_user.id
+                        )
+                    except CloudStorageError as exc:
+                        st.error(str(exc))
+                        workspace_watchlists = []
+                    else:
+                        st.session_state[
+                            "_cached_personal_watchlists"
+                        ] = deepcopy(workspace_watchlists)
+
+            def handle_chart_navigation(event):
+                action = str(event.get("action", ""))
+                updated = deepcopy(chart_workspace)
+                if action in {"previous", "next"}:
+                    offset = -1 if action == "previous" else 1
+                    next_index = chart_index + offset
+                    if 0 <= next_index < len(chart_symbols):
+                        updated["index"] = next_index
+                        updated["symbol"] = chart_symbols[next_index]
+                        updated["trade_overlay"] = {}
+                elif action in {"symbol-select", "symbol-search"}:
+                    requested = str(
+                        event.get("symbol", "")
+                    ).strip().upper()
+                    requested_file = symbol_path(
+                        chart_target_dir,
+                        requested,
+                    ).resolve()
+                    if (
+                        requested_file.parent != chart_target_dir
+                        or not stock_exists(requested_file)
+                    ):
+                        st.toast(
+                            f"No downloaded {chart_market} data for "
+                            f"{requested}.",
+                            icon="⚠️",
+                        )
+                        return
+                    updated["symbol"] = requested
+                    updated["index"] = (
+                        chart_symbols.index(requested)
+                        if requested in chart_symbols
+                        else -1
+                    )
+                    updated["trade_overlay"] = {}
+                elif action == "close":
+                    st.session_state.pop("_chart_workspace_context", None)
+                    origin = int(chart_workspace.get("origin_tab", 3))
+                    origin = max(0, min(len(MAIN_TAB_LABELS) - 1, origin))
+                    st.session_state["_main_workspace_tab"] = (
+                        MAIN_TAB_LABELS[origin]
+                    )
+                    st.session_state["_pending_main_tab_switch"] = origin
+                    st.rerun()
+                    return
+                else:
+                    return
+                st.session_state["_chart_workspace_context"] = updated
+                st.rerun()
+
+            def add_workspace_chart_to_watchlist(event):
+                watchlist_id = str(event.get("watchlistId", "") or "")
+                selected = next(
+                    (
+                        item
+                        for item in (workspace_watchlists or [])
+                        if str(item.get("id", "")) == watchlist_id
+                    ),
+                    None,
+                )
+                if selected is None or app_user is None or cloud_store is None:
+                    st.toast("Select an available watchlist.", icon="⚠️")
+                    return
+                existing_items = selected.get("items", [])
+                if any(
+                    str(item.get("symbol", "")).strip().upper()
+                    == chart_symbol
+                    and normalize_market(
+                        item.get("market", MARKET_INDIA)
+                    )
+                    == chart_market
+                    for item in existing_items
+                ):
+                    st.toast(
+                        f"{chart_symbol} is already in {selected['name']}."
+                    )
+                    return
+                try:
+                    cloud_store.save_watchlist_item(
+                        app_user.id,
+                        watchlist_id,
+                        chart_symbol,
+                        chart_market,
+                        "",
+                        len(existing_items),
+                    )
+                except CloudStorageError as exc:
+                    st.error(str(exc))
+                    return
+                selected.setdefault("items", []).append({
+                    "symbol": chart_symbol,
+                    "market": chart_market,
+                    "note": "",
+                    "position": len(existing_items),
+                })
+                st.session_state["_cached_personal_watchlists"] = deepcopy(
+                    workspace_watchlists
+                )
+                st.toast(
+                    f"Added {chart_symbol} to {selected['name']}.",
+                    icon="⭐",
+                )
+
+            render_interactive_stock_chart(
+                chart_symbol,
+                chart_stock_file,
+                ma_periods=chart_workspace.get("ma_periods") or None,
+                match_position=chart_index + 1 if chart_index >= 0 else None,
+                match_total=len(chart_symbols) if chart_index >= 0 else None,
+                has_previous=chart_index > 0,
+                has_next=(
+                    chart_index >= 0
+                    and chart_index < len(chart_symbols) - 1
+                ),
+                initial_range=chart_workspace.get(
+                    "initial_range",
+                    "252",
+                ),
+                growth_metrics=chart_growth,
+                valuation_medians=chart_valuations,
+                trade_overlay=chart_overlay,
+                alert_markers=chart_alert_markers,
+                alert_market=chart_market,
+                height=820,
+                watchlists=workspace_watchlists,
+                watchlist_add_callback=add_workspace_chart_to_watchlist,
+                navigation_callback=handle_chart_navigation,
+            )
+
+
+# =====================================================================
+# TAB 6: WATCHLISTS
+# =====================================================================
+with tab6:
+    render_workspace_banner(
         "watchlists",
-        "Workspace 05 · Personal tracking",
+        "Workspace 06 · Personal tracking",
         "Watchlists",
         "Create private lists, add or remove stocks, and open a stock chart directly.",
         "⭐",
@@ -5057,7 +5467,7 @@ with tab5:
                                 None,
                             )
                             st.session_state["_main_workspace_tab"] = (
-                                MAIN_TAB_LABELS[4]
+                                MAIN_TAB_LABELS[WATCHLISTS_TAB_INDEX]
                             )
                             st.rerun()
 
@@ -5080,11 +5490,33 @@ with tab5:
                             ),
                         )
                         symbol_col, remove_col = st.columns([5, 1])
-                        symbol_col.markdown(
-                            f"**[{html.escape(item_symbol)}]"
-                            f"({interactive_chart_query(item_symbol, item_market)})**  \n"
-                            f"{html.escape(market_label(item_market))}"
-                        )
+                        market_watchlist_symbols = [
+                            str(candidate.get("symbol", "")).strip().upper()
+                            for candidate in items
+                            if normalize_market(
+                                candidate.get("market", MARKET_INDIA)
+                            )
+                            == item_market
+                        ]
+                        if symbol_col.button(
+                            f"📈 {item_symbol} · "
+                            f"{market_label(item_market)}",
+                            key=f"watchlist_chart_{item_key}",
+                            use_container_width=True,
+                        ):
+                            activate_chart_workspace(
+                                {
+                                    "symbol": item_symbol,
+                                    "market": item_market,
+                                    "symbols": market_watchlist_symbols,
+                                    "index": market_watchlist_symbols.index(
+                                        item_symbol.upper()
+                                    ),
+                                },
+                                fallback_market=item_market,
+                                origin_tab=WATCHLISTS_TAB_INDEX,
+                            )
+                            st.rerun()
                         if remove_col.button(
                             "−",
                             key=f"watchlist_remove_{item_key}",
@@ -5105,7 +5537,7 @@ with tab5:
                                     None,
                                 )
                                 st.session_state["_main_workspace_tab"] = (
-                                    MAIN_TAB_LABELS[4]
+                                    MAIN_TAB_LABELS[WATCHLISTS_TAB_INDEX]
                                 )
                                 st.rerun()
                 else:
@@ -5128,15 +5560,15 @@ with tab5:
                             None,
                         )
                         st.session_state["_main_workspace_tab"] = (
-                            MAIN_TAB_LABELS[4]
+                            MAIN_TAB_LABELS[WATCHLISTS_TAB_INDEX]
                         )
                         st.rerun()
 
 
-with tab6:
+with tab7:
     render_workspace_banner(
         "alerts",
-        "Workspace 06 · Price monitoring",
+        "Workspace 07 · Price monitoring",
         "Price Alerts",
         "Monitor price levels created from interactive charts. Alerts are evaluated whenever daily stock data is downloaded.",
         "🔔",
@@ -5226,7 +5658,7 @@ with tab6:
                 )
                 st.session_state.pop("_cached_price_alerts", None)
                 st.session_state.pop("_cached_price_alerts_at", None)
-            st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[5]
+            st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[ALERTS_TAB_INDEX]
 
         def alert_table_dataframe(table_alerts, *, acknowledge=False):
             table_rows = []
@@ -5316,6 +5748,24 @@ with tab6:
             if not isinstance(action_event, dict):
                 return
             nonce = str(action_event.get("nonce", ""))
+            chart_request = chart_request_from_component(action_event)
+            if chart_request:
+                handled_chart_nonce_key = (
+                    f"_handled_alert_chart_request_{section_key}"
+                )
+                if (
+                    nonce
+                    and nonce
+                    != st.session_state.get(handled_chart_nonce_key)
+                ):
+                    st.session_state[handled_chart_nonce_key] = nonce
+                    if activate_chart_workspace(
+                        chart_request,
+                        fallback_market=MARKET_INDIA,
+                        origin_tab=ALERTS_TAB_INDEX,
+                    ):
+                        st.rerun()
+                return
             action_key = str(action_event.get("actionKey", ""))
             handled_nonce_key = (
                 f"_handled_alert_table_action_{section_key}"

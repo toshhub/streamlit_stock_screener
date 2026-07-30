@@ -17,8 +17,10 @@ from stock_data import (
     SCREENING_HISTORY_YEARS,
     earliest_stock_date,
     latest_stock_date,
+    list_symbol_paths,
     load_stock_dataframe,
     rolling_history_start,
+    symbol_from_path,
 )
 from market_snapshots import valuation_chart_payload
 import streamlit as st
@@ -29,7 +31,7 @@ from price_alerts import create_price_alert
 from screener import required_ma_periods
 
 
-RESULTS_TABLE_RENDERER_VERSION = 6
+RESULTS_TABLE_RENDERER_VERSION = 9
 
 
 MA_COLORS = [
@@ -677,6 +679,14 @@ def interactive_stock_chart_html(
     payload["tradeOverlay"] = normalized_overlay
     payload["alertMarkers"] = normalize_chart_alert_markers(alert_markers)
     payload_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+    available_symbols = [
+        symbol_from_path(path)
+        for path in list_symbol_paths(Path(json_path).parent)
+    ]
+    available_symbols_json = json.dumps(
+        available_symbols,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
     safe_symbol = html.escape(str(symbol))
     safe_alert_market = html.escape(str(alert_market or "INDIA").strip().upper(), quote=True)
     screener_chart_link_html = ""
@@ -883,23 +893,40 @@ def interactive_stock_chart_html(
         if watchlist_options:
             watchlist_controls_html = (
                 '<section class="chart-control-section chart-watchlist-section">'
-                '<span class="chart-section-label">Add to watchlist</span>'
-                '<div class="chart-watchlist-actions">'
+                '<button class="chart-watchlist-toggle" id="chart-watchlist-toggle" '
+                'type="button" aria-expanded="false" aria-controls="chart-watchlist-popup" '
+                'title="Add to watchlist" aria-label="Add stock to watchlist">☆</button>'
+                '<div class="chart-watchlist-popup" id="chart-watchlist-popup" hidden>'
+                '<strong>Add to watchlist</strong><div class="chart-watchlist-actions">'
                 '<select id="chart-watchlist-select" '
                 'aria-label="Choose watchlist">'
                 f'{"".join(watchlist_options)}</select>'
                 '<button id="chart-watchlist-add" type="button" '
                 f'data-symbol="{html.escape(str(symbol), quote=True)}" '
                 f'data-market="{safe_alert_market}">Add stock</button>'
-                "</div></section>"
+                "</div></div></section>"
             )
         else:
             watchlist_controls_html = (
                 '<section class="chart-control-section chart-watchlist-section">'
-                '<span class="chart-section-label">Add to watchlist</span>'
-                '<span class="chart-watchlist-empty">'
-                "Create a watchlist first</span></section>"
+                '<button class="chart-watchlist-toggle" id="chart-watchlist-toggle" '
+                'type="button" aria-expanded="false" aria-controls="chart-watchlist-popup" '
+                'title="Add to watchlist" aria-label="Add stock to watchlist">☆</button>'
+                '<div class="chart-watchlist-popup" id="chart-watchlist-popup" hidden>'
+                '<span class="chart-watchlist-empty">Create a watchlist first</span>'
+                "</div></section>"
             )
+    else:
+        watchlist_controls_html = (
+            '<section class="chart-control-section chart-watchlist-section">'
+            '<button class="chart-watchlist-toggle" id="chart-watchlist-toggle" '
+            'type="button" aria-expanded="false" aria-controls="chart-watchlist-popup" '
+            'title="Add to watchlist" aria-label="Add stock to watchlist">☆</button>'
+            '<div class="chart-watchlist-popup" id="chart-watchlist-popup" hidden>'
+            '<span class="chart-watchlist-empty">'
+            "Sign in to add stocks to a watchlist</span>"
+            "</div></section>"
+        )
     previous_disabled = "" if has_previous else "disabled"
     next_disabled = "" if has_next else "disabled"
     match_counter = (
@@ -918,10 +945,14 @@ def interactive_stock_chart_html(
         f'aria-label="Previous stock" title="Previous stock" {previous_disabled}>'
         '&lsaquo;</button>'
         '<label class="chart-symbol-search"><span>Stock</span>'
+        '<span class="chart-symbol-input-wrap">'
         f'<input id="chart-symbol-input" type="text" value="{html.escape(str(symbol), quote=True)}" '
         'autocomplete="off" autocapitalize="characters" spellcheck="false" '
-        'aria-label="Type a stock symbol from this table" list="chart-symbol-options">'
-        '<datalist id="chart-symbol-options"></datalist></label>'
+        'aria-label="Type any stock symbol" aria-autocomplete="list" '
+        'aria-controls="chart-symbol-suggestions" aria-expanded="false">'
+        '<span class="chart-symbol-suggestions" id="chart-symbol-suggestions" '
+        'role="listbox" aria-label="Stock suggestions"></span>'
+        '</span></label>'
         f'<span class="chart-match-counter" id="chart-match-counter">{match_counter}</span>'
         '<button type="button" class="chart-bottom-button" id="matched-next" '
         f'aria-label="Next stock" title="Next stock" {next_disabled}>'
@@ -1174,6 +1205,11 @@ def interactive_stock_chart_html(
           letter-spacing: 0.07em;
           text-transform: uppercase;
         }}
+        .chart-symbol-input-wrap {{
+          position: relative;
+          display: block;
+          min-width: 0;
+        }}
         .chart-symbol-search input {{
           width: 100%;
           height: 32px;
@@ -1194,6 +1230,43 @@ def interactive_stock_chart_html(
         .chart-symbol-search input.is-not-in-table {{
           border-color: #d99a9a;
           background: #fff5f5;
+        }}
+        .chart-symbol-suggestions {{
+          position: absolute;
+          right: 0;
+          bottom: calc(100% + 5px);
+          left: 0;
+          z-index: 30;
+          display: none;
+          max-height: min(220px, 42dvh);
+          overflow-y: auto;
+          border: 1px solid #8eb8c6;
+          border-radius: 9px;
+          background: #ffffff;
+          box-shadow: 0 10px 28px rgba(16, 36, 62, 0.2);
+          text-transform: none;
+        }}
+        .chart-symbol-suggestions.is-open {{ display: block; }}
+        .chart-symbol-suggestion {{
+          display: block;
+          width: 100%;
+          padding: 8px 10px;
+          border: 0;
+          border-bottom: 1px solid #e6eef2;
+          background: transparent;
+          color: var(--ink);
+          cursor: pointer;
+          font: inherit;
+          font-size: 12px;
+          font-weight: 850;
+          letter-spacing: 0;
+          text-align: left;
+        }}
+        .chart-symbol-suggestion:last-child {{ border-bottom: 0; }}
+        .chart-symbol-suggestion:hover,
+        .chart-symbol-suggestion.is-highlighted {{
+          background: #e9f6f8;
+          color: #10536a;
         }}
         .chart-bottom-bar .chart-match-counter {{
           min-width: 55px;
@@ -1237,6 +1310,47 @@ def interactive_stock_chart_html(
           display: flex;
           align-items: stretch;
           gap: 8px;
+        }}
+        .chart-watchlist-section {{
+          position: relative;
+          min-width: auto;
+          padding: 3px;
+        }}
+        .chart-watchlist-toggle {{
+          display: grid;
+          place-items: center;
+          width: 30px;
+          height: 30px;
+          padding: 0;
+          border: 1px solid #d4ad43;
+          border-radius: 8px;
+          background: #fff9df;
+          color: #9a6b00;
+          cursor: pointer;
+          font-size: 20px;
+          line-height: 1;
+        }}
+        .chart-watchlist-toggle[aria-expanded="true"] {{
+          background: #ffe9a6;
+        }}
+        .chart-watchlist-popup {{
+          position: absolute;
+          top: calc(100% + 5px);
+          right: 0;
+          z-index: 35;
+          min-width: 260px;
+          padding: 9px;
+          border: 1px solid #d7c27f;
+          border-radius: 10px;
+          background: #ffffff;
+          box-shadow: 0 12px 30px rgba(16, 36, 62, 0.2);
+        }}
+        .chart-watchlist-popup[hidden] {{ display: none; }}
+        .chart-watchlist-popup strong {{
+          display: block;
+          margin-bottom: 7px;
+          color: var(--ink);
+          font-size: 11px;
         }}
         .chart-watchlist-actions {{
           display: flex;
@@ -1850,7 +1964,7 @@ def interactive_stock_chart_html(
             flex: 1 1 auto;
             grid-template-columns: minmax(76px, 1fr);
           }}
-          .chart-symbol-search span {{ display: none; }}
+          .chart-symbol-search > span:first-child {{ display: none; }}
           .chart-symbol-search input {{
             height: 29px;
             padding-inline: 7px;
@@ -2006,6 +2120,8 @@ def interactive_stock_chart_html(
           const fundamentalsClose = document.getElementById("fundamentals-close");
           const fundamentalsScrim = document.getElementById("fundamentals-scrim");
           const priceAlertButton = document.getElementById("price-alert-at-cursor");
+          const watchlistToggle = document.getElementById("chart-watchlist-toggle");
+          const watchlistPopup = document.getElementById("chart-watchlist-popup");
           const watchlistSelect = document.getElementById("chart-watchlist-select");
           const watchlistAddButton = document.getElementById("chart-watchlist-add");
           const valuationDrawer = document.getElementById("valuation-drawer");
@@ -2018,6 +2134,27 @@ def interactive_stock_chart_html(
           let valuationMonths = 60;
           let valuationPriceEnabled = true;
           let valuationCursorIndex = null;
+
+          function setWatchlistPopupOpen(open) {{
+            if (!watchlistToggle || !watchlistPopup) return;
+            watchlistPopup.hidden = !open;
+            watchlistToggle.setAttribute(
+              "aria-expanded",
+              open ? "true" : "false"
+            );
+          }}
+          if (watchlistToggle && watchlistPopup) {{
+            watchlistToggle.addEventListener("click", function(event) {{
+              event.stopPropagation();
+              setWatchlistPopupOpen(watchlistPopup.hidden);
+            }});
+            watchlistPopup.addEventListener("click", function(event) {{
+              event.stopPropagation();
+            }});
+            document.addEventListener("click", function() {{
+              setWatchlistPopupOpen(false);
+            }});
+          }}
 
           function drawValuationChart() {{
             const svg = document.getElementById("valuation-chart");
@@ -2381,26 +2518,117 @@ def interactive_stock_chart_html(
           const chartClose = document.getElementById("chart-close");
           const chartFullscreen = document.getElementById("chart-fullscreen");
           const chartSymbolInput = document.getElementById("chart-symbol-input");
-          const chartSymbolOptions = document.getElementById("chart-symbol-options");
+          const chartSymbolSuggestions = document.getElementById(
+            "chart-symbol-suggestions"
+          );
           const chartMatchCounter = document.getElementById("chart-match-counter");
+          const availableSymbols = {available_symbols_json};
+          const availableSymbolByKey = new Map(
+            availableSymbols.map(function(item) {{
+              return [String(item || "").trim().toUpperCase(), String(item || "").trim()];
+            }})
+          );
           let hostSymbols = [];
           let hostSymbolIndex = {initial_match_index};
+          let visibleSymbolSuggestions = [];
+          let highlightedSuggestionIndex = -1;
 
           function normalizedSymbol(value) {{
             return String(value || "").trim().toUpperCase();
           }}
 
+          function escapedSuggestionText(value) {{
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }}
+
+          function closeSymbolSuggestions() {{
+            visibleSymbolSuggestions = [];
+            highlightedSuggestionIndex = -1;
+            if (chartSymbolSuggestions) {{
+              chartSymbolSuggestions.classList.remove("is-open");
+              chartSymbolSuggestions.innerHTML = "";
+            }}
+            if (chartSymbolInput) {{
+              chartSymbolInput.setAttribute("aria-expanded", "false");
+            }}
+          }}
+
+          function renderSymbolSuggestions() {{
+            if (!chartSymbolInput || !chartSymbolSuggestions) return;
+            const query = normalizedSymbol(chartSymbolInput.value);
+            if (!query) {{
+              closeSymbolSuggestions();
+              return;
+            }}
+            const prefixMatches = [];
+            const containsMatches = [];
+            availableSymbols.forEach(function(item) {{
+              const key = normalizedSymbol(item);
+              if (key.startsWith(query)) {{
+                prefixMatches.push(item);
+              }} else if (key.includes(query)) {{
+                containsMatches.push(item);
+              }}
+            }});
+            visibleSymbolSuggestions = prefixMatches
+              .concat(containsMatches)
+              .slice(0, 8);
+            highlightedSuggestionIndex = -1;
+            if (!visibleSymbolSuggestions.length) {{
+              closeSymbolSuggestions();
+              return;
+            }}
+            chartSymbolSuggestions.innerHTML = visibleSymbolSuggestions
+              .map(function(item, index) {{
+                const escaped = escapedSuggestionText(item);
+                return (
+                  '<button type="button" class="chart-symbol-suggestion" '
+                  + 'role="option" data-suggestion-index="' + index + '" '
+                  + 'data-symbol="' + escaped + '">' + escaped + '</button>'
+                );
+              }})
+              .join("");
+            chartSymbolSuggestions.classList.add("is-open");
+            chartSymbolInput.setAttribute("aria-expanded", "true");
+          }}
+
+          function highlightSymbolSuggestion(nextIndex) {{
+            if (!chartSymbolSuggestions || !visibleSymbolSuggestions.length) return;
+            highlightedSuggestionIndex = Math.max(
+              0,
+              Math.min(visibleSymbolSuggestions.length - 1, nextIndex)
+            );
+            chartSymbolSuggestions
+              .querySelectorAll(".chart-symbol-suggestion")
+              .forEach(function(button, index) {{
+                button.classList.toggle(
+                  "is-highlighted",
+                  index === highlightedSuggestionIndex
+                );
+              }});
+          }}
+
           function refreshSymbolNavigation(navigateOnMatch) {{
             if (!chartSymbolInput) return;
             const requested = normalizedSymbol(chartSymbolInput.value);
+            const availableSymbol = availableSymbolByKey.get(requested) || "";
             const matchedIndex = hostSymbols.findIndex(function(item) {{
               return normalizedSymbol(item) === requested;
             }});
             const inTable = matchedIndex >= 0;
+            const isAvailable = Boolean(availableSymbol);
             const isDisplayedSymbol = requested === normalizedSymbol(
               "{html.escape(str(symbol), quote=True)}"
             );
-            chartSymbolInput.classList.toggle("is-not-in-table", !inTable);
+            chartSymbolInput.classList.toggle(
+              "is-not-in-table",
+              Boolean(requested) && !isAvailable
+            );
             if (matchedPrevious) {{
               matchedPrevious.disabled = !inTable || !isDisplayedSymbol || matchedIndex <= 0;
             }}
@@ -2412,18 +2640,22 @@ def interactive_stock_chart_html(
             if (chartMatchCounter) {{
               chartMatchCounter.textContent = inTable
                 ? (matchedIndex + 1) + " / " + hostSymbols.length
-                : "Not in table";
+                : isAvailable
+                  ? "Search"
+                  : "No match";
             }}
             if (inTable) hostSymbolIndex = matchedIndex;
             if (
               navigateOnMatch
-              && inTable
-              && normalizedSymbol(hostSymbols[matchedIndex]) !== normalizedSymbol("{html.escape(str(symbol), quote=True)}")
+              && isAvailable
+              && !isDisplayedSymbol
             ) {{
+              closeSymbolSuggestions();
               postChartMessage({{
                 source: "nse-interactive-chart",
-                action: "symbol-select",
-                symbol: hostSymbols[matchedIndex]
+                action: inTable ? "symbol-select" : "symbol-search",
+                symbol: availableSymbol,
+                market: "{safe_alert_market}"
               }});
             }}
           }}
@@ -2435,29 +2667,59 @@ def interactive_stock_chart_html(
             hostSymbols = message.symbols.map(function(item) {{
               return String(item || "").trim();
             }}).filter(Boolean);
-            if (chartSymbolOptions) {{
-              chartSymbolOptions.innerHTML = hostSymbols.map(function(item) {{
-                const escaped = item.replace(/&/g, "&amp;")
-                  .replace(/</g, "&lt;").replace(/"/g, "&quot;");
-                return '<option value="' + escaped + '"></option>';
-              }}).join("");
-            }}
             refreshSymbolNavigation(false);
           }});
 
           if (chartSymbolInput) {{
             chartSymbolInput.addEventListener("focus", function() {{
               chartSymbolInput.select();
+              renderSymbolSuggestions();
             }});
             chartSymbolInput.addEventListener("input", function() {{
               refreshSymbolNavigation(false);
+              renderSymbolSuggestions();
             }});
             chartSymbolInput.addEventListener("change", function() {{
               refreshSymbolNavigation(true);
             }});
             chartSymbolInput.addEventListener("keydown", function(event) {{
-              if (event.key !== "Enter") return;
+              if (event.key === "ArrowDown") {{
+                event.preventDefault();
+                highlightSymbolSuggestion(highlightedSuggestionIndex + 1);
+              }} else if (event.key === "ArrowUp") {{
+                event.preventDefault();
+                highlightSymbolSuggestion(
+                  highlightedSuggestionIndex < 0
+                    ? visibleSymbolSuggestions.length - 1
+                    : highlightedSuggestionIndex - 1
+                );
+              }} else if (event.key === "Enter") {{
+                event.preventDefault();
+                if (
+                  highlightedSuggestionIndex >= 0
+                  && visibleSymbolSuggestions[highlightedSuggestionIndex]
+                ) {{
+                  chartSymbolInput.value = visibleSymbolSuggestions[
+                    highlightedSuggestionIndex
+                  ];
+                }}
+                refreshSymbolNavigation(true);
+              }} else if (event.key === "Escape") {{
+                closeSymbolSuggestions();
+              }}
+            }});
+            chartSymbolInput.addEventListener("blur", function() {{
+              window.setTimeout(closeSymbolSuggestions, 120);
+            }});
+          }}
+          if (chartSymbolSuggestions) {{
+            chartSymbolSuggestions.addEventListener("mousedown", function(event) {{
               event.preventDefault();
+            }});
+            chartSymbolSuggestions.addEventListener("click", function(event) {{
+              const button = event.target.closest("[data-symbol]");
+              if (!button || !chartSymbolInput) return;
+              chartSymbolInput.value = button.dataset.symbol || "";
               refreshSymbolNavigation(true);
             }});
           }}
@@ -2606,7 +2868,20 @@ def interactive_stock_chart_html(
             }});
           }}
           if (chartClose) {{
-            chartClose.addEventListener("click", function() {{
+            chartClose.addEventListener("click", async function() {{
+              if (pseudoFullscreen) {{
+                setPseudoFullscreen(false);
+              }}
+              const exitFullscreen = (
+                document.exitFullscreen
+                || document.webkitExitFullscreen
+              );
+              if (
+                nativeFullscreenElement()
+                && typeof exitFullscreen === "function"
+              ) {{
+                try {{ await exitFullscreen.call(document); }} catch (error) {{}}
+              }}
               requestMatchedStock("close");
             }});
           }}
@@ -3050,6 +3325,7 @@ def render_interactive_stock_chart(
     height=760,
     watchlists=None,
     watchlist_add_callback=None,
+    navigation_callback=None,
 ):
     history_key = f"_interactive_history_years_{str(alert_market).upper()}_{symbol}"
     visible_range_key = f"{history_key}_visible_range"
@@ -3088,6 +3364,16 @@ def render_interactive_stock_chart(
         key=f"cursor_alert_chart_{str(alert_market).upper()}_{symbol}",
     )
     if not isinstance(alert_event, dict):
+        return
+    if alert_event.get("action") in {
+        "previous",
+        "next",
+        "close",
+        "symbol-select",
+        "symbol-search",
+    }:
+        if callable(navigation_callback):
+            navigation_callback(alert_event)
         return
     if alert_event.get("action") == "load-history":
         try:
@@ -4080,14 +4366,24 @@ def results_hover_table_html(
         }
 
         function showInteractiveChart(button) {
-          if (activeInteractiveButton === button) {
-            setActiveInteractiveButton(null);
-            clearPanel();
-            return;
-          }
-          setActiveRow(null);
-          setActiveInteractiveButton(button);
-          renderInteractivePanel(button);
+          if (!button) return;
+          var items = getInteractiveItems();
+          var index = items.indexOf(button);
+          var src = button.getAttribute('data-interactive-src') || '';
+          var market = '';
+          try {
+            market = new URL(src, window.location.href).searchParams.get('market') || '';
+          } catch (error) {}
+          window.parent.postMessage({
+            source: 'chart-workspace-open',
+            symbol: button.getAttribute('data-symbol') || '',
+            market: market,
+            interactiveSrc: src,
+            symbols: items.map(function(item) {
+              return item.getAttribute('data-symbol') || '';
+            }),
+            index: index
+          }, '*');
         }
 
         function showInteractiveByOffset(offset) {
@@ -4604,16 +4900,9 @@ def sortable_results_table(
         count_label=count_label,
         component_height=height,
     )
-    if row_actions:
-        return _ALERT_TABLE_COMPONENT(
-            table_html=table_html,
-            default_height=height,
-            key=component_key,
-            default=None,
-        )
-    components.html(
-        table_html,
-        height=height,
-        scrolling=True,
+    return _ALERT_TABLE_COMPONENT(
+        table_html=table_html,
+        default_height=height,
+        key=component_key,
+        default=None,
     )
-    return None
