@@ -2,13 +2,18 @@
 
 The application supports guest screening plus optional Google accounts.
 Authenticated users get private cloud-backed favorite filters, UI settings,
-and price alerts. Existing stock JSON and `favourite_filters.json` remain
-shared application data.
+price alerts, watchlists, and their latest screener results. Only one screener
+result payload is retained per user; each completed run replaces the previous
+one. Existing stock data and `favourite_filters.json` remain shared application
+data.
 
 ## 1. Create the Supabase tables
 
 Create a free Supabase project, open **SQL Editor**, and run
 `supabase_schema.sql`.
+
+Run the schema again after upgrading an existing deployment so the
+`user_screener_results` table is created.
 
 The service-role key is used only by the Streamlit Python server. Do not put it
 in browser code, expose it in logs, or commit it to Git. The SQL schema denies

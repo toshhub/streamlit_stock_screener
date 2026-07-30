@@ -119,12 +119,12 @@ class LiveScreenerPipelineTests(unittest.TestCase):
             results_section,
         )
 
-    def test_background_job_can_be_recovered_without_persisting_results(self):
+    def test_background_job_persists_only_the_completed_latest_results(self):
         self.assertIn("SCREENER_JOBS[owner_key] = job", self.source)
-        self.assertNotIn("completion_callback", self.source)
-        self.assertNotIn("persist_user_results", self.source)
-        self.assertNotIn("load_results(", self.source)
-        self.assertNotIn("save_results(", self.source)
+        self.assertIn("completion_callback", self.source)
+        self.assertIn("store.save_last_screener_result(", self.source)
+        self.assertIn("cloud_store.load_last_screener_result(", self.source)
+        self.assertNotIn("last_results.json", self.source)
 
 
 if __name__ == "__main__":

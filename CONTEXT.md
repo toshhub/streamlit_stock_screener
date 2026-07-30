@@ -267,7 +267,8 @@ Responsibilities:
   - legacy `app_settings.json`
   - `favourite_filters.json`
   - `pe_ratios.json`
-  - `last_results.json`
+- Authenticated users' latest screener results are stored per user in the
+  Supabase `user_screener_results` table; guest results remain session-only.
 - Migrates legacy app settings to `session_settings.json` when present.
 - Provides simple helper functions for load/save/update operations.
 

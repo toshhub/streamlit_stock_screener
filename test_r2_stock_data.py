@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from config import STOCK_CACHE_DIR
-from r2_stock_data import R2Settings, R2StockDataStore
+from r2_stock_data import R2Settings, R2StockDataStore, configure_r2
 
 
 class _Body:
@@ -148,6 +148,31 @@ class R2StockDataTests(unittest.TestCase):
             if key == "stock-data/manifest.json"
         ]
         self.assertEqual(len(manifest_calls), 2)
+
+    def test_explicit_valid_settings_replace_an_unconfigured_store(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            empty_store = configure_r2(
+                {
+                    "cache_dir": temp_dir,
+                    "manifest_refresh_seconds": "60",
+                },
+                force=True,
+            )
+            configured_values = {
+                "account_id": "account",
+                "access_key_id": "key",
+                "secret_access_key": "secret",
+                "bucket": "bucket",
+                "cache_dir": temp_dir,
+                "manifest_refresh_seconds": "60",
+            }
+            configured_store = configure_r2(configured_values)
+            reused_store = configure_r2(configured_values)
+
+        self.assertFalse(empty_store.settings.configured)
+        self.assertTrue(configured_store.settings.configured)
+        self.assertIsNot(configured_store, empty_store)
+        self.assertIs(reused_store, configured_store)
 
     def test_loads_only_required_periods_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -550,7 +550,22 @@ def configure_r2(values=None, *, client=None, force=False):
     global _STORE
     settings = R2Settings.from_mapping(values)
     with _STORE_LOCK:
-        if force or _STORE is None:
+        explicit_settings_changed = (
+            values is not None
+            and _STORE is not None
+            and _STORE.settings != settings
+        )
+        explicit_client_changed = (
+            client is not None
+            and _STORE is not None
+            and _STORE._client is not client
+        )
+        if (
+            force
+            or _STORE is None
+            or explicit_settings_changed
+            or explicit_client_changed
+        ):
             _STORE = R2StockDataStore(settings, client=client)
     return _STORE
 

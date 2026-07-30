@@ -5,11 +5,40 @@ user-facing method requires and filters by the verified Google OIDC subject.
 """
 
 import os
+import math
 import threading
+from datetime import date, datetime, timezone
 
 
 class CloudStorageError(RuntimeError):
     pass
+
+
+def _json_safe(value):
+    """Convert dataframe-derived result values into Supabase JSON values."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            return _json_safe(item_method())
+        except (TypeError, ValueError):
+            pass
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        try:
+            return isoformat()
+        except (TypeError, ValueError):
+            pass
+    return str(value)
 
 
 def _secret_value(st, section, key, environment_key):
@@ -122,6 +151,64 @@ class SupabaseCloudStorage:
             raise CloudStorageError(f"Could not save personal settings: {exc}") from exc
         self._settings_cache[user_id] = current
         return current
+
+    def load_last_screener_result(self, user_id):
+        user_id = self._require_user(user_id)
+        try:
+            response = (
+                self.client.table("user_screener_results")
+                .select("results,metadata,updated_at")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(
+                f"Could not load your last screener results: {exc}"
+            ) from exc
+        if not response.data:
+            return None
+        row = response.data[0]
+        results = row.get("results", [])
+        metadata = row.get("metadata", {})
+        return {
+            "rows": list(results) if isinstance(results, list) else [],
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
+            "updated_at": str(row.get("updated_at") or ""),
+        }
+
+    def save_last_screener_result(self, user_id, rows, metadata):
+        """Replace the user's previous screener payload; no history is kept."""
+        user_id = self._require_user(user_id)
+        clean_rows = []
+        for value in rows or []:
+            clean = dict(value) if isinstance(value, dict) else {}
+            # Generated chart files are server-local cache entries. Rebuild
+            # them after restore rather than persisting stale absolute paths.
+            clean.pop("ChartSrc", None)
+            clean["ChartPath"] = ""
+            clean_rows.append(_json_safe(clean))
+        row = {
+            "user_id": user_id,
+            "results": clean_rows,
+            "metadata": _json_safe(dict(metadata or {})),
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            (
+                self.client.table("user_screener_results")
+                .upsert(row, on_conflict="user_id")
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(
+                f"Could not save your last screener results: {exc}"
+            ) from exc
+        return {
+            "rows": clean_rows,
+            "metadata": row["metadata"],
+            "updated_at": row["updated_at"],
+        }
 
     def save_filter_set(self, user_id, name, filter_data):
         user_id = self._require_user(user_id)

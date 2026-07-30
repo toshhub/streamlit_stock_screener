@@ -46,7 +46,8 @@ Responsibilities:
 - Displays screener progress bar and live count.
 - Optionally creates chart PNGs for matched stocks during screening.
 - Stores screener results in `st.session_state["results"]`.
-- Persists the latest screener rows to `data/metadata/last_results.json`.
+- For authenticated users, upserts the latest screener rows and run metadata
+  into the private Supabase `user_screener_results` row for that user.
 - Automatically switches to the Results tab after a completed Run Screener.
 - Supports protected external cron calls:
   - `?ping=1&token=...`
@@ -450,7 +451,8 @@ No active pattern-scanning logic exists yet.
 
 ### Results Tab
 
-Displays the latest screener results from session state or `data/metadata/last_results.json`.
+Displays the latest screener results from session state. After login, a new
+session restores that user's latest saved result from Supabase.
 
 The result rows represent whichever market was selected when Run Screener was last executed.
 
@@ -500,13 +502,16 @@ user remove selected rows.
 
 `st.session_state["switch_to_results_tab"]` is a one-shot flag used after Run Screener completes. On the next rerun, `switch_to_tab(3)` injects a tiny Streamlit component script that clicks the Results tab because native `st.tabs` does not expose a selected-tab API.
 
-If the app reloads or restarts, the Results tab can reload the latest saved rows from `data/metadata/last_results.json`.
+If the app reloads or restarts, authenticated users reload their own latest
+saved rows from Supabase. Guest results remain session-only.
 
 ### Persistent State
 
 `data/metadata/session_settings.json` stores UI preferences and last download timestamp locally. `data/metadata/app_settings.json` is treated as a legacy settings file.
 
-`data/metadata/last_results.json` stores the latest screener output.
+`user_screener_results` stores one private latest-result payload per
+authenticated user. A completed run replaces that user's previous payload;
+run history is not retained.
 
 `data/metadata/price_alerts.json` stores persistent price-alert definitions and
 their latest Active or Triggered state.

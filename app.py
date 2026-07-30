@@ -150,6 +150,13 @@ configure_user_storage(cloud_store, app_user.id if app_user else None)
 configure_cloud_alerts(cloud_store, require_auth=True)
 set_current_alert_user(app_user.id if app_user else None)
 
+results_owner_id = str(app_user.id) if app_user is not None else "guest"
+if st.session_state.get("_results_owner_id") != results_owner_id:
+    st.session_state.pop("results", None)
+    st.session_state.pop("last_results_metadata", None)
+    st.session_state.pop("screener_job", None)
+    st.session_state["_results_owner_id"] = results_owner_id
+
 # Favorite callbacks set all required filter state before Streamlit reruns.
 # Reuse the session copies for that rerun instead of blocking on Supabase.
 fast_favorite_selection = st.session_state.pop(
@@ -162,6 +169,7 @@ fast_workspace_navigation = st.session_state.pop(
 )
 
 cloud_startup_error = ""
+results_restore_error = ""
 try:
     if (
         (fast_favorite_selection or fast_workspace_navigation)
@@ -187,6 +195,25 @@ except CloudStorageError as exc:
     settings = dict(shared_settings)
     personal_filter_sets = {}
     cloud_startup_error = str(exc)
+
+if "results" not in st.session_state:
+    st.session_state["results"] = []
+    st.session_state["last_results_metadata"] = {}
+    if cloud_store is not None and app_user is not None:
+        try:
+            saved_screener_result = cloud_store.load_last_screener_result(
+                app_user.id
+            )
+        except CloudStorageError as exc:
+            results_restore_error = str(exc)
+        else:
+            if saved_screener_result is not None:
+                st.session_state["results"] = deepcopy(
+                    saved_screener_result.get("rows", [])
+                )
+                st.session_state["last_results_metadata"] = deepcopy(
+                    saved_screener_result.get("metadata", {})
+                )
 
 
 def update_changed_settings(values):
@@ -228,6 +255,8 @@ for display_name, stored_name in personal_favorite_keys.items():
 
 if cloud_startup_error:
     st.error(cloud_startup_error)
+if results_restore_error:
+    st.warning(results_restore_error)
 
 
 def render_login_prompt(message, key, error=False):
@@ -1804,6 +1833,7 @@ def run_live_screener_job(
     pattern_reversal_pct,
     pattern_expressions,
     create_charts,
+    completion_callback=None,
 ):
     total = len(stock_files)
     max_workers = min(
@@ -1930,6 +1960,14 @@ def run_live_screener_job(
                     "charts_done": chart_done,
                     "charts_total": len(matched_rows),
                 })
+        if completion_callback is not None:
+            try:
+                completion_callback(matched_rows)
+            except Exception as exc:
+                job_queue.put({
+                    "type": "persistence_error",
+                    "message": str(exc),
+                })
         job_queue.put({
             "type": "complete",
             "rows": matched_rows,
@@ -1955,6 +1993,7 @@ def start_live_screener_job(
     pattern_expressions,
     create_charts,
     owner_key=None,
+    completion_callback=None,
 ):
     job_queue = queue.Queue()
     total = len(stock_files)
@@ -1974,6 +2013,7 @@ def start_live_screener_job(
             pattern_reversal_pct,
             pattern_expressions,
             create_charts,
+            completion_callback,
         ),
         daemon=True,
     )
@@ -2043,6 +2083,8 @@ def drain_live_screener_events():
         elif event_type == "worker_error":
             job["failed_count"] = job.get("failed_count", 0) + 1
             job["last_error"] = event.get("message", "")
+        elif event_type == "persistence_error":
+            job["persistence_error"] = event.get("message", "")
         elif event_type == "complete":
             st.session_state["results"] = event.get("rows", rows)
             job["done"] = event.get("total", job.get("total", 0))
@@ -4511,10 +4553,30 @@ def render_screener_workspace():
                 else ""
             ),
             "filter_conditions": filter_condition_lines + list(run_pattern_expressions),
+            "filter_set": deepcopy(run_filter_set),
             "create_charts": bool(create_charts),
             "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         st.session_state["last_results_metadata"] = result_metadata
+        completion_callback = None
+        if cloud_store is not None and app_user is not None:
+            result_owner_id = str(app_user.id)
+            persisted_metadata = deepcopy(result_metadata)
+
+            def persist_last_screener_result(
+                completed_rows,
+                *,
+                store=cloud_store,
+                user_id=result_owner_id,
+                metadata=persisted_metadata,
+            ):
+                store.save_last_screener_result(
+                    user_id,
+                    completed_rows,
+                    metadata,
+                )
+
+            completion_callback = persist_last_screener_result
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
             market_cap_positions,
@@ -4525,6 +4587,7 @@ def render_screener_workspace():
             run_pattern_expressions,
             create_charts,
             owner_key=screener_job_owner_key(),
+            completion_callback=completion_callback,
         )
         st.rerun(scope="fragment")
 
@@ -4874,7 +4937,8 @@ with tab4:
 
     live_screener_job = drain_live_screener_events()
 
-    # Screening results intentionally live only in this browser session.
+    # Guests keep session-only results; authenticated users are restored from
+    # their single latest Supabase screener-result row during app startup.
     if "results" not in st.session_state:
         st.session_state["results"] = []
         st.session_state["last_results_metadata"] = {}
@@ -4910,21 +4974,37 @@ with tab4:
             st.success(f"Screening complete: {done}/{total} processed, {matches} match(es) found.")
             if failed_count:
                 st.warning(f"{failed_count} stock file(s) were skipped due to errors.")
+            if live_screener_job.get("persistence_error"):
+                st.warning(
+                    "The screening completed, but your last results could not "
+                    f"be saved: {live_screener_job['persistence_error']}"
+                )
 
     if (
         rows
         and not live_job_running
         and (not fast_favorite_selection or tab4.open)
     ):
-        result_market_for_repair = normalize_market(settings.get("last_results_market", selected_market))
-        result_timeframe_for_repair = "DAY"
-        repair_filter_set = normalize_filter_set(
-            settings.get("screener_filter_set", st.session_state.get("current_filter_set", [])),
-            use_default=False,
-        )
         result_metadata_for_repair = st.session_state.get(
             "last_results_metadata",
             {},
+        )
+        result_market_for_repair = normalize_market(
+            result_metadata_for_repair.get(
+                "market",
+                settings.get("last_results_market", selected_market),
+            )
+        )
+        result_timeframe_for_repair = "DAY"
+        repair_filter_set = normalize_filter_set(
+            result_metadata_for_repair.get(
+                "filter_set",
+                settings.get(
+                    "screener_filter_set",
+                    st.session_state.get("current_filter_set", []),
+                ),
+            ),
+            use_default=False,
         )
         if (
             not live_job_running
