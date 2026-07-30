@@ -8,16 +8,11 @@ env/
 .idea/
 .vs/
 
-data/india/*
-!data/india/daily/
-data/india/daily/*
-!data/india/daily/*.json
+data/india/
 data/weekly/
 data/monthly/
-data/us/*
-!data/us/daily/
-data/us/daily/*
-!data/us/daily/*.json
+data/us/
+data/.stock-cache/
 data/charts/
 data/metadata/*
 !data/metadata/latest_stock_values.parquet

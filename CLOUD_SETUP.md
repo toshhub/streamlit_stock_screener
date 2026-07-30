@@ -60,3 +60,27 @@ favorites or create alerts.
   Supabase.
 - Alert evaluation remains central: successful daily stock downloads query
   active cloud alerts for that symbol and update any triggers.
+## Cloudflare R2 stock data
+
+The candle repository is stored in Cloudflare R2. Configure these GitHub
+Actions secrets:
+
+- `R2_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_BUCKET_NAME`
+
+Configure the Streamlit app with the matching values:
+
+```toml
+[r2]
+account_id = "your-cloudflare-account-id"
+access_key_id = "your-r2-access-key-id"
+secret_access_key = "your-r2-secret-access-key"
+bucket = "your-bucket-name"
+prefix = "stock-data"
+```
+
+The credentials need object read/write access in GitHub Actions. Streamlit only
+needs object read access. See `STOCK_DATA_ARCHITECTURE.md` for the object layout,
+cache behavior, migration command, and annual rollover.

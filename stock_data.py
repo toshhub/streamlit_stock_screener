@@ -1,8 +1,8 @@
-"""Canonical one-JSON-file-per-stock storage for daily candles.
+"""Stock candle access with Cloudflare R2 as the source of truth.
 
-India candles live at ``data/india/daily/RELIANCE.json`` and US candles at
-``data/us/daily/MSFT.json``. Legacy yearly Parquet directories remain readable
-only so the one-time migration can verify and convert them safely.
+Local JSON helpers remain for tests and one-time migration utilities. Paths
+under ``data/{india,us}/daily`` are virtual symbol references backed by the
+manifest-driven R2 cache.
 """
 
 from __future__ import annotations
@@ -35,6 +35,27 @@ def symbol_from_path(path):
     return Path(path).stem
 
 
+def _r2_market_for_path(path):
+    path = Path(path)
+    parts = [part.lower() for part in path.parts]
+    for market in ("india", "us"):
+        if market in parts and "daily" in parts:
+            return market
+    return None
+
+
+def _r2_store_for_path(path):
+    market = _r2_market_for_path(path)
+    if not market:
+        return None, None
+    try:
+        from r2_stock_data import get_r2_store, r2_configured
+
+        return (get_r2_store(), market) if r2_configured() else (None, market)
+    except Exception:
+        return None, market
+
+
 def stock_exists(path):
     path = Path(path)
     if path.is_file() and path.suffix.lower() == ".json":
@@ -42,11 +63,27 @@ def stock_exists(path):
     if path.suffix.lower() != ".json" and path.with_suffix(".json").is_file():
         return True
     # Transitional support for the one-time Parquet-to-JSON migration.
-    return path.is_dir() and any(path.glob("*.parquet"))
+    if path.is_dir() and any(path.glob("*.parquet")):
+        return True
+    store, market = _r2_store_for_path(path)
+    if store is None:
+        return False
+    try:
+        return path.stem.upper() in set(store.list_symbols(market))
+    except Exception:
+        return False
 
 
 def list_symbol_paths(directory, include_index=True):
     directory = Path(directory)
+    store, market = _r2_store_for_path(directory)
+    if store is not None:
+        symbols = store.list_symbols(market)
+        if not include_index:
+            symbols = [
+                symbol for symbol in symbols if symbol.upper() != "NIFTY"
+            ]
+        return [directory / f"{symbol}.json" for symbol in symbols]
     if not directory.exists():
         return []
     symbols = {
@@ -145,6 +182,30 @@ def _edge_stock_row(path, *, last):
             if "Date" in row:
                 row["Date"] = pd.to_datetime(row["Date"], errors="coerce")
             return row
+    store, market = _r2_store_for_path(path)
+    if store is not None:
+        entries = store.market_entries(market)
+        periods = sorted(entries["yearly"]) + sorted(entries["current"])
+        if not periods:
+            return None
+        period = periods[-1 if last else 0]
+        if len(period) == 4:
+            start = f"{period}-01-01"
+            end = f"{period}-12-31"
+        else:
+            start = f"{period}-01"
+            end = (
+                PandasTimestamp(start) + pd.offsets.MonthEnd(1)
+            ).strftime("%Y-%m-%d")
+        frame = store.load_symbol(
+            market,
+            path.stem,
+            start=start,
+            end=end,
+        )
+        if frame.empty:
+            return None
+        return frame.iloc[-1 if last else 0]
     df = load_stock_dataframe(path)
     if df.empty:
         return None
@@ -176,17 +237,31 @@ def _load_legacy_parquet_dataframe(path, start=None, end=None):
     )
 
 
-def load_stock_dataframe(path, start=None, end=None):
+def load_stock_dataframe(path, start=None, end=None, columns=None):
     """Load one stock JSON file and optionally restrict its date window."""
     path = Path(path)
+    requested_columns = list(dict.fromkeys(columns or []))
+    for required in ("Date", "Close"):
+        if requested_columns and required not in requested_columns:
+            requested_columns.append(required)
     json_file = _canonical_json_path(path)
-    frame = (
-        _load_json_dataframe(json_file)
-        if json_file.exists()
-        else _load_legacy_parquet_dataframe(path, start=start, end=end)
-        if path.is_dir()
-        else pd.DataFrame()
-    )
+    if json_file.exists():
+        frame = _load_json_dataframe(json_file)
+    elif path.is_dir():
+        frame = _load_legacy_parquet_dataframe(path, start=start, end=end)
+    else:
+        store, market = _r2_store_for_path(path)
+        frame = (
+            store.load_symbol(
+                market,
+                path.stem,
+                start=start,
+                end=end,
+                columns=requested_columns or None,
+            )
+            if store is not None
+            else pd.DataFrame()
+        )
     result = normalize_price_dataframe(frame)
     if result.empty:
         return result
@@ -194,6 +269,10 @@ def load_stock_dataframe(path, start=None, end=None):
         result = result[result["Date"] >= PandasTimestamp(start).normalize()]
     if end is not None:
         result = result[result["Date"] <= PandasTimestamp(end).normalize()]
+    if requested_columns:
+        result = result[
+            [column for column in requested_columns if column in result.columns]
+        ]
     return result.reset_index(drop=True)
 
 

@@ -6,3 +6,4 @@ openpyxl
 matplotlib
 supabase>=2.30,<3
 pyarrow>=17,<24
+boto3>=1.35,<2

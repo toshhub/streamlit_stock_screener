@@ -61,6 +61,7 @@ def load_price_data(path):
     df = load_stock_dataframe(
         path,
         start=rolling_history_start(SCREENING_HISTORY_YEARS),
+        columns=["Date", "Close"],
     )
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -438,7 +439,11 @@ def interactive_chart_payload(
     read_start = display_start
     if display_start is not None and ma_periods:
         read_start = display_start - pd.Timedelta(days=max(ma_periods) * 2)
-    df = load_stock_dataframe(json_path, start=read_start)
+    df = load_stock_dataframe(
+        json_path,
+        start=read_start,
+        columns=["Date", "Open", "High", "Low", "Close", "Volume"],
+    )
     required_columns = ["Date", "Open", "High", "Low", "Close"]
     missing_columns = [column for column in required_columns if column not in df.columns]
     if missing_columns:
@@ -576,6 +581,7 @@ def _attach_monthly_prices(json_path, valuation_rows):
         price_df = load_stock_dataframe(
             json_path,
             start=valid_dates.min() - pd.Timedelta(days=2),
+            columns=["Date", "Close"],
         )
     except (OSError, ValueError):
         return valuation_rows

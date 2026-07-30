@@ -171,6 +171,14 @@ def data_availability_summary(
     snapshot_file=LATEST_VALUES_FILE,
 ):
     """Return the latest date and stock-file coverage for that date."""
+    try:
+        from r2_stock_data import get_r2_store, r2_configured
+
+        if market is not None and r2_configured():
+            return get_r2_store().market_status(normalize_market(market).lower())
+    except Exception:
+        # The local snapshot remains a useful offline fallback.
+        pass
     snapshot_summary = None
     if market is not None:
         snapshot_summary = _data_availability_from_snapshot(

@@ -107,9 +107,20 @@ from stock_data import (
     symbol_from_path,
     symbol_path,
 )
+from r2_stock_data import (
+    R2DataError,
+    configure_r2,
+    get_r2_store,
+    r2_configured,
+)
 from user_auth import current_user, render_workspace_account_controls
 
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
+
+try:
+    configure_r2(dict(st.secrets.get("r2", {})), force=True)
+except Exception:
+    configure_r2(force=True)
 
 _APP_CHART_EVENT_COMPONENT = components.declare_component(
     "app_chart_events",
@@ -1666,7 +1677,7 @@ def is_stock_data_file(path):
 
 
 def stock_data_files(directory):
-    if not directory or not directory.exists():
+    if not directory:
         return []
     return list_symbol_paths(directory, include_index=False)
 
@@ -3574,152 +3585,45 @@ with tab1:
             )
             render_data_availability_status(selected_market)
 
-    india_excel_file = EXCEL_DIR / "MCAP_JUGAAD.xlsx"
-    us_csv_file = EXCEL_DIR / "nasdaq_screener_1784114565446.csv"
-    symbols_file = us_csv_file if selected_market == MARKET_US else india_excel_file
-    source_label = "CSV" if selected_market == MARKET_US else "Excel"
+    update_changed_settings({"market": selected_market})
 
-    available_symbol_count = 0
-    if symbols_file.exists():
-        available_symbol_count = len(load_top_symbols(symbols_file, limit=1_000_000, market=selected_market))
-
-    limit_setting_key = "download_limit_us" if selected_market == MARKET_US else "download_limit"
-    default_download_limit = available_symbol_count if selected_market == MARKET_US and available_symbol_count else 1000
-    saved_download_limit = int(settings.get(limit_setting_key, default_download_limit))
-    if available_symbol_count:
-        saved_download_limit = min(saved_download_limit, available_symbol_count)
-
-    download_tf = "DAY"
-    source_col, settings_col = st.columns(2)
-    with source_col:
-        with st.container(border=True):
-            st.markdown(
-                '<div class="data-panel-heading tone-violet"><span>🗂️</span>Source File</div>'
-                '<p class="data-panel-subtitle">Review or replace the symbol universe used for downloads.</p>',
-                unsafe_allow_html=True,
+    with st.container(border=True):
+        st.markdown(
+            '<div class="data-panel-heading tone-violet"><span>☁️</span>'
+            'Cloudflare R2 Sync</div>'
+            '<p class="data-panel-subtitle">R2 is the permanent source of '
+            'truth. The app downloads only required yearly and monthly files '
+            'into its temporary cache.</p>',
+            unsafe_allow_html=True,
+        )
+        if not r2_configured():
+            st.warning(
+                "Cloudflare R2 is not configured. Add the [r2] Streamlit "
+                "secrets described in CLOUD_SETUP.md."
             )
-            if symbols_file.exists():
-                st.markdown(
-                    f'<div class="source-file-summary">'
-                    f'<span class="source-file-summary__name">{html.escape(symbols_file.name)}</span>'
-                    f'<span class="source-file-summary__badge">Ready</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
+        sync_clicked = st.button(
+            "Sync Stock Data",
+            type="primary",
+            use_container_width=True,
+            disabled=not r2_configured(),
+            help=(
+                "Refresh the manifest and redownload the selected market's "
+                "current monthly file. Historical files download on demand."
+            ),
+        )
+        if sync_clicked:
+            try:
+                sync_result = get_r2_store().sync(
+                    selected_market.lower(),
+                    force=True,
                 )
-                st.caption(f"{available_symbol_count:,} symbols available")
-            else:
-                st.warning(f"Add {symbols_file.name} before downloading stock data.")
-
-            if selected_market == MARKET_INDIA:
-                uploaded = st.file_uploader(
-                    "Replace source file",
-                    type=["xlsx"],
-                    help="Upload a replacement Excel file containing the India stock universe.",
+                st.cache_data.clear()
+                st.success(
+                    "Stock data synced. Manifest version: "
+                    f"{sync_result.get('version') or 'unversioned'}."
                 )
-                if uploaded:
-                    india_excel_file.write_bytes(uploaded.getbuffer())
-                    st.success("Source file replaced successfully.")
-            else:
-                st.caption("The US market uses the configured Nasdaq CSV source.")
-
-    with settings_col:
-        with st.container(border=True):
-            st.markdown(
-                '<div class="data-panel-heading tone-amber"><span>⚙️</span>Download Settings</div>'
-                '<p class="data-panel-subtitle">Set the universe size and choose incremental or full refresh.</p>',
-                unsafe_allow_html=True,
-            )
-            download_limit_max = available_symbol_count or max(saved_download_limit, 1000)
-            download_limit_value = min(max(1, saved_download_limit), int(download_limit_max))
-            slider_key = f"download_limit_slider_{selected_market.lower()}"
-            field_key = f"download_limit_field_{selected_market.lower()}"
-            current_slider_value = int(st.session_state.get(slider_key, download_limit_value))
-            current_slider_value = min(max(1, current_slider_value), int(download_limit_max))
-            st.session_state[slider_key] = current_slider_value
-            if field_key not in st.session_state:
-                st.session_state[field_key] = str(current_slider_value)
-
-            def sync_download_limit_field():
-                st.session_state[field_key] = str(st.session_state[slider_key])
-
-            def sync_download_limit_slider():
-                try:
-                    entered_value = int(str(st.session_state[field_key]).strip())
-                except (TypeError, ValueError):
-                    entered_value = int(st.session_state[slider_key])
-                entered_value = min(max(1, entered_value), int(download_limit_max))
-                st.session_state[slider_key] = entered_value
-                st.session_state[field_key] = str(entered_value)
-
-            slider_col, field_col = st.columns([4, 1])
-            with slider_col:
-                st.slider(
-                    "Number of stocks",
-                    min_value=1,
-                    max_value=int(download_limit_max),
-                    step=1,
-                    key=slider_key,
-                    on_change=sync_download_limit_field,
-                    help=f"{available_symbol_count} symbols are available in the selected {source_label} file." if available_symbol_count else None,
-                )
-            with field_col:
-                st.text_input(
-                    "Exact count",
-                    key=field_key,
-                    on_change=sync_download_limit_slider,
-                    help="Type an exact stock count and press Enter.",
-                )
-            download_limit = int(st.session_state[slider_key])
-
-            full_refresh = st.checkbox(
-                "Clear existing data before downloading",
-                value=False,
-                help="Leave unchecked for a faster incremental refresh that appends only candles after each stock file's latest saved date.",
-            )
-
-            download_clicked = st.button(
-                "⬇️ Download Stocks Data",
-                type="primary",
-                use_container_width=True,
-            )
-
-    update_changed_settings({
-        "market": selected_market,
-        "download_tf": download_tf,
-        limit_setting_key: download_limit,
-    })
-
-    if download_clicked:
-        if not symbols_file.exists():
-            st.error(f"❌ Add {symbols_file.name} before downloading {market_label(selected_market)} stock data.")
-        else:
-            existing_job, started = start_background_download(
-                symbols_file,
-                download_tf,
-                download_limit,
-                incremental=not full_refresh,
-                market=selected_market,
-            )
-            if not started:
-                st.warning(
-                    f"A {market_label(existing_job.get('market'))} stock download is already running."
-                )
-
-    download_job = background_download_snapshot(selected_market)
-    if download_job:
-        if download_job.get("running"):
-            render_live_download_activity(selected_market)
-        else:
-            completed_at = download_job.get("completed_at", "")
-            if completed_at and settings.get("last_download_job_id") != download_job.get("id"):
-                update_settings({
-                    "market": selected_market,
-                    "last_download_at": completed_at,
-                    "last_download_tf": download_tf,
-                    "last_download_market": selected_market,
-                    "last_download_job_id": download_job.get("id"),
-                })
-            render_download_job_status(download_job)
+            except R2DataError as exc:
+                st.error(f"Stock data sync failed: {exc}")
 
 
 # =====================================================================
@@ -3860,16 +3764,26 @@ def render_screener_workspace():
                 selected = st.session_state["_favorite_select_widget"]
                 apply_filter_selection_to_state(selected)
 
-            selected_fav = st.selectbox(
-                "⭐ Filter Set To Run",
-                favorite_options,
-                key="_favorite_select_widget",
-                on_change=on_favorite_filter_selected,
-                format_func=favorite_option_label,
-                removable_options=personal_favorite_keys.keys(),
-                on_remove=request_saved_strategy_removal,
-                help="Select a saved favorite filter set to load all of its filters.",
-            )
+            if "removable_options" in inspect.signature(st.selectbox).parameters:
+                selected_fav = st.selectbox(
+                    "⭐ Filter Set To Run",
+                    favorite_options,
+                    key="_favorite_select_widget",
+                    on_change=on_favorite_filter_selected,
+                    format_func=favorite_option_label,
+                    removable_options=personal_favorite_keys.keys(),
+                    on_remove=request_saved_strategy_removal,
+                    help="Select a saved favorite filter set to load all of its filters.",
+                )
+            else:
+                selected_fav = st.selectbox(
+                    "⭐ Filter Set To Run",
+                    favorite_options,
+                    key="_favorite_select_widget",
+                    on_change=on_favorite_filter_selected,
+                    format_func=favorite_option_label,
+                    help="Select a saved favorite filter set to load all of its filters.",
+                )
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
 

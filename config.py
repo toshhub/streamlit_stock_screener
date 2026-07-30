@@ -1,10 +1,9 @@
 from pathlib import Path
 
-from mobile_filter_proxy import st
-
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
+STOCK_CACHE_DIR = DATA_DIR / ".stock-cache"
 
 EXCEL_DIR = DATA_DIR / "excel"
 INDIA_DATA_DIR = DATA_DIR / "india"
@@ -20,5 +19,6 @@ for d in [
     US_DAILY_DIR,
     CHARTS_DIR,
     META_DIR,
+    STOCK_CACHE_DIR,
 ]:
     d.mkdir(parents=True, exist_ok=True)

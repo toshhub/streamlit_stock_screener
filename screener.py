@@ -12,6 +12,7 @@ from stock_data import (
     SCREENING_HISTORY_YEARS,
     load_stock_dataframe,
     rolling_history_start,
+    stock_exists,
     symbol_from_path,
 )
 import yfinance as yf
@@ -507,7 +508,11 @@ def load_price_dataframe(
         if filter_set is not None
         else rolling_history_start(years=years, as_of=as_of)
     )
-    df = load_stock_dataframe(path, start=start)
+    df = load_stock_dataframe(
+        path,
+        start=start,
+        columns=["Date", "Open", "High", "Low", "Close", "Volume"],
+    )
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.sort_values("Date")
@@ -700,7 +705,7 @@ def screen_json_file(
     include_pe=None,
     **legacy_kwargs,
 ):
-    if not path.exists():
+    if not stock_exists(path):
         return None
 
     if filter_set is None and legacy_kwargs:
