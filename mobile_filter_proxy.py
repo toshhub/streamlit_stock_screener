@@ -1,12 +1,11 @@
 import streamlit as _st
 
-from streamlit_filter_proxy import st as _base_st
-
 
 _MOBILE_STYLES_INJECTED = False
 
 
 def _inject_mobile_filter_styles():
+    """Apply mobile-safe layout rules without replacing Streamlit widgets."""
     global _MOBILE_STYLES_INJECTED
     if _MOBILE_STYLES_INJECTED:
         return
@@ -21,78 +20,13 @@ def _inject_mobile_filter_styles():
                 overflow-x: hidden !important;
             }
 
-            div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"]) {
-                display: flex !important;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                gap: 0.4rem !important;
-                width: 100% !important;
+            div[data-testid="stHorizontalBlock"] {
                 max-width: 100% !important;
-                overflow: hidden !important;
             }
 
-            div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"]) {
-                display: flex !important;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                gap: 0.4rem !important;
-                width: 100% !important;
-                max-width: 100% !important;
-                overflow: hidden !important;
-            }
-
-            div[data-testid="stHorizontalBlock"]:has([class*="st-key-filter_card_"])
-                > div:is([data-testid="column"], [data-testid="stColumn"]),
-            div[data-testid="stHorizontalBlock"]:has([class*="st-key-favorite_filter_card_"])
+            div[data-testid="stHorizontalBlock"]
                 > div:is([data-testid="column"], [data-testid="stColumn"]) {
-                flex: 0 0 calc(50% - 0.2rem) !important;
-                width: calc(50% - 0.2rem) !important;
                 min-width: 0 !important;
-                max-width: calc(50% - 0.2rem) !important;
-            }
-
-            div[class*="st-key-favorite_filter_card_"] button {
-                min-height: 54px !important;
-                padding: 0.5rem 0.35rem !important;
-            }
-
-            div[class*="st-key-favorite_filter_card_"] button p {
-                font-size: 0.72rem !important;
-                line-height: 1.14 !important;
-                overflow-wrap: anywhere !important;
-            }
-
-            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker) {
-                display: flex !important;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                gap: 0.4rem !important;
-                width: 100% !important;
-                max-width: 100% !important;
-                overflow: hidden !important;
-            }
-
-            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div:is([data-testid="column"], [data-testid="stColumn"]) {
-                flex: 0 0 calc(50% - 0.2rem) !important;
-                width: calc(50% - 0.2rem) !important;
-                min-width: 0 !important;
-                max-width: calc(50% - 0.2rem) !important;
-            }
-
-            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                > div:is([data-testid="column"], [data-testid="stColumn"]) [data-testid="stExpander"] {
-                width: 100% !important;
-                max-width: 100% !important;
-                margin: 0 !important;
-            }
-
-            div[data-testid="stHorizontalBlock"]:has(.filter-tone-marker)
-                [data-testid="stExpander"] summary p {
-                font-size: 0.84rem !important;
-                line-height: 1.2 !important;
-                white-space: normal !important;
-                overflow-wrap: anywhere !important;
             }
         }
         </style>
@@ -103,24 +37,35 @@ def _inject_mobile_filter_styles():
 
 
 class MobileFilterProxy:
+    """Transparent Streamlit proxy with only mobile-safe styling hooks.
+
+    The previous proxy routed every widget through the filter-card proxy. That
+    changed core Streamlit behaviour outside the filter builder, preventing
+    buttons, searchable selectboxes, and custom-component tables from working
+    reliably. Keep native Streamlit widgets everywhere and discard the two
+    filter-card-only keyword arguments when the saved-strategy selector is
+    rendered.
+    """
+
     def __getattr__(self, name):
-        return getattr(_base_st, name)
+        return getattr(_st, name)
 
     def columns(self, spec, *args, **kwargs):
-        return _base_st.columns(spec, *args, **kwargs)
+        _inject_mobile_filter_styles()
+        return _st.columns(spec, *args, **kwargs)
 
     def selectbox(self, label, options, *args, **kwargs):
-        if label == "Filter Category":
-            _inject_mobile_filter_styles()
-        return _base_st.selectbox(label, options, *args, **kwargs)
+        _inject_mobile_filter_styles()
+        kwargs.pop("removable_options", None)
+        kwargs.pop("on_remove", None)
+        return _st.selectbox(label, options, *args, **kwargs)
 
     def expander(self, label, *args, **kwargs):
-        if str(label).split(".", 1)[0].isdigit():
-            _inject_mobile_filter_styles()
-        return _base_st.expander(label, *args, **kwargs)
+        _inject_mobile_filter_styles()
+        return _st.expander(label, *args, **kwargs)
 
     def button(self, label, *args, **kwargs):
-        return _base_st.button(label, *args, **kwargs)
+        return _st.button(label, *args, **kwargs)
 
 
 st = MobileFilterProxy()
