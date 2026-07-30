@@ -45,6 +45,7 @@ MA_COLORS = [
 ]
 
 INTERACTIVE_CHART_DEFAULT_MAS = [50, 200]
+INTERACTIVE_CHART_INITIAL_HISTORY_YEARS = 2
 
 _CURSOR_ALERT_COMPONENT = components.declare_component(
     "cursor_alert_chart",
@@ -231,6 +232,11 @@ def create_stock_chart(
         window_end_date,
     )
     out_file = output_dir / f"{json_path.stem}_{fingerprint}.png"
+    try:
+        if out_file.exists() and out_file.stat().st_size >= 10_000:
+            return str(out_file)
+    except OSError:
+        pass
 
     fig = Figure(figsize=(11, 6), facecolor="#f8fafc")
     ax = fig.subplots()
@@ -506,11 +512,21 @@ def interactive_chart_payload(
             for row in chart_df.itertuples()
         ]
 
-    oldest_available = earliest_stock_date(json_path)
-    has_earlier_history = bool(
-        oldest_available is not None
-        and pd.Timestamp(oldest_available) < pd.Timestamp(chart_df["Date"].iloc[0])
-    )
+    if json_path.is_file():
+        oldest_available = earliest_stock_date(json_path)
+        has_earlier_history = bool(
+            oldest_available is not None
+            and pd.Timestamp(oldest_available)
+            < pd.Timestamp(chart_df["Date"].iloc[0])
+        )
+    else:
+        # R2 paths are virtual. Avoid opening the oldest aggregate partition
+        # merely to discover a boundary; ten years is the remote retention cap.
+        oldest_available = pd.Timestamp(df["Date"].iloc[0]).normalize()
+        has_earlier_history = bool(
+            history_years is not None
+            and int(history_years) < 10
+        )
     return {
         "candles": candles,
         "movingAverages": moving_averages,
@@ -567,12 +583,20 @@ def has_positive_current_pe(current_pe):
         return False
 
 
+def _datetime_ns(values):
+    """Return timezone-naive nanosecond timestamps for strict pandas merges."""
+    converted = pd.Series(
+        pd.to_datetime(values, errors="coerce", utc=True),
+        copy=False,
+    )
+    return converted.dt.tz_localize(None).astype("datetime64[ns]")
+
+
 def _attach_monthly_prices(json_path, valuation_rows):
     if not valuation_rows:
         return valuation_rows
-    valuation_dates = pd.to_datetime(
-        [row.get("time") for row in valuation_rows],
-        errors="coerce",
+    valuation_dates = _datetime_ns(
+        [row.get("time") for row in valuation_rows]
     )
     valid_dates = valuation_dates[valuation_dates.notna()]
     if valid_dates.empty:
@@ -589,7 +613,7 @@ def _attach_monthly_prices(json_path, valuation_rows):
         return valuation_rows
 
     prices = price_df[["Date", "Close"]].copy()
-    prices["Date"] = pd.to_datetime(prices["Date"], errors="coerce")
+    prices["Date"] = _datetime_ns(prices["Date"]).to_numpy()
     prices["Close"] = pd.to_numeric(prices["Close"], errors="coerce")
     prices = prices.dropna(subset=["Date", "Close"]).sort_values("Date")
     if prices.empty:
@@ -2504,7 +2528,12 @@ def interactive_stock_chart_html(
             }});
           }}
           let historyRequestPending = false;
-          function requestOlderHistory(loadAll) {{
+          function requestOlderHistory(
+            loadAll,
+            targetYears=null,
+            requestedRange="",
+            expandView=false
+          ) {{
             if (historyRequestPending || !payload.hasEarlierHistory) return false;
             historyRequestPending = true;
             const currentYears = Number(payload.historyYears) || {SCREENING_HISTORY_YEARS};
@@ -2512,8 +2541,12 @@ def interactive_stock_chart_html(
             postChartMessage({{
               source: "nse-interactive-chart",
               action: "load-history",
-              targetYears: loadAll ? 10 : Math.min(10, currentYears + 2),
+              targetYears: loadAll
+                ? 10
+                : Math.min(10, Number(targetYears) || currentYears + 2),
               showAll: Boolean(loadAll),
+              requestedRange: String(requestedRange || ""),
+              expandView: Boolean(expandView),
               visibleFrom: visibleRange ? formatTimeKey(visibleRange.from) : "",
               visibleTo: visibleRange ? formatTimeKey(visibleRange.to) : ""
             }});
@@ -3263,8 +3296,21 @@ def interactive_stock_chart_html(
               return;
             }}
             const total = payload.candles.length;
+            const requestedBars = Number(count);
+            const needsMoreHistory = (
+              requestedBars > total
+              && total < requestedBars * 0.9
+            );
+            if (
+              needsMoreHistory
+              && requestOlderHistory(
+                false,
+                10,
+                String(count)
+              )
+            ) return;
             chart.timeScale().setVisibleLogicalRange({{
-              from: Math.max(0, total - Number(count)),
+              from: Math.max(0, total - requestedBars),
               to: total + 4,
             }});
           }}
@@ -3278,7 +3324,7 @@ def interactive_stock_chart_html(
 
           chart.timeScale().subscribeVisibleLogicalRangeChange(function(range) {{
             if (!range || Number(range.from) > 12 || !payload.hasEarlierHistory) return;
-            requestOlderHistory(false);
+            requestOlderHistory(false, 10, "", true);
           }});
 
           const resizeObserver = new ResizeObserver(function(entries) {{
@@ -3337,7 +3383,10 @@ def render_interactive_stock_chart(
     visible_range_key = f"{history_key}_visible_range"
     range_override_key = f"{history_key}_range_override"
     history_years = int(
-        st.session_state.get(history_key, SCREENING_HISTORY_YEARS)
+        st.session_state.get(
+            history_key,
+            INTERACTIVE_CHART_INITIAL_HISTORY_YEARS,
+        )
     )
     restore_visible_range = st.session_state.pop(visible_range_key, None)
     effective_initial_range = st.session_state.pop(
@@ -3391,12 +3440,37 @@ def render_interactive_stock_chart(
             target_years = min(10, history_years + 2)
         if target_years > history_years:
             st.session_state[history_key] = target_years
+            st.session_state["_fast_workspace_navigation"] = True
             if alert_event.get("showAll"):
                 st.session_state[range_override_key] = "all"
+            elif str(alert_event.get("requestedRange") or "") in {
+                "126",
+                "252",
+                "756",
+            }:
+                st.session_state[range_override_key] = str(
+                    alert_event["requestedRange"]
+                )
             else:
                 visible_from = str(alert_event.get("visibleFrom") or "")
                 visible_to = str(alert_event.get("visibleTo") or "")
                 if visible_from and visible_to:
+                    if alert_event.get("expandView"):
+                        try:
+                            added_years = min(
+                                2,
+                                max(
+                                    1,
+                                    target_years - history_years,
+                                ),
+                            )
+                            visible_from = (
+                                pd.Timestamp(visible_from)
+                                - pd.DateOffset(years=added_years)
+                                + pd.Timedelta(days=45)
+                            ).strftime("%Y-%m-%d")
+                        except (TypeError, ValueError):
+                            pass
                     st.session_state[visible_range_key] = {
                         "from": visible_from,
                         "to": visible_to,
@@ -3441,6 +3515,7 @@ def render_interactive_stock_chart(
         if created:
             st.session_state.pop("_cached_price_alerts", None)
             st.session_state.pop("_cached_price_alerts_at", None)
+            st.session_state["_fast_workspace_navigation"] = True
             st.rerun()
     except (TypeError, ValueError, OSError, RuntimeError) as exc:
         st.toast(f"Could not create alert: {exc}", icon="⚠️")

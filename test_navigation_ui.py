@@ -77,6 +77,25 @@ class NavigationUiTests(unittest.TestCase):
         self.assertIn("activate_chart_workspace(", self.app_source)
         self.assertIn("navigation_callback=handle_chart_navigation", self.app_source)
 
+    def test_chart_navigation_uses_cached_fundamentals_and_cached_startup(self):
+        self.assertNotIn("get_company_fundamentals(", self.app_source)
+        self.assertIn(
+            "get_cached_company_growth_metrics(",
+            self.app_source,
+        )
+        self.assertIn(
+            "get_cached_company_valuation_medians(",
+            self.app_source,
+        )
+        self.assertIn(
+            'st.session_state["_fast_workspace_navigation"] = True',
+            self.app_source,
+        )
+        self.assertIn(
+            "(fast_favorite_selection or fast_workspace_navigation)",
+            self.app_source,
+        )
+
     def test_navigation_has_phone_and_landscape_layouts(self):
         self.assertIn("@media (max-width: 768px)", self.app_source)
         self.assertIn(

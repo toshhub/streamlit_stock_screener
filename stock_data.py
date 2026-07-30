@@ -277,6 +277,18 @@ def load_stock_dataframe(path, start=None, end=None, columns=None):
 
 
 def latest_stock_date(path):
+    store, market = _r2_store_for_path(path)
+    if store is not None:
+        try:
+            manifest = store.fetch_manifest()
+            latest = (
+                ((manifest.get("markets") or {}).get(market, {}))
+                .get("latest_date")
+            )
+            if latest:
+                return PandasTimestamp(latest).normalize()
+        except Exception:
+            pass
     row = _edge_stock_row(path, last=True)
     if row is None or pd.isna(row.get("Date")):
         return None

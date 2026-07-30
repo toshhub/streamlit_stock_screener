@@ -91,6 +91,18 @@ class LiveScreenerPipelineTests(unittest.TestCase):
             ),
         )
 
+    def test_run_uses_fragment_safe_cached_market_universe(self):
+        run_section = self.source[
+            self.source.index("# ===== RUN SCREENER LOGIC ====="):
+            self.source.index("with tab2:")
+        ]
+        self.assertIn(
+            "selected_symbols = list(available_symbols_for_market(current_market))",
+            run_section,
+        )
+        self.assertNotIn("download_limit", run_section)
+        self.assertNotIn("load_top_symbols(", run_section)
+
     def test_results_are_hidden_and_do_not_force_reruns_while_screening(self):
         results_section = self.source[
             self.source.index("# TAB 4: RESULTS"):

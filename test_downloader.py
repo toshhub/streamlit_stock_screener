@@ -66,6 +66,24 @@ class IncrementalDownloaderTests(unittest.TestCase):
 
         self.assertEqual([path.stem for path in files], ["CCC", "AAA"])
 
+    def test_stock_file_mapping_discovers_available_symbols_once(self):
+        directory = Path("virtual/daily")
+        available = [
+            directory / "AAA.json",
+            directory / "BBB.json",
+        ]
+        with patch(
+            "downloader.list_symbol_paths",
+            return_value=available,
+        ) as list_paths:
+            files = stock_files_for_symbols(
+                directory,
+                ["BBB", "MISSING", "AAA"],
+            )
+
+        list_paths.assert_called_once_with(directory, include_index=False)
+        self.assertEqual([path.stem for path in files], ["BBB", "AAA"])
+
     def test_background_download_continues_without_browser_callback(self):
         with DOWNLOAD_JOBS_LOCK:
             DOWNLOAD_JOBS.clear()

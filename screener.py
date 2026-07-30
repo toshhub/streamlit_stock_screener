@@ -6,6 +6,7 @@ import urllib.parse
 import urllib.request
 from copy import deepcopy
 from functools import lru_cache
+from pathlib import Path
 
 import pandas as pd
 from stock_data import (
@@ -521,6 +522,40 @@ def load_price_dataframe(
     if "Open" in df.columns:
         df["Open"] = pd.to_numeric(df["Open"], errors="coerce")
     return df.dropna(subset=["Close"]).reset_index(drop=True)
+
+
+def load_price_dataframes_bulk(paths, market, filter_set):
+    """Load an R2-backed screening universe with one read per partition.
+
+    ``None`` means the caller should use the normal per-file loader, which
+    preserves local JSON and offline fallback behavior.
+    """
+    paths = list(paths or [])
+    if not paths or any(Path(path).exists() for path in paths):
+        return None
+    try:
+        from r2_stock_data import get_r2_store, r2_configured
+
+        if not r2_configured():
+            return None
+        symbols = [symbol_from_path(path).upper() for path in paths]
+        frame = get_r2_store().load_market(
+            normalize_market(market).lower(),
+            start=screening_history_start(filter_set),
+            symbols=symbols,
+            columns=["Symbol", "Date", "Open", "High", "Low", "Close", "Volume"],
+        )
+    except Exception:
+        return None
+
+    if frame.empty or "Symbol" not in frame.columns:
+        return {}
+    frame = frame.copy()
+    frame["Symbol"] = frame["Symbol"].astype(str).str.strip().str.upper()
+    return {
+        symbol: rows.drop(columns=["Symbol"]).sort_values("Date").reset_index(drop=True)
+        for symbol, rows in frame.groupby("Symbol", sort=False)
+    }
 
 
 def screen_dataframe(

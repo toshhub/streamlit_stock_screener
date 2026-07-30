@@ -17,6 +17,29 @@ from stock_data import (
 
 
 class StockJsonStorageTests(unittest.TestCase):
+    def test_r2_latest_date_uses_manifest_without_loading_candles(self):
+        class FakeStore:
+            def fetch_manifest(self):
+                return {
+                    "markets": {
+                        "india": {"latest_date": "2026-07-29"},
+                    }
+                }
+
+        with (
+            patch(
+                "stock_data._r2_store_for_path",
+                return_value=(FakeStore(), "india"),
+            ),
+            patch(
+                "stock_data._edge_stock_row",
+                side_effect=AssertionError("candle data should not be loaded"),
+            ),
+        ):
+            latest = latest_stock_date("data/india/daily/TEST.json")
+
+        self.assertEqual(latest, pd.Timestamp("2026-07-29"))
+
     def test_symbol_path_is_one_json_file_per_stock(self):
         self.assertEqual(
             symbol_path(Path("data/india/daily"), "reliance"),

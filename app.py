@@ -64,7 +64,9 @@ from downloader import (
     timeframe_config,
 )
 from fundamentals import (
-    get_company_fundamentals,
+    get_cached_company_growth_metrics,
+    get_cached_company_valuation_medians,
+    prefetch_company_fundamentals,
 )
 from market_snapshots import (
     hydrate_result_valuations,
@@ -87,6 +89,7 @@ from screener import (
     custom_filter_expressions,
     filter_set_requires_pe,
     load_price_dataframe,
+    load_price_dataframes_bulk,
     merge_legacy_expression_filters,
     normalize_filter_set,
     price_near_ma_periods,
@@ -145,11 +148,15 @@ fast_favorite_selection = st.session_state.pop(
     "_fast_favorite_selection",
     False,
 )
+fast_workspace_navigation = st.session_state.pop(
+    "_fast_workspace_navigation",
+    False,
+)
 
 cloud_startup_error = ""
 try:
     if (
-        fast_favorite_selection
+        (fast_favorite_selection or fast_workspace_navigation)
         and "_cached_settings" in st.session_state
         and "_cached_personal_filter_sets" in st.session_state
     ):
@@ -523,7 +530,9 @@ def run_interactive_chart_view():
         market,
         trade_overlay,
     )
-    growth_metrics, valuation_medians = get_company_fundamentals(symbol, market)
+    growth_metrics = get_cached_company_growth_metrics(symbol, market)
+    valuation_medians = get_cached_company_valuation_medians(symbol, market)
+    prefetch_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
         .stMainBlockContainer {
@@ -1722,9 +1731,11 @@ def screen_stock_file_worker(
     pattern_expressions,
     pe_cache,
     create_charts=False,
+    price_df=None,
 ):
     del create_charts
-    price_df = load_price_dataframe(stock_file, filter_set=filter_set)
+    if price_df is None:
+        price_df = load_price_dataframe(stock_file, filter_set=filter_set)
     needs_pe = filter_set_requires_pe(filter_set, pattern_expressions)
     cached_pe = pe_cache.get(
         f"{normalize_market(market)}:{stock_file.stem}",
@@ -1798,6 +1809,19 @@ def run_live_screener_job(
         pe_cache.setdefault(f"{normalize_market(market)}:{symbol}", pe_ratio)
 
     try:
+        job_queue.put({
+            "type": "phase",
+            "phase": "loading",
+        })
+        bulk_price_frames = load_price_dataframes_bulk(
+            stock_files,
+            market,
+            filter_set,
+        )
+        job_queue.put({
+            "type": "phase",
+            "phase": "screening",
+        })
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
@@ -1812,6 +1836,11 @@ def run_live_screener_job(
                     pattern_expressions,
                     pe_cache,
                     create_charts,
+                    (
+                        bulk_price_frames.get(stock_file.stem, pd.DataFrame())
+                        if bulk_price_frames is not None
+                        else None
+                    ),
                 )
                 for index, stock_file in enumerate(stock_files, start=1)
             ]
@@ -1951,7 +1980,7 @@ def start_live_screener_job(
         "max_workers": max_workers,
         "running": True,
         "error": "",
-        "phase": "screening",
+        "phase": "loading",
         "started_at": datetime.now().strftime("%H:%M:%S"),
         "results_tab_opened": False,
     }
@@ -2035,7 +2064,12 @@ def render_active_screener_progress():
     done = int(job.get("done", 0) or 0)
     matches = int(job.get("matches", 0) or 0)
     if job.get("running"):
-        if job.get("phase") == "charts":
+        if job.get("phase") == "loading":
+            st.progress(
+                0.0,
+                text=f"Loading price history for {total:,} stocks…",
+            )
+        elif job.get("phase") == "charts":
             charts_done = int(job.get("charts_done", 0) or 0)
             charts_total = int(job.get("charts_total", matches) or 0)
             st.progress(
@@ -2084,6 +2118,59 @@ def chart_file_needs_regeneration(chart_path):
         return not path.exists() or path.stat().st_size < 10_000
     except OSError:
         return True
+
+
+def alert_static_chart_path(symbol, market, *, generate=False):
+    """Return a reusable static hover chart for an Alerts table symbol."""
+    symbol = str(symbol or "").strip().upper()
+    market = normalize_market(market)
+    if not symbol:
+        return ""
+    cache = st.session_state.setdefault("_alert_static_chart_paths", {})
+    cache_key = f"{market}:{symbol}"
+    cached = cache.get(cache_key)
+    if not chart_file_needs_regeneration(cached):
+        return cached
+
+    alert_chart_dir = CHARTS_DIR / "alerts" / market.lower()
+    prefix = f"{symbol}_"
+    try:
+        candidates = sorted(
+            (
+                path
+                for path in alert_chart_dir.iterdir()
+                if path.is_file()
+                and path.suffix.lower() == ".png"
+                and path.name.startswith(prefix)
+                and not chart_file_needs_regeneration(path)
+            ),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError:
+        candidates = []
+    if candidates:
+        cache[cache_key] = str(candidates[0])
+        return cache[cache_key]
+    if not generate:
+        return ""
+
+    target_dir = timeframe_config("DAY", market)["target_dir"]
+    stock_file = symbol_path(target_dir, symbol)
+    if not stock_exists(stock_file):
+        return ""
+    try:
+        with CHART_CREATION_LOCK:
+            chart_path = create_stock_chart(
+                stock_file,
+                DEFAULT_FILTER_SET,
+                output_dir=alert_chart_dir,
+            )
+    except (OSError, ValueError):
+        return ""
+    if chart_path:
+        cache[cache_key] = chart_path
+    return chart_path or ""
 
 
 def repair_blank_result_charts(rows, filter_set, market, timeframe):
@@ -3474,6 +3561,7 @@ def activate_chart_workspace(request, fallback_market=MARKET_INDIA, origin_tab=3
     if not context["symbol"]:
         return False
     st.session_state["_chart_workspace_context"] = context
+    st.session_state["_fast_workspace_navigation"] = True
     st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[CHART_TAB_INDEX]
     st.session_state["_pending_main_tab_switch"] = CHART_TAB_INDEX
     return True
@@ -4290,6 +4378,7 @@ def render_screener_workspace():
             "pattern_lookback_days": pattern_lookback_days,
             "pattern_reversal_pct": pattern_reversal_pct,
             "pattern_expressions": custom_filter_expressions(filter_set),
+            "last_results_market": current_market,
         })
 
     if st.session_state.pop("_favorite_edit_login_required", False):
@@ -4368,11 +4457,7 @@ def render_screener_workspace():
                 st.stop()
 
         target_dir = timeframe_config(tf, current_market)["target_dir"]
-        selected_symbols = load_top_symbols(
-            symbols_file,
-            limit=int(download_limit),
-            market=current_market,
-        )
+        selected_symbols = list(available_symbols_for_market(current_market))
         market_cap_positions = {
             symbol: position
             for position, symbol in enumerate(selected_symbols, start=1)
@@ -4422,14 +4507,6 @@ def render_screener_workspace():
             "run_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         st.session_state["last_results_metadata"] = result_metadata
-        update_changed_settings({
-            "selected_favorite_filter_set": result_filter_name,
-            "screener_filter_set": run_filter_set,
-            "pattern_lookback_days": run_lookback_days,
-            "pattern_reversal_pct": run_reversal_pct,
-            "pattern_expressions": list(run_pattern_expressions),
-            "last_results_market": current_market,
-        })
         st.session_state["screener_job"] = start_live_screener_job(
             stock_files,
             market_cap_positions,
@@ -5105,10 +5182,15 @@ with tab5:
                 chart_market,
                 chart_workspace.get("trade_overlay"),
             )
-            chart_growth, chart_valuations = get_company_fundamentals(
+            chart_growth = get_cached_company_growth_metrics(
                 chart_symbol,
                 chart_market,
             )
+            chart_valuations = get_cached_company_valuation_medians(
+                chart_symbol,
+                chart_market,
+            )
+            prefetch_company_fundamentals(chart_symbol, chart_market)
             workspace_watchlists = None
             if app_user is not None and cloud_store is not None:
                 if "_cached_personal_watchlists" in st.session_state:
@@ -5171,11 +5253,13 @@ with tab5:
                         MAIN_TAB_LABELS[origin]
                     )
                     st.session_state["_pending_main_tab_switch"] = origin
+                    st.session_state["_fast_workspace_navigation"] = True
                     st.rerun()
                     return
                 else:
                     return
                 st.session_state["_chart_workspace_context"] = updated
+                st.session_state["_fast_workspace_navigation"] = True
                 st.rerun()
 
             def add_workspace_chart_to_watchlist(event):
@@ -5566,6 +5650,10 @@ with tab7:
 
         def alert_table_dataframe(table_alerts, *, acknowledge=False):
             table_rows = []
+            generate_static_charts = (
+                st.session_state.get("_main_workspace_tab")
+                == MAIN_TAB_LABELS[ALERTS_TAB_INDEX]
+            )
             for alert in table_alerts:
                 alert_id = str(alert.get("id", ""))
                 symbol = str(alert.get("symbol", "") or "").strip().upper()
@@ -5585,6 +5673,11 @@ with tab7:
                         "acknowledge",
                         alert_id,
                     )
+                static_chart_path = alert_static_chart_path(
+                    symbol,
+                    market,
+                    generate=generate_static_charts,
+                )
                 table_rows.append({
                     "Symbol": symbol,
                     "Alert": (
@@ -5600,6 +5693,7 @@ with tab7:
                         f"{alert_date_for_table(alert.get('triggered_candle_date'))}"
                     ),
                     "Actions": "",
+                    "ChartPath": static_chart_path,
                     "ChartSource": symbol,
                     "Interactive Market": market,
                     "Alert Date": alert.get("created_at"),

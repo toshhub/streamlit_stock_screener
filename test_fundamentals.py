@@ -1,5 +1,6 @@
 import unittest
 import urllib.error
+from threading import Event
 from unittest.mock import patch
 
 import pandas as pd
@@ -15,6 +16,7 @@ from fundamentals import (
     parse_screener_growth_html,
     parse_screener_valuation_chart_payload,
     parse_screener_valuation_history_payload,
+    prefetch_company_fundamentals,
     repair_result_fundamentals,
 )
 from market_snapshots import latest_monthly_pe_values
@@ -76,6 +78,26 @@ CURRENT_TABLE_HTML = """
 
 
 class ScreenerFundamentalsTests(unittest.TestCase):
+    def test_fundamentals_prefetch_does_not_block_the_caller(self):
+        refreshed = Event()
+
+        def refresh(*_args):
+            refreshed.set()
+            return {}, {}
+
+        with patch(
+            "fundamentals.get_company_fundamentals",
+            side_effect=refresh,
+        ):
+            started = prefetch_company_fundamentals(
+                "PREFETCH-TEST",
+                "INDIA",
+            )
+            completed = refreshed.wait(timeout=1)
+
+        self.assertTrue(started)
+        self.assertTrue(completed)
+
     class _Response:
         def __init__(self, body):
             self.body = body

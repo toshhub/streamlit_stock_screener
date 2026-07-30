@@ -42,6 +42,8 @@ _SUCCESS_TTL = timedelta(days=7)
 _EMPTY_TTL = timedelta(minutes=15)
 _RETRIABLE_HTTP_CODES = {429, 500, 502, 503, 504}
 _SOURCE_POLICY = "standalone-first-v1"
+_PREFETCH_LOCK = threading.Lock()
+_PREFETCHING = set()
 
 
 def _plain_text(fragment):
@@ -522,6 +524,29 @@ def get_company_fundamentals(symbol, market=MARKET_INDIA):
         cache[_cache_key(symbol, market)] = entry
         save_fundamentals(cache)
     return metrics, valuation_medians
+
+
+def prefetch_company_fundamentals(symbol, market=MARKET_INDIA):
+    """Refresh fundamentals in the background without delaying chart display."""
+    key = _cache_key(symbol, market)
+    with _PREFETCH_LOCK:
+        if key in _PREFETCHING:
+            return False
+        _PREFETCHING.add(key)
+
+    def refresh():
+        try:
+            get_company_fundamentals(symbol, market)
+        finally:
+            with _PREFETCH_LOCK:
+                _PREFETCHING.discard(key)
+
+    threading.Thread(
+        target=refresh,
+        name=f"fundamentals-prefetch-{key}",
+        daemon=True,
+    ).start()
+    return True
 
 
 def get_company_growth_metrics(symbol, market=MARKET_INDIA):

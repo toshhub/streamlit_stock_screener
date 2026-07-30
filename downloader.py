@@ -16,7 +16,6 @@ from stock_data import (
     latest_stock_date,
     list_symbol_paths,
     load_stock_dataframe,
-    stock_exists,
     symbol_path,
     write_stock_data,
 )
@@ -551,17 +550,21 @@ def load_top_symbols(symbols_file, limit=1000, market=MARKET_INDIA):
 
 def stock_files_for_symbols(directory, symbols):
     """Map symbols to canonical stock paths while preserving source order."""
-    if not directory or not directory.exists():
+    if not directory:
         return []
 
+    available_by_symbol = {
+        path.stem.upper(): path
+        for path in list_symbol_paths(directory, include_index=False)
+    }
     files = []
     seen = set()
     for symbol in symbols:
-        clean = str(symbol).strip()
-        if not clean or clean in seen or clean.upper() == NIFTY_DATA_SYMBOL:
+        clean = str(symbol).strip().upper()
+        if not clean or clean in seen or clean == NIFTY_DATA_SYMBOL:
             continue
-        stock_file = symbol_path(directory, clean)
-        if stock_exists(stock_file):
+        stock_file = available_by_symbol.get(clean)
+        if stock_file is not None:
             files.append(stock_file)
             seen.add(clean)
     return files

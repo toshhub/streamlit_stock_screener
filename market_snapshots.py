@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -61,13 +62,25 @@ def refresh_latest_stock_values(market_directories):
     return result
 
 
-def _existing_monthly():
-    if not MONTHLY_VALUATIONS_FILE.exists():
-        return pd.DataFrame()
+@lru_cache(maxsize=2)
+def _read_monthly_snapshot(path, mtime_ns, size):
+    del mtime_ns, size
     try:
-        return pd.read_parquet(MONTHLY_VALUATIONS_FILE)
+        return pd.read_parquet(path)
     except (OSError, ValueError):
         return pd.DataFrame()
+
+
+def _existing_monthly():
+    try:
+        stat = MONTHLY_VALUATIONS_FILE.stat()
+    except OSError:
+        return pd.DataFrame()
+    return _read_monthly_snapshot(
+        str(MONTHLY_VALUATIONS_FILE),
+        stat.st_mtime_ns,
+        stat.st_size,
+    ).copy()
 
 
 def _merge_valuation_rows(existing, new_rows):

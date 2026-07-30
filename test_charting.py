@@ -8,6 +8,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from charting import (
+    _attach_monthly_prices,
     interactive_chart_payload,
     interactive_stock_chart_html,
     normalize_interactive_ma_periods,
@@ -339,6 +340,53 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("valuation-tooltip__date", result)
         self.assertIn('event.key === "ArrowRight"', result)
         self.assertIn("requestAnimationFrame(drawValuationChart)", result)
+
+    def test_chart_initially_loads_two_years_and_expands_long_ranges(self):
+        source = Path("charting.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "INTERACTIVE_CHART_INITIAL_HISTORY_YEARS = 2",
+            source,
+        )
+        self.assertIn(
+            "total < requestedBars * 0.9",
+            source,
+        )
+        self.assertIn(
+            'requestOlderHistory(false, 10, "", true)',
+            source,
+        )
+        self.assertIn(
+            'st.session_state[range_override_key] = str(',
+            source,
+        )
+        self.assertIn(
+            "added_years = min(",
+            source,
+        )
+        self.assertIn(
+            "target_years - history_years",
+            source,
+        )
+        self.assertIn(
+            "+ pd.Timedelta(days=45)",
+            source,
+        )
+
+    def test_monthly_price_alignment_normalizes_datetime_precision(self):
+        valuation_rows = [{"time": "2026-01-02", "pe": 18.2}]
+        price_frame = pd.DataFrame({
+            "Date": pd.Series(
+                ["2026-01-02", "2026-01-03"],
+                dtype="datetime64[us]",
+            ),
+            "Close": [101.25, 102.5],
+        })
+
+        with patch("charting.load_stock_dataframe", return_value=price_frame):
+            result = _attach_monthly_prices("TEST.json", valuation_rows)
+
+        self.assertEqual(result[0]["price"], 101.25)
 
     def test_interactive_trade_overlay_adds_levels_markers_and_window(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -813,6 +861,30 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertNotIn("<th>Remove Button Key</th>", result)
         self.assertIn("alert_date=2026-07-28", result)
         self.assertIn("alert_marker_price=100", result)
+
+    def test_alert_symbol_includes_static_chart_preview(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            chart_path = Path(temp_dir) / "TEST_chart.png"
+            chart_path.write_bytes(b"static-alert-chart")
+            alert_df = pd.DataFrame([{
+                "Symbol": "TEST",
+                "Alert": "India · Cross below · Target 100 / Ref 110",
+                "Dates": "Created 28 Jul 2026 / Triggered —",
+                "Actions": "",
+                "ChartPath": str(chart_path),
+                "ChartSource": "TEST",
+                "Interactive Market": "INDIA",
+            }])
+
+            result = results_hover_table_html(
+                alert_df,
+                table_title="Active Alerts",
+                row_actions=True,
+            )
+
+        self.assertIn('class="chart-tooltip"', result)
+        self.assertIn("data:image/png;base64,", result)
+        self.assertIn("TEST chart", result)
 
     def test_alert_table_component_forwards_actions_to_streamlit(self):
         component_html = (

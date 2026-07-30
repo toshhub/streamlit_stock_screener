@@ -219,6 +219,20 @@ class AlertTabPerformanceTests(unittest.TestCase):
         app_source = Path("app.py").read_text(encoding="utf-8")
 
         self.assertIn("action_event = sortable_results_table(", app_source)
+        self.assertIn(
+            "static_chart_path = alert_static_chart_path(",
+            app_source,
+        )
+        self.assertIn("generate=generate_static_charts", app_source)
+        self.assertIn(
+            "== MAIN_TAB_LABELS[ALERTS_TAB_INDEX]",
+            app_source,
+        )
+        self.assertIn('"ChartPath": static_chart_path', app_source)
+        self.assertIn(
+            'st.session_state.setdefault("_alert_static_chart_paths", {})',
+            app_source,
+        )
         self.assertIn("run_alert_row_action(*action_map[action_key])", app_source)
         self.assertIn('st.rerun()', app_source)
         self.assertNotIn('key="alert_action_bridge"', app_source)

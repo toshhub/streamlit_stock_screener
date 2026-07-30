@@ -7,7 +7,11 @@ from unittest.mock import patch
 import pandas as pd
 
 from charting import interactive_chart_payload, interactive_stock_chart_html
-from screener import load_price_dataframe, screen_json_file
+from screener import (
+    load_price_dataframe,
+    load_price_dataframes_bulk,
+    screen_json_file,
+)
 
 
 def candle(date, close):
@@ -31,6 +35,44 @@ def write_candles(path, rows):
 
 
 class HistoryWindowTests(unittest.TestCase):
+    def test_r2_screening_universe_is_loaded_in_one_bulk_read(self):
+        price_frame = pd.DataFrame([
+            {"Symbol": "AAA", **candle("2026-07-27", 101.0)},
+            {"Symbol": "BBB", **candle("2026-07-27", 202.0)},
+        ])
+
+        class FakeStore:
+            def __init__(self):
+                self.calls = []
+
+            def load_market(self, market, **kwargs):
+                self.calls.append((market, kwargs))
+                return price_frame
+
+        store = FakeStore()
+        with (
+            patch("r2_stock_data.r2_configured", return_value=True),
+            patch("r2_stock_data.get_r2_store", return_value=store),
+        ):
+            frames = load_price_dataframes_bulk(
+                [Path("virtual/AAA.json"), Path("virtual/BBB.json")],
+                "INDIA",
+                [{
+                    "id": 1,
+                    "type": "price_near_long",
+                    "params": {"long_ma": 100, "threshold_pct": 5.0},
+                }],
+            )
+
+        self.assertEqual(len(store.calls), 1)
+        self.assertEqual(store.calls[0][0], "india")
+        self.assertEqual(
+            store.calls[0][1]["symbols"],
+            ["AAA", "BBB"],
+        )
+        self.assertEqual(set(frames), {"AAA", "BBB"})
+        self.assertEqual(frames["AAA"].iloc[0]["Close"], 101.0)
+
     def test_screener_loads_only_five_year_window_from_current_date(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             stock_file = Path(temp_dir) / "TEST.json"
