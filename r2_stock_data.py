@@ -16,13 +16,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+from config import STOCK_CACHE_DIR
 
 
 CANDLE_COLUMNS = (
@@ -36,6 +38,8 @@ CANDLE_COLUMNS = (
     "Volume",
 )
 MARKETS = ("india", "us")
+DEFAULT_R2_CACHE_DIR = STOCK_CACHE_DIR / "r2"
+DEFAULT_MANIFEST_REFRESH_SECONDS = 60.0
 
 
 class R2ConfigurationError(RuntimeError):
@@ -109,7 +113,8 @@ class R2Settings:
     access_key_id: str
     secret_access_key: str
     prefix: str = "stock-data"
-    cache_dir: Path = Path(tempfile.gettempdir()) / "streamlit-stock-data-cache"
+    cache_dir: Path = DEFAULT_R2_CACHE_DIR
+    manifest_refresh_seconds: float = DEFAULT_MANIFEST_REFRESH_SECONDS
 
     @classmethod
     def from_mapping(cls, values=None):
@@ -123,6 +128,15 @@ class R2Settings:
         if not endpoint and account_id:
             endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
         cache_value = setting("cache_dir", "R2_CACHE_DIR")
+        refresh_value = setting(
+            "manifest_refresh_seconds",
+            "R2_MANIFEST_REFRESH_SECONDS",
+            str(DEFAULT_MANIFEST_REFRESH_SECONDS),
+        )
+        try:
+            manifest_refresh_seconds = max(0.0, float(refresh_value))
+        except ValueError:
+            manifest_refresh_seconds = DEFAULT_MANIFEST_REFRESH_SECONDS
         return cls(
             bucket=setting("bucket", "R2_BUCKET_NAME"),
             endpoint_url=endpoint,
@@ -135,8 +149,9 @@ class R2Settings:
             cache_dir=(
                 Path(cache_value).expanduser()
                 if cache_value
-                else Path(tempfile.gettempdir()) / "streamlit-stock-data-cache"
+                else DEFAULT_R2_CACHE_DIR
             ),
+            manifest_refresh_seconds=manifest_refresh_seconds,
         )
 
     @property
@@ -158,6 +173,7 @@ class R2StockDataStore:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._client = client
         self._manifest = None
+        self._manifest_fetched_at = 0.0
         self._lock = threading.RLock()
 
     @property
@@ -222,7 +238,12 @@ class R2StockDataStore:
 
     def fetch_manifest(self, *, force=False):
         with self._lock:
-            if self._manifest is not None and not force:
+            manifest_age = time.monotonic() - self._manifest_fetched_at
+            if (
+                self._manifest is not None
+                and not force
+                and manifest_age < self.settings.manifest_refresh_seconds
+            ):
                 return self._manifest
             try:
                 payload = self._object_bytes(self.manifest_key)
@@ -246,6 +267,7 @@ class R2StockDataStore:
             )
             temporary.replace(self.manifest_cache_path)
             self._manifest = manifest
+            self._manifest_fetched_at = time.monotonic()
             return manifest
 
     @staticmethod

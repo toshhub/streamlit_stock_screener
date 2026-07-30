@@ -121,9 +121,17 @@ from user_auth import current_user, render_workspace_account_controls
 st.set_page_config(layout="wide", page_title="NSE Stock Screener", page_icon="📈")
 
 try:
-    configure_r2(dict(st.secrets.get("r2", {})), force=True)
+    configure_r2(dict(st.secrets.get("r2", {})))
 except Exception:
-    configure_r2(force=True)
+    configure_r2()
+
+try:
+    if r2_configured():
+        get_r2_store().fetch_manifest()
+except R2DataError:
+    # Data loaders can continue from the last server-cached manifest while R2
+    # is temporarily unavailable.
+    pass
 
 _APP_CHART_EVENT_COMPONENT = components.declare_component(
     "app_chart_events",
@@ -3680,8 +3688,8 @@ with tab1:
             '<div class="data-panel-heading tone-violet"><span>☁️</span>'
             'Cloudflare R2 Sync</div>'
             '<p class="data-panel-subtitle">R2 is the permanent source of '
-            'truth. The app downloads only required yearly and monthly files '
-            'into its temporary cache.</p>',
+            'truth. The app automatically refreshes the manifest and downloads '
+            'only changed yearly and monthly files into its server cache.</p>',
             unsafe_allow_html=True,
         )
         if not r2_configured():

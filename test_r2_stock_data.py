@@ -4,9 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
+from config import STOCK_CACHE_DIR
 from r2_stock_data import R2Settings, R2StockDataStore
 
 
@@ -107,6 +109,45 @@ class R2StockDataTests(unittest.TestCase):
             cache_dir=Path(cache_dir),
         )
         return R2StockDataStore(settings, client=client), client
+
+    def test_default_cache_is_inside_application_data_directory(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "R2_CACHE_DIR": "",
+                "R2_MANIFEST_REFRESH_SECONDS": "",
+            },
+            clear=False,
+        ):
+            settings = R2Settings.from_mapping()
+
+        self.assertEqual(settings.cache_dir, STOCK_CACHE_DIR / "r2")
+        self.assertEqual(settings.manifest_refresh_seconds, 60.0)
+
+    def test_manifest_refresh_detects_remote_version_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store, client = self._store(temp_dir)
+            store.settings = R2Settings(
+                bucket=store.settings.bucket,
+                endpoint_url=store.settings.endpoint_url,
+                access_key_id=store.settings.access_key_id,
+                secret_access_key=store.settings.secret_access_key,
+                cache_dir=store.settings.cache_dir,
+                manifest_refresh_seconds=0,
+            )
+            first = store.fetch_manifest()
+            changed = dict(first)
+            changed["version"] = "test-v2"
+            client.objects["stock-data/manifest.json"] = json.dumps(changed).encode()
+            second = store.fetch_manifest()
+
+        self.assertEqual(first["version"], "test-v1")
+        self.assertEqual(second["version"], "test-v2")
+        manifest_calls = [
+            key for _, key in client.get_calls
+            if key == "stock-data/manifest.json"
+        ]
+        self.assertEqual(len(manifest_calls), 2)
 
     def test_loads_only_required_periods_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
