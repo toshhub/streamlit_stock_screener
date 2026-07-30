@@ -9,11 +9,13 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import tomllib
 from pathlib import Path
 
 import pandas as pd
 
 from r2_stock_data import (
+    configure_r2,
     dataframe_json_bytes,
     get_r2_store,
     manifest_entry,
@@ -83,6 +85,11 @@ def migrate(source_root, *, completed_through, current_year):
                 payload,
                 rows=len(frame),
             )
+            print(
+                f"Uploaded {market}/yearly/{year}.parquet "
+                f"({len(frame):,} rows)",
+                flush=True,
+            )
         latest_date = None
         for month in range(1, 13):
             frame = _aggregate_period(
@@ -106,6 +113,11 @@ def migrate(source_root, *, completed_through, current_year):
                 payload,
                 rows=len(frame),
             )
+            print(
+                f"Uploaded {market}/current/{period}.json "
+                f"({len(frame):,} rows)",
+                flush=True,
+            )
             latest_date = frame["Date"].max()
         market_manifest["symbols"] = sorted(all_symbols)
         market_manifest["symbol_count"] = len(all_symbols)
@@ -122,7 +134,16 @@ def main():
     parser.add_argument("--source-root", default="data")
     parser.add_argument("--completed-through", type=int, default=2025)
     parser.add_argument("--current-year", type=int, default=2026)
+    parser.add_argument(
+        "--secrets-file",
+        help="Optional TOML file containing an [r2] section.",
+    )
     args = parser.parse_args()
+    if args.secrets_file:
+        secrets = tomllib.loads(
+            Path(args.secrets_file).read_text(encoding="utf-8")
+        )
+        configure_r2(secrets.get("r2", {}), force=True)
     manifest = migrate(
         args.source_root,
         completed_through=args.completed_through,
