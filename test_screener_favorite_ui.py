@@ -24,6 +24,10 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
 
     def test_custom_save_and_personal_strategy_remove_are_inline(self):
         self.assertIn(
+            "from mobile_filter_proxy import st",
+            self.app_source,
+        )
+        self.assertIn(
             'with st.popover(\n                    "Save Filters"',
             self.app_source,
         )
@@ -35,6 +39,10 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
         )
         self.assertIn(
             "on_remove=request_saved_strategy_removal",
+            self.app_source,
+        )
+        self.assertNotIn(
+            '"removable_options" in inspect.signature(st.selectbox).parameters',
             self.app_source,
         )
         self.assertIn('@st.dialog("Remove saved strategy?")', self.app_source)

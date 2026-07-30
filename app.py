@@ -16,8 +16,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
-import streamlit as st
 import streamlit.components.v1 as components
+from mobile_filter_proxy import st
 
 import charting as charting_module
 from chart_context import (
@@ -3764,26 +3764,16 @@ def render_screener_workspace():
                 selected = st.session_state["_favorite_select_widget"]
                 apply_filter_selection_to_state(selected)
 
-            if "removable_options" in inspect.signature(st.selectbox).parameters:
-                selected_fav = st.selectbox(
-                    "⭐ Filter Set To Run",
-                    favorite_options,
-                    key="_favorite_select_widget",
-                    on_change=on_favorite_filter_selected,
-                    format_func=favorite_option_label,
-                    removable_options=personal_favorite_keys.keys(),
-                    on_remove=request_saved_strategy_removal,
-                    help="Select a saved favorite filter set to load all of its filters.",
-                )
-            else:
-                selected_fav = st.selectbox(
-                    "⭐ Filter Set To Run",
-                    favorite_options,
-                    key="_favorite_select_widget",
-                    on_change=on_favorite_filter_selected,
-                    format_func=favorite_option_label,
-                    help="Select a saved favorite filter set to load all of its filters.",
-                )
+            selected_fav = st.selectbox(
+                "⭐ Filter Set To Run",
+                favorite_options,
+                key="_favorite_select_widget",
+                on_change=on_favorite_filter_selected,
+                format_func=favorite_option_label,
+                removable_options=personal_favorite_keys.keys(),
+                on_remove=request_saved_strategy_removal,
+                help="Select a saved favorite filter set to load all of its filters.",
+            )
         else:
             st.info("No saved favorite filters yet. Configure filters below and save them.")
 
