@@ -63,6 +63,17 @@ def cloud_storage_from_config(st):
     return SupabaseCloudStorage(url, service_key)
 
 
+def cloud_storage_from_environment():
+    """Build the server-only cloud store used by headless cron jobs."""
+    url = str(os.environ.get("SUPABASE_URL", "") or "").strip()
+    service_key = str(
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or ""
+    ).strip()
+    if not url or not service_key:
+        return None
+    return SupabaseCloudStorage(url, service_key)
+
+
 class SupabaseCloudStorage:
     def __init__(self, url, service_role_key):
         self.url = str(url).rstrip("/")
@@ -413,6 +424,22 @@ class SupabaseCloudStorage:
             )
         except Exception as exc:
             raise CloudStorageError(f"Could not load active cloud alerts: {exc}") from exc
+        return [dict(row) for row in (response.data or [])]
+
+    def load_active_alerts_for_market(self, market):
+        """Load a market's active alerts in one cron-friendly query."""
+        try:
+            response = (
+                self.client.table("user_alerts")
+                .select("*")
+                .eq("status", "Active")
+                .eq("market", str(market).strip().upper())
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(
+                f"Could not load active cloud alerts for market: {exc}"
+            ) from exc
         return [dict(row) for row in (response.data or [])]
 
     def update_alerts(self, alerts):

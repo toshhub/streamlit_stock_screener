@@ -539,7 +539,7 @@ def load_price_dataframes_bulk(paths, market, filter_set):
         if not r2_configured():
             return None
         symbols = [symbol_from_path(path).upper() for path in paths]
-        frame = get_r2_store().load_market(
+        frame = get_r2_store().load_cached_market(
             normalize_market(market).lower(),
             start=screening_history_start(filter_set),
             symbols=symbols,

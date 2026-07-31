@@ -69,7 +69,7 @@ def stock_exists(path):
     if store is None:
         return False
     try:
-        return path.stem.upper() in set(store.list_symbols(market))
+        return store.cached_symbol_exists(market, path.stem)
     except Exception:
         return False
 
@@ -78,7 +78,7 @@ def list_symbol_paths(directory, include_index=True):
     directory = Path(directory)
     store, market = _r2_store_for_path(directory)
     if store is not None:
-        symbols = store.list_symbols(market)
+        symbols = store.list_cached_symbols(market)
         if not include_index:
             symbols = [
                 symbol for symbol in symbols if symbol.upper() != "NIFTY"
@@ -184,24 +184,8 @@ def _edge_stock_row(path, *, last):
             return row
     store, market = _r2_store_for_path(path)
     if store is not None:
-        entries = store.market_entries(market)
-        periods = sorted(entries["yearly"]) + sorted(entries["current"])
-        if not periods:
-            return None
-        period = periods[-1 if last else 0]
-        if len(period) == 4:
-            start = f"{period}-01-01"
-            end = f"{period}-12-31"
-        else:
-            start = f"{period}-01"
-            end = (
-                PandasTimestamp(start) + pd.offsets.MonthEnd(1)
-            ).strftime("%Y-%m-%d")
-        frame = store.load_symbol(
-            market,
-            path.stem,
-            start=start,
-            end=end,
+        frame = store.load_cached_symbol(
+            market, path.stem, columns=["Date", "Close"]
         )
         if frame.empty:
             return None
@@ -252,7 +236,7 @@ def load_stock_dataframe(path, start=None, end=None, columns=None):
     else:
         store, market = _r2_store_for_path(path)
         frame = (
-            store.load_symbol(
+            store.load_cached_symbol(
                 market,
                 path.stem,
                 start=start,
@@ -280,15 +264,16 @@ def latest_stock_date(path):
     store, market = _r2_store_for_path(path)
     if store is not None:
         try:
-            manifest = store.fetch_manifest()
             latest = (
-                ((manifest.get("markets") or {}).get(market, {}))
-                .get("latest_date")
+                store.local_cache_status(market).get("latest_date")
+                if hasattr(store, "local_cache_status")
+                else None
             )
             if latest:
                 return PandasTimestamp(latest).normalize()
         except Exception:
             pass
+        return None
     row = _edge_stock_row(path, last=True)
     if row is None or pd.isna(row.get("Date")):
         return None

@@ -125,17 +125,14 @@ try:
 except Exception:
     configure_r2()
 
-try:
-    if r2_configured():
-        get_r2_store().fetch_manifest()
-except R2DataError:
-    # Data loaders can continue from the last server-cached manifest while R2
-    # is temporarily unavailable.
-    pass
-
 _APP_CHART_EVENT_COMPONENT = components.declare_component(
     "app_chart_events",
     path=str(Path(__file__).parent / "alert_table_component"),
+)
+
+_CACHE_PROGRESS_COMPONENT = components.declare_component(
+    "cache_progress_tick",
+    path=str(Path(__file__).parent / "cache_progress_component"),
 )
 
 shared_settings = load_settings()
@@ -507,6 +504,102 @@ if str(query_param_value("scheduled_download", "") or "").lower() in {"1", "true
     run_scheduled_download()
 
 
+# A regular app open may check the small R2 manifest once per server process.
+# Interactive-chart requests are explicitly excluded, and chart/screener data
+# loaders never invoke this path. If the active revision already matches, the
+# background worker performs no candle downloads or materialization.
+is_interactive_chart_request = bool(
+    str(query_param_value("interactive_chart", "") or "").strip()
+)
+if r2_configured() and not is_interactive_chart_request:
+    get_r2_store().request_startup_cache_sync_once(
+        normalize_market(settings.get("market", MARKET_INDIA)).lower()
+    )
+
+
+def compact_duration(seconds):
+    try:
+        seconds = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return "estimating..."
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remaining_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes:02d}m"
+
+
+@st.fragment(run_every=1)
+def render_server_cache_progress(market):
+    if not r2_configured():
+        return
+    cache_status = get_r2_store().local_cache_status(market.lower())
+    progress = cache_status.get("progress") or {}
+    if cache_status.get("syncing"):
+        # A component value change inside a fragment reruns only this progress
+        # region. This keeps progress live even when passive run_every polling
+        # is throttled or stalls inside a tab on a deployed Streamlit server.
+        _CACHE_PROGRESS_COMPONENT(
+            running=True,
+            intervalMs=750,
+            default=0,
+            key=f"cache_progress_tick_{market.lower()}",
+        )
+        percent = min(1.0, max(0.0, float(progress.get("percent", 0) or 0)))
+        message = str(progress.get("message") or "Preparing server cache")
+        eta = compact_duration(progress.get("eta_seconds"))
+        unit = progress.get("unit")
+        completed = int(progress.get("completed", 0) or 0)
+        total = int(progress.get("total", 0) or 0)
+        if unit == "bytes" and total:
+            detail = f"{completed / 1048576:.1f}/{total / 1048576:.1f} MiB"
+        elif unit == "rows" and total:
+            detail = f"{completed:,}/{total:,} rows"
+        elif unit == "files" and total:
+            detail = f"{completed:,}/{total:,} partitions"
+        elif total:
+            detail = f"{completed:,}/{total:,} symbols"
+        else:
+            detail = "starting"
+        st.progress(
+            percent,
+            text=(
+                f"{message} · {detail} · {percent * 100:.0f}% · "
+                f"estimated {eta} remaining"
+            ),
+        )
+        st.caption(
+            "You can continue using the app. Existing cached data stays active "
+            "until this refresh completes."
+        )
+    elif cache_status.get("ready"):
+        st.progress(1.0, text="Server cache ready · 100%")
+        st.success(
+            "Server cache ready: "
+            f"{int(cache_status.get('symbols', 0)):,} symbols through "
+            f"{cache_status.get('latest_date', 'unknown date')}."
+        )
+        st.caption(
+            "Built "
+            f"{cache_status.get('built_at', 'at an unknown time')} · "
+            "10-year history · manifest "
+            f"{cache_status.get('manifest_version') or 'unversioned'}"
+        )
+    else:
+        st.progress(0.0, text="Server cache preparation pending · 0%")
+        st.warning(
+            "The first server-cache build is pending. The first chart or "
+            "screening request will wait for it to finish."
+        )
+    if cache_status.get("error"):
+        st.error(
+            "The last background cache refresh failed: "
+            f"{cache_status['error']}"
+        )
+
+
 def run_interactive_chart_view():
     symbol = str(query_param_value("interactive_chart", "") or "").strip()
     market = normalize_market(query_param_value("market", settings.get("last_results_market", MARKET_INDIA)))
@@ -694,6 +787,18 @@ def run_interactive_chart_view():
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Unable to prepare the interactive chart: {exc}")
     st.stop()
+
+
+# Result tables open charts in an iframe. Serve that iframe immediately instead
+# of continuing through every Streamlit tab (all tab bodies execute on reruns,
+# including when they are not visible). Standalone/bookmarked chart URLs still
+# use the shared Chart workspace below.
+if (
+    str(query_param_value("interactive_chart", "") or "").strip()
+    and str(query_param_value("embedded", "") or "").lower()
+    in {"1", "true", "yes"}
+):
+    run_interactive_chart_view()
 
 
 # Interactive-chart URLs from older bookmarks are converted into the shared
@@ -2419,16 +2524,66 @@ def attach_backtest_chart_paths(stock_details_by_filter, stock_files, favorite_f
     return enriched_details
 
 
+@st.cache_data(show_spinner=False)
+def local_cache_latest_coverage(market, generation, latest_date):
+    del generation
+    frame = get_r2_store().load_cached_market(
+        normalize_market(market).lower(),
+        start=latest_date,
+        end=latest_date,
+        columns=["Symbol", "Date", "Close"],
+    )
+    if frame.empty or "Symbol" not in frame.columns:
+        return 0
+    return int(frame["Symbol"].astype(str).nunique())
+
+
 def render_data_availability_status(market=MARKET_INDIA):
     """Render the latest available data date and its stock coverage."""
     market = normalize_market(market)
-    directory = timeframe_config("DAY", market)["target_dir"]
-    availability = data_availability_summary(directory, market=market)
-    last_date = availability["Latest Date"]
-    if last_date:
-        date_formatted = last_date.strftime("%d-%m-%Y")
+    cache_status = (
+        get_r2_store().local_cache_status(market.lower())
+        if r2_configured()
+        else {}
+    )
+    if r2_configured() and not cache_status.get("ready"):
+        st.markdown(
+            '<div class="data-status-card data-status-empty">'
+            'Sync data in server'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.info(
+            "Server stock data is not synchronized yet. Use "
+            "‘Refresh Server Cache Now’ and wait for the cache build to finish."
+        )
+        return
+
+    if cache_status.get("ready"):
+        last_date = pd.to_datetime(
+            cache_status.get("latest_date"),
+            errors="coerce",
+        )
+        if pd.isna(last_date):
+            last_date = None
+        current_stock_files = int(cache_status.get("symbols", 0) or 0)
+        stocks_on_date = (
+            local_cache_latest_coverage(
+                market,
+                str(cache_status.get("generation", "")),
+                last_date.strftime("%Y-%m-%d"),
+            )
+            if last_date is not None
+            else 0
+        )
+    else:
+        directory = timeframe_config("DAY", market)["target_dir"]
+        availability = data_availability_summary(directory, market=market)
+        last_date = availability["Latest Date"]
         stocks_on_date = availability["Stocks On Latest Date"]
         current_stock_files = availability["Current Stock Files"]
+    if last_date:
+        date_formatted = last_date.strftime("%d-%m-%Y")
         # The active status universe intentionally excludes stale/failed files.
         # Those files remain retryable on disk but do not reduce this bar.
         progress_total = current_stock_files
@@ -3053,24 +3208,28 @@ def render_backtest_results_table(
       }}
 
       function renderInteractiveStockChart(section, button) {{
+        const chartPanel = section.querySelector(".stock-chart-panel");
         const buttons = Array.from(section.querySelectorAll(".stock-interactive-link"));
         const index = buttons.indexOf(button);
-        if (!button || index < 0) return;
-        let market = "";
-        try {{
-          market = new URL(
-            button.dataset.interactiveSrc,
-            window.location.href
-          ).searchParams.get("market") || "";
-        }} catch (error) {{}}
-        window.parent.postMessage({{
-          source: "chart-workspace-open",
-          symbol: button.dataset.symbol || "",
-          market: market,
-          interactiveSrc: button.dataset.interactiveSrc || "",
-          symbols: buttons.map(item => item.dataset.symbol || ""),
-          index: index
-        }}, "*");
+        if (!button || !chartPanel || index < 0) return;
+        document.querySelectorAll(".stock-chart-panel").forEach(panel => {{
+          if (panel !== chartPanel) resetStockChartPanel(panel);
+        }});
+        document.querySelectorAll(".stock-chart-link, .stock-interactive-link")
+          .forEach(item => item.classList.remove("active"));
+        button.classList.add("active");
+        chartPanel.classList.add("active");
+        const src = button.dataset.interactiveSrc || "";
+        const separator = src.includes("?") ? "&" : "?";
+        const embeddedSrc = src + separator +
+          "embedded=1&embed_height=760" +
+          "&position=" + encodeURIComponent(index + 1) +
+          "&total=" + encodeURIComponent(buttons.length) +
+          "&has_previous=" + (index > 0 ? "1" : "0") +
+          "&has_next=" + (index < buttons.length - 1 ? "1" : "0");
+        chartPanel.innerHTML = `<iframe class="stock-interactive-frame" ` +
+          `src="${{escapeHtml(embeddedSrc)}}" title="${{escapeHtml(button.dataset.symbol || "Chart")}} interactive chart" ` +
+          `loading="eager" allow="fullscreen; screen-orientation" allowfullscreen></iframe>`;
       }}
 
       function navigateActiveInteractiveChart(offset) {{
@@ -3728,10 +3887,11 @@ with tab1:
     with st.container(border=True):
         st.markdown(
             '<div class="data-panel-heading tone-violet"><span>☁️</span>'
-            'Cloudflare R2 Sync</div>'
-            '<p class="data-panel-subtitle">R2 is the permanent source of '
-            'truth. The app automatically refreshes the manifest and downloads '
-            'only changed yearly and monthly files into its server cache.</p>',
+            'Server Data Cache</div>'
+            '<p class="data-panel-subtitle">R2 remains the permanent source of '
+            'truth. Screening uses a local market Parquet cache and charts use '
+            'ten-year per-symbol Parquet files. Changed cloud data is prepared '
+            'in the background and activated atomically.</p>',
             unsafe_allow_html=True,
         )
         if not r2_configured():
@@ -3739,29 +3899,39 @@ with tab1:
                 "Cloudflare R2 is not configured. Add the [r2] Streamlit "
                 "secrets described in CLOUD_SETUP.md."
             )
+        else:
+            cache_store = get_r2_store()
+            render_server_cache_progress(selected_market)
         sync_clicked = st.button(
-            "Sync Stock Data",
+            "Refresh Server Cache Now",
             type="primary",
             use_container_width=True,
             disabled=not r2_configured(),
             help=(
-                "Refresh the manifest and redownload the selected market's "
-                "current monthly file. Historical files download on demand."
+                "Check the R2 manifest, download changed partitions, and "
+                "atomically rebuild the selected market's local cache."
             ),
         )
         if sync_clicked:
-            try:
-                sync_result = get_r2_store().sync(
-                    selected_market.lower(),
-                    force=True,
+            started = get_r2_store().request_local_cache_sync(
+                selected_market.lower(),
+                force_manifest=True,
+            )
+            if started:
+                st.toast(
+                    "Server cache refresh started. Progress will update above.",
+                    icon="⏳",
                 )
-                st.cache_data.clear()
-                st.success(
-                    "Stock data synced. Manifest version: "
-                    f"{sync_result.get('version') or 'unversioned'}."
+            else:
+                current_status = get_r2_store().local_cache_status(
+                    selected_market.lower()
                 )
-            except R2DataError as exc:
-                st.error(f"Stock data sync failed: {exc}")
+                if current_status.get("syncing"):
+                    st.info("A server cache refresh is already running.")
+                elif current_status.get("error"):
+                    st.error(current_status["error"])
+                else:
+                    st.info("The server cache is already up to date.")
 
 
 # =====================================================================

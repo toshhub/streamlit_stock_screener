@@ -388,6 +388,27 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertEqual(result[0]["price"], 101.25)
 
+    def test_monthly_prices_can_reuse_loaded_chart_candles(self):
+        valuation_rows = [
+            {"time": "2026-01-02", "pe": 18.2},
+            {"time": "2024-01-02", "pe": 15.0},
+        ]
+        candle_rows = [
+            {"time": "2026-01-02", "close": 101.25},
+            {"time": "2026-01-03", "close": 102.5},
+        ]
+
+        with patch("charting.load_stock_dataframe") as load_prices:
+            result = _attach_monthly_prices(
+                "TEST.json",
+                valuation_rows,
+                price_rows=candle_rows,
+            )
+
+        load_prices.assert_not_called()
+        self.assertEqual(result[0]["price"], 101.25)
+        self.assertIsNone(result[1]["price"])
+
     def test_interactive_trade_overlay_adds_levels_markers_and_window(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "TEST.json"
@@ -752,6 +773,7 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("message.action === 'close'", result)
         self.assertNotIn("data-interactive-close", result)
         self.assertIn("nse-interactive-chart", result)
+        self.assertNotIn("chart-workspace-open", result)
         self.assertIn("position: sticky", result)
         self.assertIn("position: fixed", result)
         self.assertIn(".chart-panel.interactive-mode::before", result)

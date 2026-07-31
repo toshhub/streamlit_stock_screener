@@ -28,6 +28,7 @@ from r2_stock_data import (
     manifest_entry,
     normalize_candles,
 )
+from price_alerts import check_price_alerts_for_market_candles
 
 
 OVERLAP_BUSINESS_DAYS = 5
@@ -171,6 +172,7 @@ def update_market_month(store, manifest, market, *, now=None, symbols=None):
         "Rows": len(combined),
         "Symbols": int(combined["Symbol"].nunique()),
         "Failures": failures,
+        "_alert_candles": combined,
     }
 
 
@@ -271,4 +273,12 @@ def run_update(*, now=None, symbols_by_market=None):
             )
         )
     upload_manifest(store, manifest)
+    for summary in summaries:
+        alert_candles = summary.pop("_alert_candles")
+        summary["Alerts Triggered"] = len(
+            check_price_alerts_for_market_candles(
+                alert_candles,
+                summary["Market"],
+            )
+        )
     return {"markets": summaries, "rollovers": rollovers}

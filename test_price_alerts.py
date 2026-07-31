@@ -4,8 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from price_alerts import (
     acknowledge_price_alerts,
+    check_price_alerts_for_market_candles,
     check_price_alerts_for_symbol,
     configure_cloud_alerts,
     create_price_alert,
@@ -194,6 +197,61 @@ class PriceAlertTests(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(len(backend.rows["google-user-a"]), 1)
         self.assertEqual(len(backend.rows["google-user-b"]), 1)
+
+    def test_cron_evaluates_all_market_alerts_in_one_cloud_batch(self):
+        class FakeCronAlerts:
+            def __init__(self):
+                self.load_calls = []
+                self.updated = []
+
+            def load_active_alerts_for_market(self, market):
+                self.load_calls.append(market)
+                return [{
+                    "user_id": "user-1",
+                    "id": "alert-1",
+                    "symbol": "TEST",
+                    "market": "INDIA",
+                    "target_price": 110,
+                    "direction": "above",
+                    "status": "Active",
+                    "created_candle_date": "2026-01-01",
+                    "last_checked_date": "2026-01-01",
+                }]
+
+            def update_alerts(self, alerts):
+                self.updated.extend(alerts)
+
+        backend = FakeCronAlerts()
+        configure_cloud_alerts(backend, require_auth=True)
+        candles = pd.DataFrame([
+            {
+                "Symbol": "TEST",
+                "Date": "2026-01-01",
+                "Open": 98,
+                "High": 105,
+                "Low": 97,
+                "Close": 100,
+            },
+            {
+                "Symbol": "TEST",
+                "Date": "2026-01-02",
+                "Open": 101,
+                "High": 112,
+                "Low": 100,
+                "Close": 111,
+            },
+        ])
+
+        triggered = check_price_alerts_for_market_candles(candles, "INDIA")
+
+        self.assertEqual(backend.load_calls, ["INDIA"])
+        self.assertEqual([row["id"] for row in triggered], ["alert-1"])
+        self.assertEqual(len(backend.updated), 1)
+        self.assertEqual(backend.updated[0]["status"], "Triggered")
+        self.assertEqual(
+            backend.updated[0]["triggered_candle_date"],
+            "2026-01-02",
+        )
 
 
 class AlertTabPerformanceTests(unittest.TestCase):

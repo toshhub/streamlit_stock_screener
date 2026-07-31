@@ -592,7 +592,7 @@ def _datetime_ns(values):
     return converted.dt.tz_localize(None).astype("datetime64[ns]")
 
 
-def _attach_monthly_prices(json_path, valuation_rows):
+def _attach_monthly_prices(json_path, valuation_rows, price_rows=None):
     if not valuation_rows:
         return valuation_rows
     valuation_dates = _datetime_ns(
@@ -601,14 +601,19 @@ def _attach_monthly_prices(json_path, valuation_rows):
     valid_dates = valuation_dates[valuation_dates.notna()]
     if valid_dates.empty:
         return valuation_rows
-    try:
-        price_df = load_stock_dataframe(
-            json_path,
-            start=valid_dates.min() - pd.Timedelta(days=2),
-            columns=["Date", "Close"],
+    if price_rows is None:
+        try:
+            price_df = load_stock_dataframe(
+                json_path,
+                start=valid_dates.min() - pd.Timedelta(days=2),
+                columns=["Date", "Close"],
+            )
+        except (OSError, ValueError):
+            return valuation_rows
+    else:
+        price_df = pd.DataFrame(price_rows).rename(
+            columns={"time": "Date", "close": "Close"}
         )
-    except (OSError, ValueError):
-        return valuation_rows
     if price_df.empty or "Date" not in price_df.columns or "Close" not in price_df.columns:
         return valuation_rows
 
@@ -667,6 +672,11 @@ def interactive_stock_chart_html(
     monthly_valuations = _attach_monthly_prices(
         json_path,
         valuation_chart_payload(symbol, alert_market),
+        # Reuse the candle window already fetched above. On a cold deployed
+        # server, loading valuation prices separately could pull every
+        # market-wide R2 partition back to 2016 just to draw one stock. Older
+        # price overlays fill in naturally when the user requests more history.
+        price_rows=payload["candles"],
     )
     payload["monthlyValuations"] = monthly_valuations
     if isinstance(restore_visible_range, dict):
@@ -4448,23 +4458,9 @@ def results_hover_table_html(
 
         function showInteractiveChart(button) {
           if (!button) return;
-          var items = getInteractiveItems();
-          var index = items.indexOf(button);
-          var src = button.getAttribute('data-interactive-src') || '';
-          var market = '';
-          try {
-            market = new URL(src, window.location.href).searchParams.get('market') || '';
-          } catch (error) {}
-          window.parent.postMessage({
-            source: 'chart-workspace-open',
-            symbol: button.getAttribute('data-symbol') || '',
-            market: market,
-            interactiveSrc: src,
-            symbols: items.map(function(item) {
-              return item.getAttribute('data-symbol') || '';
-            }),
-            index: index
-          }, '*');
+          setActiveRow(null);
+          setActiveInteractiveButton(button);
+          renderInteractivePanel(button);
         }
 
         function showInteractiveByOffset(offset) {

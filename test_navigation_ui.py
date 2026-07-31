@@ -20,6 +20,18 @@ class NavigationUiTests(unittest.TestCase):
         self.assertNotIn('class="app-hero__title"', self.app_source)
         self.assertNotIn('class="workflow-rail"', self.app_source)
 
+    def test_server_cache_progress_has_component_driven_live_polling(self):
+        component_source = Path(
+            "cache_progress_component/index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('@st.fragment(run_every=1)', self.app_source)
+        self.assertIn('_CACHE_PROGRESS_COMPONENT(', self.app_source)
+        self.assertIn('key=f"cache_progress_tick_', self.app_source)
+        self.assertIn('window.setInterval', component_source)
+        self.assertIn('streamlit:setComponentValue', component_source)
+        self.assertIn('streamlit:setFrameHeight', component_source)
+
     def test_every_tab_starts_with_its_workspace_banner(self):
         for tab_number in (1, 3, 4, 5, 6, 7):
             self.assertRegex(
@@ -93,6 +105,34 @@ class NavigationUiTests(unittest.TestCase):
         )
         self.assertIn(
             "(fast_favorite_selection or fast_workspace_navigation)",
+            self.app_source,
+        )
+
+    def test_results_chart_icon_uses_fast_embedded_route(self):
+        start = self.app_source.index(
+            "function renderInteractiveStockChart(section, button)"
+        )
+        end = self.app_source.index(
+            "function navigateActiveInteractiveChart", start
+        )
+        handler = self.app_source[start:end]
+
+        self.assertIn('"embedded=1&embed_height=760"', handler)
+        self.assertIn('class="stock-interactive-frame"', handler)
+        self.assertNotIn("chart-workspace-open", handler)
+        self.assertNotIn("window.parent.postMessage", handler)
+
+    def test_r2_startup_check_runs_once_and_skips_chart_requests(self):
+        self.assertIn(
+            "def request_startup_cache_sync_once(self, market):",
+            Path("r2_stock_data.py").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "if r2_configured() and not is_interactive_chart_request:",
+            self.app_source,
+        )
+        self.assertIn(
+            "get_r2_store().request_startup_cache_sync_once(",
             self.app_source,
         )
 

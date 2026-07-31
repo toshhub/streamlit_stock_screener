@@ -45,7 +45,7 @@ class HistoryWindowTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def load_market(self, market, **kwargs):
+            def load_cached_market(self, market, **kwargs):
                 self.calls.append((market, kwargs))
                 return price_frame
 

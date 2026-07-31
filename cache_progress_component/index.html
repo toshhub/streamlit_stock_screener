@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cache progress ticker</title>
+</head>
+<body>
+  <script>
+    let timer = null;
+    let intervalMs = 750;
+
+    function sendToStreamlit(type, payload) {
+      window.parent.postMessage(
+        Object.assign({isStreamlitMessage: true, type: type}, payload || {}),
+        "*"
+      );
+    }
+
+    function stopTimer() {
+      if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function startTimer() {
+      stopTimer();
+      timer = window.setInterval(function () {
+        sendToStreamlit("streamlit:setComponentValue", {
+          value: Date.now(),
+          dataType: "number"
+        });
+      }, intervalMs);
+    }
+
+    window.addEventListener("message", function (event) {
+      const message = event.data || {};
+      if (message.type !== "streamlit:render") return;
+      const args = message.args || {};
+      intervalMs = Math.max(400, Number(args.intervalMs) || 750);
+      if (args.running) startTimer();
+      else stopTimer();
+      sendToStreamlit("streamlit:setFrameHeight", {height: 0});
+    });
+
+    window.addEventListener("beforeunload", stopTimer);
+    sendToStreamlit("streamlit:componentReady", {apiVersion: 1});
+    sendToStreamlit("streamlit:setFrameHeight", {height: 0});
+  </script>
+</body>
+</html>

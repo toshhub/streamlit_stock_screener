@@ -7,6 +7,8 @@ from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from config import DAILY_DIR, META_DIR, US_DAILY_DIR
 from stock_data import (
     SCREENING_HISTORY_YEARS,
@@ -249,6 +251,57 @@ def check_price_alerts_for_symbol(symbol, market, stock_file=None):
         triggered, changed_alerts = _evaluate_alerts(alerts, candles, symbol, market)
         if changed_alerts:
             _write_alerts_unlocked(alerts)
+    return triggered
+
+
+def check_price_alerts_for_market_candles(candles, market):
+    """Evaluate cron-downloaded candles against all cloud alerts for a market."""
+    market = _normalize_market(market)
+    if _CLOUD_BACKEND is None or candles is None:
+        return []
+    if not hasattr(_CLOUD_BACKEND, "load_active_alerts_for_market"):
+        raise RuntimeError(
+            "The cloud alert backend does not support cron market evaluation."
+        )
+
+    frame = candles.copy()
+    if frame.empty or "Symbol" not in frame.columns or "Date" not in frame.columns:
+        return []
+    frame["Symbol"] = frame["Symbol"].astype(str).str.strip().str.upper()
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame = frame.dropna(subset=["Date"])
+    if frame.empty:
+        return []
+    frame["Date"] = frame["Date"].dt.strftime("%Y-%m-%d")
+
+    alerts = _CLOUD_BACKEND.load_active_alerts_for_market(market)
+    alerts_by_symbol = {}
+    for alert in alerts:
+        symbol = str(alert.get("symbol") or "").strip().upper()
+        if symbol:
+            alerts_by_symbol.setdefault(symbol, []).append(alert)
+
+    triggered = []
+    changed = []
+    for symbol, symbol_alerts in alerts_by_symbol.items():
+        symbol_rows = frame[frame["Symbol"].eq(symbol)]
+        if symbol_rows.empty:
+            continue
+        rows = (
+            symbol_rows.sort_values("Date")
+            .drop(columns=["Symbol"], errors="ignore")
+            .to_dict(orient="records")
+        )
+        symbol_triggered, symbol_changed = _evaluate_alerts(
+            symbol_alerts,
+            rows,
+            symbol,
+            market,
+        )
+        triggered.extend(symbol_triggered)
+        changed.extend(symbol_changed)
+    if changed:
+        _CLOUD_BACKEND.update_alerts(changed)
     return triggered
 
 

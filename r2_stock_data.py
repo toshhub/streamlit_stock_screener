@@ -16,8 +16,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import threading
 import time
+import uuid
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +43,11 @@ CANDLE_COLUMNS = (
 MARKETS = ("india", "us")
 DEFAULT_R2_CACHE_DIR = STOCK_CACHE_DIR / "r2"
 DEFAULT_MANIFEST_REFRESH_SECONDS = 60.0
+LOCAL_CACHE_HISTORY_YEARS = 10
+# Schema 3 already stores one Parquet file per symbol.  The faster bucketed
+# builder only changes how those files are produced, not their on-disk format,
+# so bumping this number would needlessly rebuild every deployed cache.
+LOCAL_CACHE_SCHEMA_VERSION = 3
 
 
 class R2ConfigurationError(RuntimeError):
@@ -175,6 +183,23 @@ class R2StockDataStore:
         self._manifest = None
         self._manifest_fetched_at = 0.0
         self._lock = threading.RLock()
+        self._materialize_locks = {
+            market: threading.RLock() for market in MARKETS
+        }
+        self._materialize_threads = {}
+        self._materialize_errors = {}
+        self._materialize_progress = {}
+        self._startup_sync_markets = set()
+
+    def _set_materialize_progress(self, market, **values):
+        market = _clean_market(market)
+        current = dict(self._materialize_progress.get(market) or {})
+        current.update(values)
+        current["updated_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
+        self._materialize_progress[market] = current
+        return current
 
     @property
     def client(self):
@@ -469,6 +494,731 @@ class R2StockDataStore:
             columns=columns,
         )
         return result.drop(columns=["Symbol"], errors="ignore")
+
+    @property
+    def materialized_cache_dir(self):
+        return self.cache_dir / "materialized"
+
+    def _materialized_market_dir(self, market):
+        return self.materialized_cache_dir / _clean_market(market)
+
+    def _active_cache_state_path(self, market):
+        return self._materialized_market_dir(market) / "active.json"
+
+    def _read_active_cache_state(self, market):
+        try:
+            state = json.loads(
+                self._active_cache_state_path(market).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(state, dict):
+            return None
+        generation = str(state.get("generation", "")).strip()
+        market_file = (
+            self._materialized_market_dir(market)
+            / "generations"
+            / generation
+            / "market.parquet"
+        )
+        if not generation or not market_file.is_file():
+            return None
+        return state
+
+    def _generation_dir(self, market, generation):
+        return (
+            self._materialized_market_dir(market)
+            / "generations"
+            / str(generation)
+        )
+
+    def _market_cache_revision(self, market, manifest):
+        market = _clean_market(market)
+        entries = self.market_entries(market, manifest=manifest)
+        identities = {
+            f"yearly/{period}": self._entry_identity(entry)
+            for period, entry in entries["yearly"].items()
+        }
+        identities.update({
+            f"current/{period}": self._entry_identity(entry)
+            for period, entry in entries["current"].items()
+        })
+        payload = {
+            "schema": LOCAL_CACHE_SCHEMA_VERSION,
+            "market": market,
+            "history_years": LOCAL_CACHE_HISTORY_YEARS,
+            "entries": identities,
+        }
+        revision = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return revision, identities
+
+    @staticmethod
+    def _cache_cutoff(manifest, market):
+        market_data = (manifest.get("markets") or {}).get(market, {})
+        latest = pd.Timestamp(
+            market_data.get("latest_date") or pd.Timestamp.now()
+        ).normalize()
+        return latest - pd.DateOffset(years=LOCAL_CACHE_HISTORY_YEARS)
+
+    def _write_active_cache_state(self, market, state):
+        path = self._active_cache_state_path(market)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(state, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    @staticmethod
+    def _write_parquet_atomic(frame, path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        frame.to_parquet(
+            temporary,
+            index=False,
+            engine="pyarrow",
+            compression="zstd",
+            row_group_size=10_000,
+        )
+        temporary.replace(path)
+
+    def _materialize_generation(self, market, manifest, revision, identities):
+        market = _clean_market(market)
+        generation = revision[:20]
+        market_dir = self._materialized_market_dir(market)
+        generations_dir = market_dir / "generations"
+        final_dir = self._generation_dir(market, generation)
+        if (
+            (final_dir / "market.parquet").is_file()
+            and (final_dir / "metadata.json").is_file()
+            and (final_dir / "symbols").is_dir()
+        ):
+            return generation
+        if final_dir.exists():
+            resolved_generations = generations_dir.resolve()
+            if final_dir.resolve().parent != resolved_generations:
+                raise R2DataError(
+                    f"Unsafe incomplete cache generation: {final_dir}"
+                )
+            shutil.rmtree(final_dir, ignore_errors=False)
+
+        cutoff = self._cache_cutoff(manifest, market)
+        selected_entries = self.entries_for_window(
+            market,
+            start=cutoff,
+            manifest=manifest,
+        )
+        partition_paths = []
+        total_download_bytes = sum(
+            max(0, int(entry.get("bytes", 0) or 0))
+            for _file_type, _period, entry in selected_entries
+            if isinstance(entry, dict)
+        )
+        completed_download_bytes = 0
+        download_started = time.monotonic()
+        self._set_materialize_progress(
+            market,
+            phase="download",
+            percent=0.0,
+            completed=0,
+            total=total_download_bytes,
+            unit="bytes",
+            eta_seconds=None,
+            message="Checking and downloading R2 partitions",
+        )
+        for file_type, _period, entry in selected_entries:
+            partition_path = self.ensure_entry(entry)
+            if file_type == "json":
+                partition_path = self._indexed_json_path(partition_path)
+            partition_paths.append(partition_path)
+            entry_bytes = (
+                max(0, int(entry.get("bytes", 0) or 0))
+                if isinstance(entry, dict)
+                else 0
+            )
+            completed_download_bytes += entry_bytes
+            elapsed = max(0.001, time.monotonic() - download_started)
+            fraction = (
+                completed_download_bytes / total_download_bytes
+                if total_download_bytes
+                else len(partition_paths) / max(1, len(selected_entries))
+            )
+            rate = completed_download_bytes / elapsed
+            eta_seconds = (
+                (total_download_bytes - completed_download_bytes) / rate
+                if rate > 0 and completed_download_bytes < total_download_bytes
+                else 0
+            )
+            self._set_materialize_progress(
+                market,
+                phase="download",
+                percent=min(0.2, max(0.0, fraction * 0.2)),
+                completed=completed_download_bytes,
+                total=total_download_bytes,
+                unit="bytes",
+                eta_seconds=eta_seconds,
+                message=(
+                    "Checking and downloading R2 partitions: "
+                    f"{len(partition_paths)}/{len(selected_entries)}"
+                ),
+            )
+        market_data = (manifest.get("markets") or {}).get(market, {})
+        symbols = sorted({
+            str(symbol).strip().upper()
+            for symbol in (market_data.get("symbols") or [])
+            if str(symbol).strip()
+        })
+        if not symbols:
+            raise R2DataError(
+                f"The R2 manifest has no symbols for the {market} cache."
+            )
+        generations_dir.mkdir(parents=True, exist_ok=True)
+        # The generation is invisible to readers until active.json is replaced.
+        # Build directly at its deterministic final path instead of renaming a
+        # populated directory; Windows can retain short-lived Parquet handles
+        # and reject that directory rename with WinError 5.
+        staging = final_dir
+        symbols_dir = staging / "symbols"
+        symbols_dir.mkdir(parents=True, exist_ok=True)
+        market_temporary = staging / f".market.{uuid.uuid4().hex}.tmp"
+        parquet_writer = None
+        bucket_writers = {}
+        row_count = 0
+        symbol_count = 0
+        latest_date = None
+        try:
+            import pyarrow as pa
+            import pyarrow.compute as pc
+            import pyarrow.dataset as ds
+            import pyarrow.parquet as pq
+
+            market_schema = pa.schema([
+                pa.field("Symbol", pa.large_string()),
+                pa.field("Date", pa.timestamp("ns")),
+                *[
+                    pa.field(column, pa.float64())
+                    for column in CANDLE_COLUMNS[2:]
+                ],
+            ])
+            expected_rows = sum(
+                max(0, int(entry.get("rows", 0) or 0))
+                for _file_type, _period, entry in selected_entries
+                if isinstance(entry, dict)
+            )
+            market_started = time.monotonic()
+            self._set_materialize_progress(
+                market,
+                phase="market",
+                percent=0.2,
+                completed=0,
+                total=expected_rows,
+                unit="rows",
+                eta_seconds=None,
+                message="Building local market cache",
+            )
+            source_dataset = ds.dataset(
+                [str(path) for path in partition_paths],
+                format="parquet",
+                schema=market_schema,
+            )
+            cutoff_scalar = pa.scalar(
+                cutoff.to_pydatetime(),
+                type=pa.timestamp("ns"),
+            )
+            scanner = source_dataset.scanner(
+                columns=list(CANDLE_COLUMNS),
+                filter=ds.field("Date") >= cutoff_scalar,
+                batch_size=65_536,
+                use_threads=True,
+            )
+            parquet_writer = pq.ParquetWriter(
+                market_temporary,
+                market_schema,
+                compression="zstd",
+            )
+            for batch in scanner.to_batches():
+                if batch.num_rows == 0:
+                    continue
+                parquet_writer.write_batch(batch, row_group_size=10_000)
+                row_count += batch.num_rows
+                batch_latest = pc.max(
+                    batch.column(batch.schema.get_field_index("Date"))
+                ).as_py()
+                if batch_latest is not None:
+                    batch_latest = pd.Timestamp(batch_latest)
+                    if latest_date is None or batch_latest > latest_date:
+                        latest_date = batch_latest
+                elapsed = max(0.001, time.monotonic() - market_started)
+                fraction = (
+                    min(1.0, row_count / expected_rows)
+                    if expected_rows
+                    else 0.0
+                )
+                rate = row_count / elapsed
+                eta_seconds = (
+                    (expected_rows - row_count) / rate
+                    if rate > 0 and expected_rows > row_count
+                    else None
+                )
+                self._set_materialize_progress(
+                    market,
+                    phase="market",
+                    percent=0.2 + 0.3 * fraction,
+                    completed=row_count,
+                    total=expected_rows,
+                    unit="rows",
+                    eta_seconds=eta_seconds,
+                    message="Building local market cache",
+                )
+            if parquet_writer is None or row_count == 0:
+                raise R2DataError(
+                    f"Cannot build an empty local {market} market cache."
+                )
+            parquet_writer.close()
+            parquet_writer = None
+            market_temporary.replace(staging / "market.parquet")
+
+            bucket_count = min(64, max(1, len(symbols)))
+            symbol_buckets = {
+                symbol: zlib.crc32(symbol.encode("utf-8")) % bucket_count
+                for symbol in symbols
+            }
+            bucket_dir = staging / ".symbol-buckets"
+            bucket_dir.mkdir(parents=True, exist_ok=True)
+            partition_started = time.monotonic()
+            partitioned_rows = 0
+            self._set_materialize_progress(
+                market,
+                phase="partition",
+                percent=0.5,
+                completed=0,
+                total=row_count,
+                unit="rows",
+                eta_seconds=None,
+                message="Partitioning local symbol data",
+            )
+            market_dataset = ds.dataset(
+                str(staging / "market.parquet"),
+                format="parquet",
+                schema=market_schema,
+            )
+            for batch in market_dataset.scanner(
+                batch_size=65_536,
+                use_threads=True,
+            ).to_batches():
+                batch_frame = batch.to_pandas()
+                batch_frame["_bucket"] = batch_frame["Symbol"].map(
+                    symbol_buckets
+                )
+                unknown = batch_frame["_bucket"].isna()
+                if unknown.any():
+                    batch_frame.loc[unknown, "_bucket"] = batch_frame.loc[
+                        unknown,
+                        "Symbol",
+                    ].map(
+                        lambda value: zlib.crc32(
+                            str(value).encode("utf-8")
+                        ) % bucket_count
+                    )
+                for bucket, bucket_frame in batch_frame.groupby(
+                    "_bucket",
+                    sort=False,
+                ):
+                    bucket = int(bucket)
+                    table = pa.Table.from_pandas(
+                        bucket_frame.drop(columns=["_bucket"]),
+                        schema=market_schema,
+                        preserve_index=False,
+                        safe=False,
+                    )
+                    writer = bucket_writers.get(bucket)
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            bucket_dir / f"bucket-{bucket:02d}.parquet",
+                            market_schema,
+                            compression="zstd",
+                        )
+                        bucket_writers[bucket] = writer
+                    writer.write_table(table, row_group_size=10_000)
+                partitioned_rows += batch.num_rows
+                elapsed = max(0.001, time.monotonic() - partition_started)
+                rate = partitioned_rows / elapsed
+                eta_seconds = (
+                    (row_count - partitioned_rows) / rate
+                    if rate > 0 and partitioned_rows < row_count
+                    else 0
+                )
+                self._set_materialize_progress(
+                    market,
+                    phase="partition",
+                    percent=0.5 + 0.2 * partitioned_rows / row_count,
+                    completed=partitioned_rows,
+                    total=row_count,
+                    unit="rows",
+                    eta_seconds=eta_seconds,
+                    message="Partitioning local symbol data",
+                )
+            for writer in bucket_writers.values():
+                writer.close()
+            bucket_writers.clear()
+
+            bucket_files = sorted(bucket_dir.glob("bucket-*.parquet"))
+            if not bucket_files:
+                raise R2DataError(
+                    f"No local {market} symbol buckets were produced."
+                )
+            compact_started = time.monotonic()
+            compact_index = 0
+            self._set_materialize_progress(
+                market,
+                phase="compact",
+                percent=0.7,
+                completed=0,
+                total=len(symbols),
+                unit="symbols",
+                eta_seconds=None,
+                message=(
+                    "Compacting symbol files: "
+                    f"0/{len(symbols)}"
+                ),
+            )
+            for bucket_file in bucket_files:
+                bucket_frame = normalize_candles(
+                    pd.read_parquet(bucket_file),
+                    market=market,
+                )
+                for symbol, symbol_frame in bucket_frame.groupby(
+                    "Symbol",
+                    sort=True,
+                ):
+                    compact_index += 1
+                    self._write_parquet_atomic(
+                        symbol_frame.drop(columns=["Symbol"]).reset_index(
+                            drop=True
+                        ),
+                        symbols_dir / f"{symbol}.parquet",
+                    )
+                    elapsed = max(0.001, time.monotonic() - compact_started)
+                    rate = compact_index / elapsed
+                    eta_seconds = (
+                        (len(symbols) - compact_index) / rate
+                        if compact_index >= 10 and rate > 0
+                        else None
+                    )
+                    completed = min(compact_index, len(symbols))
+                    self._set_materialize_progress(
+                        market,
+                        phase="compact",
+                        percent=0.7 + 0.3 * completed / len(symbols),
+                        completed=completed,
+                        total=len(symbols),
+                        unit="symbols",
+                        eta_seconds=eta_seconds,
+                        message=(
+                            "Compacting symbol files: "
+                            f"{completed}/{len(symbols)}"
+                        ),
+                    )
+                bucket_file.unlink()
+            bucket_dir.rmdir()
+            symbol_count = sum(
+                1 for path in symbols_dir.glob("*.parquet") if path.is_file()
+            )
+            cache_metadata = {
+                "schema_version": LOCAL_CACHE_SCHEMA_VERSION,
+                "market": market,
+                "revision": revision,
+                "manifest_version": str(manifest.get("version", "")),
+                "history_years": LOCAL_CACHE_HISTORY_YEARS,
+                "cutoff": cutoff.strftime("%Y-%m-%d"),
+                "latest_date": latest_date.strftime("%Y-%m-%d"),
+                "rows": int(row_count),
+                "symbols": int(symbol_count),
+                "entries": identities,
+                "built_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            }
+            (staging / "metadata.json").write_text(
+                json.dumps(cache_metadata, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception:
+            if parquet_writer is not None:
+                parquet_writer.close()
+            for writer in bucket_writers.values():
+                writer.close()
+            if staging.is_dir():
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return generation
+
+    def _cleanup_old_generations(self, market, active_generation, keep=2):
+        generations_dir = self._materialized_market_dir(market) / "generations"
+        if not generations_dir.is_dir():
+            return
+        candidates = sorted(
+            (
+                path for path in generations_dir.iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            ),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+        retained = {active_generation}
+        retained.update(path.name for path in candidates[: max(1, int(keep))])
+        resolved_parent = generations_dir.resolve()
+        for path in candidates:
+            if path.name in retained:
+                continue
+            resolved = path.resolve()
+            if resolved.parent == resolved_parent:
+                shutil.rmtree(resolved, ignore_errors=True)
+
+    def sync_local_cache(self, market, *, force_manifest=False):
+        """Synchronize one ten-year local cache and atomically activate it."""
+        market = _clean_market(market)
+        with self._materialize_locks[market]:
+            manifest = self.fetch_manifest(force=force_manifest)
+            revision, identities = self._market_cache_revision(market, manifest)
+            active = self._read_active_cache_state(market)
+            if active and active.get("revision") == revision:
+                return dict(active)
+            try:
+                generation = self._materialize_generation(
+                    market,
+                    manifest,
+                    revision,
+                    identities,
+                )
+            except R2DataError:
+                raise
+            except Exception as exc:
+                raise R2DataError(
+                    f"Could not build the local {market} cache: {exc}"
+                ) from exc
+            metadata_path = self._generation_dir(
+                market,
+                generation,
+            ) / "metadata.json"
+            state = json.loads(metadata_path.read_text(encoding="utf-8"))
+            state["generation"] = generation
+            self._write_active_cache_state(market, state)
+            self._materialize_errors.pop(market, None)
+            self._cleanup_old_generations(market, generation)
+            self._set_materialize_progress(
+                market,
+                phase="complete",
+                percent=1.0,
+                completed=int(state.get("symbols", 0)),
+                total=int(state.get("symbols", 0)),
+                unit="symbols",
+                eta_seconds=0,
+                message="Server cache refresh complete",
+            )
+            return state
+
+    def _start_background_cache_sync(self, market, *, force_manifest=False):
+        market = _clean_market(market)
+        with self._lock:
+            current = self._materialize_threads.get(market)
+            if current is not None and current.is_alive():
+                return False
+
+            def refresh():
+                try:
+                    self.sync_local_cache(
+                        market,
+                        force_manifest=force_manifest,
+                    )
+                except Exception as exc:
+                    self._materialize_errors[market] = str(exc)
+                    self._set_materialize_progress(
+                        market,
+                        phase="failed",
+                        eta_seconds=None,
+                        message=f"Server cache refresh failed: {exc}",
+                    )
+
+            thread = threading.Thread(
+                target=refresh,
+                name=f"r2-local-cache-{market}",
+                daemon=True,
+            )
+            self._materialize_threads[market] = thread
+            thread.start()
+            return True
+
+    def ensure_local_cache(self, market):
+        """Return the active local cache without touching R2."""
+        market = _clean_market(market)
+        active = self._read_active_cache_state(market)
+        if active is None:
+            raise R2DataError(
+                f"The local {market} server cache is not ready. "
+                "Refresh it from the Server Data Cache panel first."
+            )
+        return active
+
+    def request_local_cache_sync(self, market, *, force_manifest=False):
+        """Start a non-blocking cache warm-up when missing or out of date."""
+        market = _clean_market(market)
+        # Manifest retrieval and first-time materialization must not block the
+        # Streamlit request that opened the app.
+        return self._start_background_cache_sync(
+            market,
+            force_manifest=force_manifest,
+        )
+
+    def request_startup_cache_sync_once(self, market):
+        """Check R2 once per server process, never from a data read path."""
+        market = _clean_market(market)
+        with self._lock:
+            if market in self._startup_sync_markets:
+                return False
+            self._startup_sync_markets.add(market)
+        return self._start_background_cache_sync(market)
+
+    def cached_symbol_exists(self, market, symbol):
+        """Check the active generation without consulting R2."""
+        market = _clean_market(market)
+        clean_symbol = str(symbol).strip().upper()
+        active = self._read_active_cache_state(market)
+        if not active or not clean_symbol:
+            return False
+        base = (
+            self._generation_dir(market, active["generation"])
+            / "symbols"
+            / clean_symbol
+        )
+        return base.is_dir() or base.with_suffix(".parquet").is_file()
+
+    def list_cached_symbols(self, market):
+        """List symbols in the active generation without consulting R2."""
+        market = _clean_market(market)
+        active = self._read_active_cache_state(market)
+        if not active:
+            return []
+        symbols_dir = (
+            self._generation_dir(market, active["generation"])
+            / "symbols"
+        )
+        if not symbols_dir.is_dir():
+            return []
+        symbols = {
+            path.stem if path.is_file() else path.name
+            for path in symbols_dir.iterdir()
+            if path.is_dir() or path.suffix.lower() == ".parquet"
+        }
+        return sorted(symbol for symbol in symbols if symbol)
+
+    def local_cache_status(self, market):
+        market = _clean_market(market)
+        active = self._read_active_cache_state(market) or {}
+        thread = self._materialize_threads.get(market)
+        return {
+            **active,
+            "market": market,
+            "ready": bool(active),
+            "syncing": bool(thread is not None and thread.is_alive()),
+            "error": self._materialize_errors.get(market, ""),
+            "progress": dict(self._materialize_progress.get(market) or {}),
+        }
+
+    def load_cached_market(
+        self,
+        market,
+        *,
+        start=None,
+        end=None,
+        symbols=None,
+        columns=None,
+    ):
+        market = _clean_market(market)
+        state = self.ensure_local_cache(market)
+        path = self._generation_dir(
+            market,
+            state["generation"],
+        ) / "market.parquet"
+        symbol_values = sorted({
+            str(symbol).strip().upper() for symbol in (symbols or []) if symbol
+        })
+        requested = list(dict.fromkeys(columns or CANDLE_COLUMNS))
+        for required in ("Symbol", "Date"):
+            if required not in requested:
+                requested.insert(0, required)
+        filters = []
+        if symbol_values:
+            filters.append(("Symbol", "in", symbol_values))
+        if start is not None:
+            filters.append(("Date", ">=", pd.Timestamp(start).to_pydatetime()))
+        if end is not None:
+            filters.append(("Date", "<=", pd.Timestamp(end).to_pydatetime()))
+        try:
+            frame = pd.read_parquet(
+                path,
+                columns=requested,
+                filters=filters or None,
+            )
+        except (KeyError, TypeError, ValueError):
+            frame = pd.read_parquet(path)
+        frame = normalize_candles(frame, market=market)
+        if symbol_values:
+            frame = frame[frame["Symbol"].isin(symbol_values)]
+        if start is not None:
+            frame = frame[frame["Date"].ge(pd.Timestamp(start).normalize())]
+        if end is not None:
+            frame = frame[frame["Date"].le(pd.Timestamp(end).normalize())]
+        available = [column for column in requested if column in frame.columns]
+        return frame[available].reset_index(drop=True)
+
+    def load_cached_symbol(
+        self,
+        market,
+        symbol,
+        *,
+        start=None,
+        end=None,
+        columns=None,
+    ):
+        market = _clean_market(market)
+        clean_symbol = str(symbol).strip().upper()
+        state = self.ensure_local_cache(market)
+        path = (
+            self._generation_dir(market, state["generation"])
+            / "symbols"
+            / clean_symbol
+        )
+        legacy_path = path.with_suffix(".parquet")
+        if not path.is_dir() and legacy_path.is_file():
+            path = legacy_path
+        price_columns = CANDLE_COLUMNS[1:]
+        if not path.exists():
+            return pd.DataFrame(columns=list(columns or price_columns))
+        requested = list(dict.fromkeys(columns or price_columns))
+        for required in ("Date", "Close"):
+            if required not in requested:
+                requested.insert(0, required)
+        try:
+            frame = pd.read_parquet(path, columns=requested)
+        except (KeyError, ValueError):
+            frame = pd.read_parquet(path)
+        frame = normalize_candles(
+            frame.assign(Symbol=clean_symbol),
+            market=market,
+        ).drop(columns=["Symbol"], errors="ignore")
+        if start is not None:
+            frame = frame[frame["Date"].ge(pd.Timestamp(start).normalize())]
+        if end is not None:
+            frame = frame[frame["Date"].le(pd.Timestamp(end).normalize())]
+        available = [column for column in requested if column in frame.columns]
+        return frame[available].reset_index(drop=True)
 
     def list_symbols(self, market):
         market = _clean_market(market)

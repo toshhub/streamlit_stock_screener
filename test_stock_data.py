@@ -17,14 +17,14 @@ from stock_data import (
 
 
 class StockJsonStorageTests(unittest.TestCase):
-    def test_r2_latest_date_uses_manifest_without_loading_candles(self):
+    def test_r2_latest_date_uses_local_cache_without_manifest(self):
         class FakeStore:
+            def local_cache_status(self, market):
+                self.assert_market = market
+                return {"latest_date": "2026-07-29"}
+
             def fetch_manifest(self):
-                return {
-                    "markets": {
-                        "india": {"latest_date": "2026-07-29"},
-                    }
-                }
+                raise AssertionError("local reads must not fetch the manifest")
 
         with (
             patch(
