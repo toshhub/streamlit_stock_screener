@@ -776,6 +776,7 @@ def interactive_stock_chart_html(
             f'<span class="chart-valuation-status">{valuation_label}</span>'
         )
     fundamentals_drawer_html = ""
+    fundamentals_button_html = ""
     cards = []
     growth_sections = (
         ("Compounded Sales Growth", "Sales growth", "sales"),
@@ -845,14 +846,16 @@ def interactive_stock_chart_html(
                     f"{''.join(rows)}</article>"
                 )
     if cards:
-        fundamentals_drawer_html = (
-            '<div class="fundamentals-drawer" id="fundamentals-drawer">'
-            '<button class="fundamentals-toggle" id="fundamentals-toggle" type="button" '
+        fundamentals_button_html = (
+            '<button class="chart-insight-button fundamentals-toggle" '
+            'id="fundamentals-toggle" type="button" '
             'aria-controls="fundamentals-panel" aria-expanded="false" '
             'title="Open fundamentals">'
-            '<span class="fundamentals-toggle__icon" aria-hidden="true">ƒ</span>'
-            '<span>Fundamentals</span>'
-            "</button>"
+            '<span class="fundamentals-toggle__icon" aria-hidden="true">F</span>'
+            '<span>Fundamentals</span></button>'
+        )
+        fundamentals_drawer_html = (
+            '<div class="fundamentals-drawer" id="fundamentals-drawer">'
             '<button class="fundamentals-scrim" id="fundamentals-scrim" type="button" '
             'aria-label="Close fundamentals"></button>'
             '<aside class="fundamentals-panel" id="fundamentals-panel" '
@@ -868,13 +871,17 @@ def interactive_stock_chart_html(
             "</aside></div>"
         )
     valuation_drawer_html = ""
+    valuation_button_html = ""
     if monthly_valuations:
+        valuation_button_html = (
+            '<button class="chart-insight-button valuation-toggle" '
+            'id="valuation-toggle" type="button" '
+            'aria-controls="valuation-panel" aria-expanded="false" '
+            'title="Open monthly valuation chart">'
+            '<span aria-hidden="true">V</span><span>Valuation</span></button>'
+        )
         valuation_drawer_html = (
             '<div class="valuation-drawer" id="valuation-drawer">'
-            '<button class="valuation-toggle" id="valuation-toggle" type="button" '
-            'aria-controls="valuation-panel" aria-expanded="false" '
-            'title="Open monthly valuation chart"><span aria-hidden="true">◫</span>'
-            '<span>Valuation</span></button>'
             '<button class="valuation-scrim" id="valuation-scrim" type="button" '
             'aria-label="Close valuation chart"></button>'
             '<aside class="valuation-panel" id="valuation-panel" aria-hidden="true" inert>'
@@ -966,6 +973,18 @@ def interactive_stock_chart_html(
             '<span class="chart-watchlist-empty">'
             "Sign in to add stocks to a watchlist</span>"
             "</div></section>"
+        )
+    insight_buttons = fundamentals_button_html + valuation_button_html
+    if insight_buttons:
+        insight_controls_html = (
+            '<div class="chart-insight-actions" aria-label="Company insights">'
+            f"{insight_buttons}</div>"
+        )
+        closing_section = watchlist_controls_html.rfind("</section>")
+        watchlist_controls_html = (
+            watchlist_controls_html[:closing_section]
+            + insight_controls_html
+            + watchlist_controls_html[closing_section:]
         )
     previous_disabled = "" if has_previous else "disabled"
     next_disabled = "" if has_next else "disabled"
@@ -1819,6 +1838,66 @@ def interactive_stock_chart_html(
           color: #10243e;
           font-size: 10px;
         }}
+        .chart-insight-actions {{
+          display: flex;
+          align-items: center;
+          flex: 1 1 auto;
+          gap: 6px;
+          min-width: 0;
+        }}
+        .chart-insight-button,
+        .chart-insight-actions .fundamentals-toggle,
+        .chart-insight-actions .valuation-toggle {{
+          position: static;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 1 1 0;
+          gap: 5px;
+          min-width: 0;
+          min-height: 30px;
+          height: 30px;
+          padding: 4px 9px;
+          border-radius: 8px;
+          box-shadow: none;
+          cursor: pointer;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0;
+          line-height: 1;
+          pointer-events: auto;
+          transform: none;
+          writing-mode: horizontal-tb;
+        }}
+        .chart-insight-actions .fundamentals-toggle {{
+          border: 1px solid #7daebd;
+          background: #e9f6f8;
+          color: #10536a;
+        }}
+        .chart-insight-actions .valuation-toggle {{
+          border: 1px solid #9990df;
+          background: #f1efff;
+          color: #5148aa;
+        }}
+        .chart-insight-actions .fundamentals-toggle:hover,
+        .chart-insight-actions .valuation-toggle:hover {{
+          transform: none;
+          filter: brightness(.98);
+        }}
+        .chart-insight-button[aria-expanded="true"] {{
+          box-shadow: inset 0 0 0 1px currentColor;
+        }}
+        .chart-insight-actions .fundamentals-toggle__icon {{
+          width: 18px;
+          height: 18px;
+          flex: 0 0 18px;
+          font-size: 10px;
+        }}
+        .chart-watchlist-section {{
+          align-items: center;
+          flex-direction: row;
+          gap: 6px;
+        }}
         @media (max-width: 980px) {{
           .chart-header {{
             grid-template-columns: minmax(220px, 1fr) auto;
@@ -2034,13 +2113,21 @@ def interactive_stock_chart_html(
             flex: 0 0 auto;
             margin: 6px;
           }}
+          .chart-insight-actions {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }}
+          .chart-insight-button {{ width: 100%; }}
           .chart-footer {{
             order: 7;
           }}
-          .fundamentals-toggle,
-          .valuation-toggle {{
-            left: -1px;
-            border-left: 0;
+          .chart-shell {{
+            scrollbar-width: none;
+          }}
+          .chart-shell::-webkit-scrollbar {{
+            display: none;
+            width: 0;
+            height: 0;
           }}
         }}
         @media (orientation: landscape) and (max-height: 600px) {{
@@ -2093,8 +2180,6 @@ def interactive_stock_chart_html(
           .chart-legend {{ min-height:34px; padding:3px 6px; gap:6px; font-size:9px; }}
           #chart {{ min-height:0; }}
           .chart-footer {{ display:none; }}
-          .fundamentals-toggle {{ top:42%; left:0; min-height:78px; padding:7px 5px; }}
-          .valuation-toggle {{ top:70%; left:0; min-height:78px; padding:7px 5px; }}
           .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
           .valuation-chart-wrap, #valuation-chart {{ min-height:180px; height:calc(100dvh - 118px); }}
         }}
@@ -2437,6 +2522,9 @@ def interactive_stock_chart_html(
             if (!valuationDrawer || !valuationPanel) return;
             if (open && fundamentalsDrawer) setFundamentalsOpen(false);
             valuationDrawer.classList.toggle("is-open", open);
+            if (valuationToggle) {{
+              valuationToggle.setAttribute("aria-expanded", open ? "true" : "false");
+            }}
             valuationPanel.toggleAttribute("inert", !open);
             valuationPanel.setAttribute("aria-hidden", open ? "false" : "true");
             if (open) requestAnimationFrame(drawValuationChart);

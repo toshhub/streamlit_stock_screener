@@ -173,7 +173,11 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("Growth &amp; valuation snapshot", result)
         self.assertIn("Source: Screener.in", result)
         self.assertIn('class="fundamentals-drawer"', result)
-        self.assertIn('class="fundamentals-toggle"', result)
+        self.assertIn(
+            'class="chart-insight-button fundamentals-toggle"',
+            result,
+        )
+        self.assertIn('class="chart-insight-actions"', result)
         self.assertIn('aria-expanded="false"', result)
         self.assertIn('aria-hidden="true" inert', result)
         self.assertIn('class="fundamentals-panel"', result)
@@ -259,7 +263,9 @@ class InteractiveChartTests(unittest.TestCase):
             result,
         )
         self.assertIn("overflow-y: auto", result)
-        self.assertIn("left: -1px", result)
+        self.assertIn("scrollbar-width: none", result)
+        self.assertIn(".chart-shell::-webkit-scrollbar", result)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", result)
 
     def test_interactive_chart_can_add_stock_to_a_watchlist(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -314,6 +320,10 @@ class InteractiveChartTests(unittest.TestCase):
                 result = interactive_stock_chart_html("TEST", path)
 
         self.assertIn('data-valuation-metric="pe"', result)
+        self.assertIn(
+            'class="chart-insight-button valuation-toggle"',
+            result,
+        )
         self.assertIn('data-valuation-metric="sales"', result)
         self.assertIn('data-valuation-months="1"', result)
         self.assertIn('data-valuation-months="6"', result)

@@ -665,7 +665,17 @@ def run_interactive_chart_view():
     prefetch_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
+        html, body,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+        }
         .stMainBlockContainer {
+            width: 100% !important;
             max-width: none;
             padding: 0 !important;
         }

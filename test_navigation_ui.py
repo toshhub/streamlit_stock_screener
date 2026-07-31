@@ -122,6 +122,11 @@ class NavigationUiTests(unittest.TestCase):
         self.assertNotIn("chart-workspace-open", handler)
         self.assertNotIn("window.parent.postMessage", handler)
 
+    def test_embedded_chart_removes_the_outer_scrollbar_gutter(self):
+        self.assertIn('[data-testid="stMain"] {', self.app_source)
+        self.assertIn("overflow: hidden !important;", self.app_source)
+        self.assertIn("width: 100% !important;", self.app_source)
+
     def test_r2_startup_check_runs_once_and_skips_chart_requests(self):
         self.assertIn(
             "def request_startup_cache_sync_once(self, market):",
