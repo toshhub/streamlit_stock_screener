@@ -2111,13 +2111,24 @@ def interactive_stock_chart_html(
           .chart-watchlist-section {{
             order: 6;
             flex: 0 0 auto;
+            display: grid;
+            grid-template-columns: 30px minmax(0, 1fr);
+            width: calc(100% - 12px);
+            max-width: none;
             margin: 6px;
           }}
           .chart-insight-actions {{
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
+            width: 100%;
+            min-width: 0;
           }}
-          .chart-insight-button {{ width: 100%; }}
+          .chart-insight-button {{
+            width: 100%;
+            max-width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+          }}
           .chart-footer {{
             order: 7;
           }}

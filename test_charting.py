@@ -265,6 +265,11 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn("overflow-y: auto", result)
         self.assertIn("scrollbar-width: none", result)
         self.assertIn(".chart-shell::-webkit-scrollbar", result)
+        self.assertIn(
+            "grid-template-columns: 30px minmax(0, 1fr)",
+            result,
+        )
+        self.assertIn("width: calc(100% - 12px)", result)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", result)
 
     def test_interactive_chart_can_add_stock_to_a_watchlist(self):
