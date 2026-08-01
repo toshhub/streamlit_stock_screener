@@ -5070,3 +5070,329 @@ def sortable_results_table(
         key=component_key,
         default=None,
     )
+
+
+def results_style_chart_workspace(
+    chart_url,
+    *,
+    height=860,
+    initial_range="252",
+    initial_market="INDIA",
+    initial_symbol="",
+    market_symbols=None,
+    navigation_symbols=None,
+    navigation_index=-1,
+    component_key=None,
+):
+    """Render a searchable chart through the Results table component path."""
+    safe_url = json.dumps(str(chart_url or ""))
+    safe_range = json.dumps(str(initial_range or "252").lower())
+    safe_market = json.dumps(str(initial_market or "INDIA").upper())
+    safe_symbol = json.dumps(str(initial_symbol or "").strip().upper())
+    safe_market_symbols = json.dumps({
+        str(market or "").strip().upper(): [
+            str(symbol or "").strip().upper()
+            for symbol in (symbols or [])
+            if str(symbol or "").strip()
+        ]
+        for market, symbols in (market_symbols or {}).items()
+    })
+    safe_symbols = json.dumps([
+        str(symbol or "").strip().upper()
+        for symbol in (navigation_symbols or [])
+        if str(symbol or "").strip()
+    ])
+    try:
+        safe_index = int(navigation_index)
+    except (TypeError, ValueError):
+        safe_index = -1
+    workspace_html = f"""
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        html, body {{
+          width: 100%; height: 100%; margin: 0; border: 0;
+          overflow: hidden; background: #fff;
+        }}
+        body {{ color: #17324d; font: 14px Inter, system-ui, sans-serif; }}
+        .chart-search {{
+          display: grid; grid-template-columns: minmax(130px, .55fr) minmax(220px, 1.8fr) auto;
+          gap: 10px; align-items: end; padding: 8px 10px 10px;
+          border-bottom: 1px solid #dbe6ee; background: #f8fbfd;
+        }}
+        .chart-search label {{ display: grid; gap: 4px; font-size: 12px; font-weight: 750; }}
+        .symbol-field {{ position: relative; }}
+        .chart-search select, .chart-search input {{
+          min-height: 40px; box-sizing: border-box; padding: 8px 10px;
+          border: 1px solid #bdceda; border-radius: 9px; background: #fff;
+          color: #17324d; font: inherit;
+        }}
+        .chart-search button {{
+          min-height: 40px; padding: 8px 18px; border: 1px solid #176b87;
+          border-radius: 9px; background: #176b87; color: #fff; font-weight: 800;
+          cursor: pointer;
+        }}
+        .symbol-suggestions {{
+          position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0;
+          display: none; max-height: 260px; overflow-y: auto; padding: 4px;
+          border: 1px solid #bdceda; border-radius: 9px; background: #fff;
+          box-shadow: 0 12px 28px rgba(23, 50, 77, .16);
+        }}
+        .symbol-suggestions.open {{ display: block; }}
+        .symbol-suggestion {{
+          display: block; width: 100%; min-height: 34px; padding: 7px 9px;
+          border: 0; border-radius: 6px; background: transparent; color: #17324d;
+          text-align: left; font: inherit; font-weight: 700; cursor: pointer;
+        }}
+        .symbol-suggestion:hover, .symbol-suggestion.active {{ background: #e9f4f7; }}
+        #chart-workspace-frame {{
+          display: none; width: 100%; height: calc(100% - 68px); min-height: 600px;
+          margin: 0; border: 0; background: #fff;
+        }}
+        #chart-placeholder {{
+          display: grid; place-items: center; min-height: 420px; color: #61778b;
+          text-align: center;
+        }}
+        @media (max-width: 640px) {{
+          .chart-search {{ grid-template-columns: 1fr; }}
+          #chart-workspace-frame {{ height: calc(100% - 184px); }}
+        }}
+      </style>
+    </head>
+    <body>
+      <form class="chart-search" id="chart-search-form">
+        <label>Market
+          <select id="chart-market">
+            <option value="INDIA">India</option>
+            <option value="US">United States</option>
+          </select>
+        </label>
+        <label class="symbol-field">Stock name
+          <input id="chart-symbol" type="text" autocomplete="off"
+            autocapitalize="characters" spellcheck="false"
+            role="combobox" aria-autocomplete="list" aria-expanded="false"
+            aria-controls="chart-symbol-suggestions"
+            placeholder="Type a stock symbol, for example RELIANCE">
+          <div id="chart-symbol-suggestions" class="symbol-suggestions"
+            role="listbox" aria-label="Stock suggestions"></div>
+        </label>
+        <button type="submit">Open chart</button>
+      </form>
+      <div id="chart-placeholder">Type a stock symbol above to open its chart.</div>
+      <iframe id="chart-workspace-frame" title="Chart workspace"
+        loading="eager" allow="fullscreen; screen-orientation"
+        allowfullscreen webkitallowfullscreen></iframe>
+      <script>
+        (function() {{
+          var frame = document.getElementById("chart-workspace-frame");
+          var placeholder = document.getElementById("chart-placeholder");
+          var form = document.getElementById("chart-search-form");
+          var marketInput = document.getElementById("chart-market");
+          var symbolInput = document.getElementById("chart-symbol");
+          var suggestions = document.getElementById("chart-symbol-suggestions");
+          var chartUrl = {safe_url};
+          var activeRange = {safe_range};
+          var activeMarket = {safe_market};
+          var activeSymbol = {safe_symbol};
+          var marketSymbols = {safe_market_symbols};
+          var navigationSymbols = {safe_symbols};
+          var navigationIndex = {safe_index};
+          var suggestionIndex = -1;
+          var loaded = false;
+          var visibilityTimer = null;
+
+          marketInput.value = activeMarket === "US" ? "US" : "INDIA";
+          symbolInput.value = activeSymbol;
+
+          function symbolsForSelectedMarket() {{
+            return marketSymbols[marketInput.value] || [];
+          }}
+
+          function closeSuggestions() {{
+            suggestions.classList.remove("open");
+            suggestions.innerHTML = "";
+            symbolInput.setAttribute("aria-expanded", "false");
+            suggestionIndex = -1;
+          }}
+
+          function chooseSuggestion(symbol) {{
+            symbolInput.value = symbol;
+            closeSuggestions();
+            openSymbol(symbol, marketInput.value);
+          }}
+
+          function renderSuggestions() {{
+            var query = String(symbolInput.value || "").trim().toUpperCase();
+            if (!query) {{ closeSuggestions(); return; }}
+            var matches = symbolsForSelectedMarket()
+              .filter(function(symbol) {{ return symbol.indexOf(query) >= 0; }})
+              .sort(function(left, right) {{
+                var leftPrefix = left.startsWith(query) ? 0 : 1;
+                var rightPrefix = right.startsWith(query) ? 0 : 1;
+                return leftPrefix - rightPrefix || left.localeCompare(right);
+              }})
+              .slice(0, 12);
+            if (!matches.length) {{ closeSuggestions(); return; }}
+            suggestions.innerHTML = matches.map(function(symbol, index) {{
+              return '<button type="button" class="symbol-suggestion" role="option" ' +
+                'data-symbol="' + symbol.replace(/&/g, "&amp;").replace(/"/g, "&quot;") +
+                '" data-index="' + index + '">' + symbol + '</button>';
+            }}).join("");
+            suggestions.classList.add("open");
+            symbolInput.setAttribute("aria-expanded", "true");
+            suggestionIndex = -1;
+            suggestions.querySelectorAll(".symbol-suggestion").forEach(function(button) {{
+              button.addEventListener("mousedown", function(event) {{
+                event.preventDefault();
+                chooseSuggestion(button.getAttribute("data-symbol"));
+              }});
+            }});
+          }}
+
+          function moveSuggestion(offset) {{
+            var items = Array.from(suggestions.querySelectorAll(".symbol-suggestion"));
+            if (!items.length) return;
+            suggestionIndex = Math.max(
+              0,
+              Math.min(items.length - 1, suggestionIndex + offset)
+            );
+            items.forEach(function(item, index) {{
+              item.classList.toggle("active", index === suggestionIndex);
+            }});
+            items[suggestionIndex].scrollIntoView({{block: "nearest"}});
+          }}
+
+          function visible() {{
+            try {{
+              return !window.frameElement || Boolean(
+                window.frameElement.offsetWidth
+                || window.frameElement.offsetHeight
+                || window.frameElement.getClientRects().length
+              );
+            }} catch (error) {{ return true; }}
+          }}
+
+          function loadChart() {{
+            if (loaded || !chartUrl || !visible()) return;
+            loaded = true;
+            placeholder.style.display = "none";
+            frame.style.display = "block";
+            frame.src = chartUrl;
+            if (visibilityTimer !== null) {{
+              window.clearInterval(visibilityTimer);
+              visibilityTimer = null;
+            }}
+          }}
+
+          function directChartUrl(symbol, market) {{
+            var params = new URLSearchParams();
+            params.set("interactive_chart", symbol);
+            params.set("market", market);
+            params.set("embedded", "1");
+            params.set("embed_height", "820");
+            params.set("range", activeRange);
+            return "?" + params.toString();
+          }}
+
+          function openSymbol(symbol, market) {{
+            var cleanSymbol = String(symbol || "").trim().toUpperCase();
+            var cleanMarket = String(market || "INDIA").toUpperCase() === "US"
+              ? "US" : "INDIA";
+            if (!cleanSymbol) {{ symbolInput.focus(); return; }}
+            activeSymbol = cleanSymbol;
+            activeMarket = cleanMarket;
+            symbolInput.value = cleanSymbol;
+            marketInput.value = cleanMarket;
+            navigationIndex = navigationSymbols.indexOf(cleanSymbol);
+            if (navigationIndex < 0) {{
+              navigationSymbols = [cleanSymbol];
+              navigationIndex = 0;
+            }}
+            chartUrl = directChartUrl(cleanSymbol, cleanMarket);
+            loaded = false;
+            loadChart();
+          }}
+
+          function closeChart() {{
+            loaded = false;
+            chartUrl = "";
+            frame.removeAttribute("src");
+            frame.style.display = "none";
+            placeholder.style.display = "grid";
+            symbolInput.focus();
+          }}
+
+          form.addEventListener("submit", function(event) {{
+            event.preventDefault();
+            openSymbol(symbolInput.value, marketInput.value);
+          }});
+          symbolInput.addEventListener("input", renderSuggestions);
+          symbolInput.addEventListener("focus", renderSuggestions);
+          symbolInput.addEventListener("keydown", function(event) {{
+            if (event.key === "ArrowDown") {{
+              event.preventDefault(); moveSuggestion(1); return;
+            }}
+            if (event.key === "ArrowUp") {{
+              event.preventDefault(); moveSuggestion(-1); return;
+            }}
+            if (event.key === "Escape") {{ closeSuggestions(); return; }}
+            if (event.key === "Enter" && suggestionIndex >= 0) {{
+              var active = suggestions.querySelectorAll(".symbol-suggestion")[suggestionIndex];
+              if (active) {{
+                event.preventDefault();
+                chooseSuggestion(active.getAttribute("data-symbol"));
+              }}
+            }}
+          }});
+          symbolInput.addEventListener("blur", function() {{
+            window.setTimeout(closeSuggestions, 100);
+          }});
+          marketInput.addEventListener("change", function() {{
+            activeMarket = marketInput.value;
+            closeSuggestions();
+            symbolInput.select();
+          }});
+
+          window.addEventListener("message", function(event) {{
+            var message = event && event.data || {{}};
+            if (message.source !== "nse-interactive-chart") return;
+            if (message.action === "range-change") {{
+              var nextRange = String(message.range || "").toLowerCase();
+              if (["126", "252", "756", "all"].includes(nextRange)) {{
+                activeRange = nextRange;
+              }}
+              return;
+            }}
+            if (message.action === "close") {{ closeChart(); return; }}
+            if (["symbol-select", "symbol-search"].includes(message.action)) {{
+              openSymbol(message.symbol, activeMarket);
+              return;
+            }}
+            if (["previous", "next"].includes(message.action)) {{
+              var offset = message.action === "next" ? 1 : -1;
+              var nextIndex = navigationIndex + offset;
+              if (nextIndex >= 0 && nextIndex < navigationSymbols.length) {{
+                navigationIndex = nextIndex;
+                openSymbol(navigationSymbols[nextIndex], activeMarket);
+              }}
+            }}
+          }});
+
+          loadChart();
+          if (chartUrl && !loaded) {{
+            visibilityTimer = window.setInterval(loadChart, 200);
+          }}
+        }})();
+      </script>
+    </body>
+    </html>
+    """
+    return _ALERT_TABLE_COMPONENT(
+        table_html=workspace_html,
+        default_height=height,
+        key=component_key,
+        default=None,
+    )

@@ -1,626 +1,325 @@
-# NSE Stock Screener - Project Architecture
+# Stock Screener: Canonical Architecture and Engineering Guide
 
-This project is a Streamlit app for downloading NSE stock price data from Yahoo Finance, screening stocks using configurable moving-average filter sets, viewing filtered results, and emailing those results as a CSV attachment.
+This is the canonical development document for the application. Read it before
+changing or diagnosing the app. `AGENTS.md` defines the required reading order
+for future Codex work.
 
-The main app entry point is `app.py`.
+Last architecture review: 2026-08-01.
 
-## High-Level Purpose
+## Product scope
 
-The app supports this workflow:
+The project is a Streamlit stock-screening and analysis application supporting
+Indian and US markets. Its primary feature set is:
 
-1. Select India or US in the Data Management tab. Default is India.
-2. Upload or keep the default India market-cap Excel file, or use the US Nasdaq CSV file.
-3. Download historical data for symbols from the selected market using `yfinance`.
-4. Screen downloaded stock JSON files using user-selected filter sets.
-5. Optionally generate price/MA charts for matched stocks.
-6. View filtered results in the app.
-7. Download results as CSV or email the CSV through Gmail SMTP.
+1. Data management and server-cache visibility.
+2. Configurable technical, price-action, pattern, and valuation screening.
+3. Historical backtesting of saved filter sets.
+4. Results tables with sortable metrics, static chart previews, and fast
+   interactive charts.
+5. A dedicated searchable interactive Chart workspace.
+6. Authenticated personal watchlists.
+7. Authenticated price alerts with automatic and manual cached-candle checks.
+8. Historical fundamentals and valuation comparisons.
 
-## Main Files
+The seven main tabs are Data, Screener, Backtest, Results, Chart, Watchlists,
+and Alerts. The labels and indexes are defined by `MAIN_TAB_LABELS` in `app.py`.
 
-### `app.py`
+## Runtime architecture
 
-Streamlit UI and orchestration layer.
+### Streamlit application
 
-Responsibilities:
+`app.py` is the UI controller and request router. It initializes cloud storage,
+authentication, R2 cache synchronization, application state, and the seven tab
+workspaces.
 
-- Starts every main tab directly with its workspace-specific banner instead of
-  repeating a global product banner.
-- Shows compact signed-in user details and the login/logout action inside each
-  workspace banner, with responsive wrapping for phone layouts.
-- Defines the page layout and four tabs:
-  - `Data`
-  - `MA Screener`
-  - `Pattern Screener`
-  - `Results`
-- Loads persisted UI settings from `storage.py`.
-- Saves latest UI values back to settings as users interact with the app.
-- Handles Excel upload/replacement.
-- Handles market selection in Data Management:
-  - India uses `data/excel/MCAP_JUGAAD.xlsx`.
-  - US uses `data/excel/nasdaq_screener_1784114565446.csv`.
-- Starts top-1000 stock data download.
-- Displays download progress bar and live count.
-- Displays last stock download timestamp in the Data tab.
-- Runs the MA screener over downloaded JSON files using the selected filter set.
-- Displays screener progress bar and live count.
-- Optionally creates chart PNGs for matched stocks during screening.
-- Stores screener results in `st.session_state["results"]`.
-- For authenticated users, upserts the latest screener rows and run metadata
-  into the private Supabase `user_screener_results` row for that user.
-- Automatically switches to the Results tab after a completed Run Screener.
-- Supports protected external cron calls:
-  - `?ping=1&token=...`
-  - `?scheduled_download=1&token=...`
-- Shows results table, hover charts when available, and CSV download button.
-- Provides Gmail email form and sends results CSV using `emailer.py`.
+Streamlit evaluates normal tab bodies during an app run. Consequently, hidden
+tabs must not perform avoidable network calls, chart generation, or other heavy
+work. Main tabs deliberately use `on_change="ignore"` so merely selecting a tab
+does not rerun the entire application.
 
-### `config.py`
+Use Streamlit reruns for genuine server-state transitions only. Do not use them
+for tab selection, chart-range changes, autocomplete, chart navigation, or
+other interactions that can remain within a browser component.
 
-Central path configuration.
+### Canonical candle storage
 
-Defines:
-
-- `BASE_DIR`
-- `DATA_DIR`
-- `EXCEL_DIR`
-- `INDIA_DATA_DIR`
-- `DAILY_DIR`
-- `US_DAILY_DIR`
-- `WEEKLY_DIR`
-- `MONTHLY_DIR`
-- `CHARTS_DIR`
-- `META_DIR`
-
-It also creates these folders at import time with `mkdir(parents=True, exist_ok=True)`.
-
-### `downloader.py`
-
-Stock data download and Excel symbol extraction logic.
-
-Key objects/functions:
-
-- `TIMEFRAME_CONFIG`
-  - India `DAY`: interval `1d`, period `10y`, output folder `data/india/daily`
-  - US `DAY`: interval `1d`, period `10y`, output folder `data/us/daily`
-- `MARKET_INDIA` and `MARKET_US`
-  - Supported market IDs saved in settings.
-- `flatten_columns(df)`
-  - Handles yfinance MultiIndex columns.
-- `yfinance_symbol(symbol, market)`
-  - Appends `.NS` for India.
-  - Uses plain symbols for US.
-- `download_symbol(symbol, interval, period, out_file, market=...)`
-  - Downloads one symbol for the selected market.
-  - Incrementally loads the existing per-stock JSON file.
-  - Requests only missing candles after the latest saved date when possible.
-  - Merges, de-duplicates by `Date`, and atomically saves records to JSON.
-  - Keeps a rolling ten years of daily candles.
-  - Returns a status dictionary with `Downloaded`, `Rows Added`, and `Status`.
-- `timeframe_config(timeframe)`
-  - Returns the config for `DAY`, `WEEK`, or `MONTH`.
-- `clean_symbol(value)`
-  - Cleans Excel ticker values for yfinance/NSE use.
-- `find_column(columns, required_terms, optional_terms=None)`
-  - Helps detect symbol and market-cap columns in the Excel file.
-- `load_top_symbols(symbols_file, limit=1000, market=...)`
-  - Reads Excel or CSV with pandas.
-  - Finds a symbol column.
-  - Sorts by market-cap-like column if found.
-  - Returns unique symbols up to the requested limit.
-- `download_top_stocks(symbols_file, timeframe, limit=1000, progress_callback=None, market=...)`
-  - Downloads data for top symbols.
-  - Writes JSON files into timeframe-specific folder.
-  - Calls `progress_callback(index, total, downloaded_count, symbol)` after each stock.
-- `data_availability_summary(directory, market=...)`
-  - Reads the consolidated latest-value snapshot for fast status rendering.
-  - Reconciles stock files written after that snapshot so the displayed market
-    date is always the newest candle date actually available.
-  - The background downloader refreshes the consolidated snapshot after each
-    completed daily download.
-
-Important storage note:
-
-- Keep downloaded price data as one JSON file per stock per timeframe.
-- Do not replace this with one large JSON keyed by stock name unless there is a strong measured reason.
-- One-file-per-stock keeps updates independent, reduces corruption blast radius, and keeps screening/backtesting simple.
-- If faster status checks are needed, prefer adding a small manifest/index file with each symbol's latest date and row count.
-
-### `screener.py`
-
-Moving-average screening logic.
-
-Key functions:
-
-- `DEFAULT_FILTER_SET`
-  - Defines the default dynamic filter list.
-- `FILTER_TYPE_LABELS`
-  - Maps internal filter type IDs to UI labels.
-- `FILTER_TYPE_DEFAULTS`
-  - Defines the default params for each filter category.
-- Custom expression filters are regular, repeatable filter rows (`custom_expression`).
-  - Each row stores one expression in `params.expression` and is saved with the rest of the current filter set.
-  - Separately stored legacy expressions are migrated into Custom Filter rows when settings or favorites are loaded.
-  - Candle expressions support `Candle[0]`, negative historical offsets, inclusive ranges such as `Candle[0..-4]`, OHLC fields, and `IsGreen()`.
-
-Backtest sell strategies provide optional Target and Stop Loss expressions. Percentage-only values are relative to the buy price; candle expressions are anchored to the buy date. SMA- and market-value-based Stop Loss expressions are recalculated on every future candle while their `Candle[...]` references remain anchored to the buy candle. Trades use the corresponding candle's High/Low touch by default or Close when Closing Basis is enabled, and realized returns are averaged with equal stock weights. An optional Backtest-wide Green Candle toggle limits every selected strategy to stocks whose Buy Date Close is greater than Open. Per-stock charts show ten available trading candles before the buy date through ten after the requested end date. Both static and interactive views mark the buy and booked exit; the interactive view also overlays the evaluated Buy, Target, and Stop Loss price lines and every MA period required by that favorite strategy, including MA references in Custom Filters.
-- `long_ma_rising_from_two_bars_back(series)`
-  - Long MA is considered rising if current Long MA is greater than the Long MA value from two rows/candles back.
-  - Also returns the rising-rate percent between those two values.
-- `pct_close_to_ma(price, moving_average)`
-  - Calculates absolute percentage distance from price to MA.
-- `crossed_up(short_ma, long_ma, lookback_days)`
-  - Detects whether Short MA crossed above Long MA within the last N rows/candles.
-- `long_ma_down_from_max(series, down_pct, lookback_units)`
-  - Checks whether the current Long MA is down at least the requested percent from its max value over the last M rows/candles.
-- `required_ma_periods(filter_set)`
-  - Collects the MA periods needed by enabled filters.
-- `normalize_filter_set(filter_set)`
-  - Merges a user/favorite filter set with defaults.
-- `screen_json_file(...)`
-  - Reads one downloaded stock JSON file.
-- Builds all SMA columns required by enabled filters.
-- Emits a sortable `ROI{period}` value when a `price_near_long` filter is active; this matches the Custom Filter `ROI(period)` calculation and measures the SMA percentage change from the previous trading candle.
-  - Applies every enabled filter in the selected filter set.
-  - Returns a result dictionary only if the stock matches all enabled filters.
-  - Returns `None` if it does not match or does not have enough data.
-
-Current filter blocks:
-
-- MA Rising:
-  - Current MA is greater than the same MA value from two rows/candles back.
-- Short MA Above Long MA:
-  - Current Short MA is greater than current Long MA.
-- Current Price Near And Above Long MA:
-  - Current price is above or equal to Long MA.
-  - Current price is within the UI-provided percent of Long MA.
-- Golden Cross:
-  - Short MA crossed above Long MA within the last N timeframe units.
-- Long MA Down From Recent Max:
-  - Current Long MA is down at least m percent from its max value over the last M timeframe units.
-
-Filter-set behavior:
-
-- Users can add any filter category any number of times.
-- Each added filter becomes its own filter instance with its own field values.
-- Stocks must satisfy all added filters.
-- Favorite filter sets save the exact list of added filter instances and their field values.
-
-Result fields include:
-
-- `Symbol`
-- `Price`
-- `SMA{short_ma}`
-- `SMA{long_ma}`
-- `MatchedFilters`
-- `MARising`
-- `MARisingRatePct`
-- `ShortMAAboveLongMA`
-- `PercentCloseToLongMA`
-- `PriceNearAndAboveLongMA`
-- `GoldenCross`
-- `LongMADownFromMaxPct`
-- `LongMADownFromMax`
-
-### `storage.py`
-
-Small JSON settings persistence layer.
-
-Settings file:
+Cloudflare R2 is the deployed source of truth for candles. The remote layout is:
 
 ```text
-data/metadata/app_settings.json
+stock-data/
+  manifest.json
+  india/yearly/YYYY.parquet
+  india/current/YYYY-MM.json
+  us/yearly/YYYY.parquet
+  us/current/YYYY-MM.json
 ```
 
-Functions:
-
-- `load_settings()`
-  - Reads the JSON file if present.
-  - Returns `{}` if missing.
-- `save_settings(data)`
-  - Writes settings JSON.
-- `update_settings(data)`
-  - Loads existing settings.
-  - Merges new values.
-  - Saves the merged result.
-
-Persisted values currently include:
-
-- Selected market (`INDIA` or `US`).
-- Download timeframe.
-- Last download timestamp.
-- Last download timeframe.
-- Screener timeframe.
-- Current dynamic screener filter list.
-- Favorite screener filter sets.
-- Selected favorite screener filter set.
-- Gmail ID.
-- Recipient email.
-- Email subject.
-- Email message body.
+`r2_stock_data.py` owns manifest validation, downloads, revisions, atomic local
+cache activation, and local per-symbol materialization.
 
-Important: Gmail App Password is intentionally not saved.
+The Streamlit server uses two forms of local materialized cache:
 
-### `emailer.py`
+- Market Parquet data for bulk screening and cache-aware processing.
+- Ten-year per-symbol Parquet files for charts, backtests, and alert checks.
 
-Gmail SMTP email helper.
+Existing per-symbol JSON support is retained for local/downloader compatibility,
+but new deployed features must treat R2 plus the active local materialization as
+canonical. Read `STOCK_DATA_ARCHITECTURE.md` before changing this subsystem.
 
-Function:
+### Stock universes
 
-- `send_results_email(sender_email, app_password, recipient_email, subject, body, csv_data)`
+- India source universe: `data/excel/MCAP_JUGAAD.xlsx`.
+- US source universe: `data/excel/nasdaq_screener_1784114565446.csv`.
+- The cached R2 manifest also contains the currently available symbol list for
+  each market.
 
-Behavior:
+Market identifiers are `INDIA` and `US`. Normalize them through existing helper
+functions instead of duplicating normalization logic.
 
-- Creates an `EmailMessage`.
-- Attaches screener results as `stock_screener_results.csv`.
-- Sends via Gmail SMTP over SSL:
+## Interactive chart architecture
 
-```text
-smtp.gmail.com:465
-```
+Interactive charts have one canonical server route and one shared component
+stack.
 
-Users should use a Gmail App Password, not their normal Gmail password.
+### Canonical route
 
-### `charting.py`
+- `chart_context.interactive_chart_query()` builds chart query strings.
+- `app.run_interactive_chart_view()` handles `interactive_chart` requests early
+  and stops the normal app execution path.
+- The isolated route loads only the selected symbol, cached fundamentals,
+  valuation data, watchlist context, and alert markers needed by that chart.
+- `charting.render_interactive_stock_chart()` renders the candle chart and its
+  controls.
 
-Chart generation and hover-table rendering.
+Never render the full interactive chart inline inside the normal seven-tab app
+run. Doing so causes chart events to rebuild every tab and was the root cause of
+historically slow, repeatedly refreshing Chart-tab behavior.
 
-Key functions:
+### Results and Alerts
 
-- `create_stock_chart(json_path, filter_set, output_dir=CHARTS_DIR, max_points=260)`
-  - Reads the downloaded stock JSON file.
-  - Computes all MA periods required by the selected filter set.
-  - Creates a PNG chart with Close price plus each selected MA line.
-  - Uses different colors for different MA lines.
-  - Saves charts in `data/charts/`.
-- `results_hover_table_html(df)`
-  - Builds an HTML results table.
-  - When a row has `ChartPath`, hovering the stock symbol displays the chart.
-- `interactive_stock_chart_html(...)` and `render_interactive_stock_chart(...)`
-  - Provide the shared candlestick renderer used by Results, Alerts,
-    Watchlists, and Backtest entry points.
-  - Render every active alert for the current user that matches the chart's
-    market and symbol, including its target-price line and creation marker.
-  - Provide a shared bottom navigation bar with symbol lookup, table-aware
-    previous/next states, close, and fullscreen/restore controls.
-  - Fullscreen requests landscape orientation where the browser supports the
-    Screen Orientation API and otherwise still expands to the available screen.
-  - Do not add earnings or dividend event markers.
+`charting.sortable_results_table()` uses the declared Results/Alerts component
+and `results_hover_table_html()`.
 
-### `chart_context.py`
+Interactive chart icons create an eager iframe pointing at the canonical
+embedded chart route. Opening, navigating, zooming, and changing ranges occurs
+inside browser-side JavaScript and must not rerun Streamlit.
 
-Pure shared helpers for interactive-chart URLs and alert context.
+Static PNG chart paths are passed through `ChartPath`. Results and Alerts share
+the same table renderer and therefore share chart previews and PE-based row
+coloring.
 
-- `interactive_chart_query(...)` creates the canonical chart URL for every
-  caller instead of duplicating query-parameter construction.
-- `active_alert_markers(...)` filters and normalizes the current user's cached
-  alert snapshot for a single market and symbol.
-- `chart_alert_context(...)` merges a selected historical alert with active
-  markers without drawing duplicates.
+### Dedicated Chart tab
 
-Streamlit note: `st.dataframe` does not support custom hover popups, so chart-enabled results use an HTML table rendered through `st.markdown(..., unsafe_allow_html=True)`.
+`charting.results_style_chart_workspace()` is the standalone Chart-tab entry to
+the same component stack used by Results. `app.py` supplies any initial chart
+context, cached market symbol lists, and optional navigation context.
 
-### `requirements.txt`
+The Chart tab's Market selector, Stock name input, autocomplete, chart opening,
+range changes, close behavior, and in-chart symbol navigation are browser-side.
+Typing or selecting a symbol directly changes the embedded iframe URL. It must
+not call `st.rerun()`, poll the server, or rebuild the main app.
 
-Deployment dependencies:
+Autocomplete lists come from the local cached R2 manifest. Filtering happens
+locally on each input event, prefix matches rank first, and only the first 12
+matches are rendered. This keeps suggestions instantaneous without polling.
 
-```text
-streamlit
-yfinance
-pandas
-openpyxl
-matplotlib
-```
+Performance invariants for every chart change:
 
-Earlier unused heavy packages were removed to make Streamlit Cloud deployment simpler.
+- Results, Alerts, and Chart must use `interactive_chart_query()` and the
+  isolated embedded route.
+- Do not introduce a second interactive renderer.
+- Do not fetch candle history from the browser when the server cache already
+  contains it.
+- Do not add Streamlit widgets whose change callbacks are required merely to
+  choose or navigate a chart.
+- Keep component keys stable so unchanged iframes survive unrelated app reruns.
+- Hidden Chart content must not initiate unnecessary chart requests.
 
-### `.gitignore`
+## Screening and backtesting
 
-Ignores generated/runtime files:
+`screener.py` defines filter labels, defaults, normalization, required moving
+averages, data loading, and filter evaluation. Expensive valuation work is
+deferred until cheaper filters pass where possible.
 
-- Python cache files.
-- Virtual environments.
-- Versioned stock JSON data:
-  - `data/india/daily/*.json`
-  - `data/us/daily/*.json`
-- Generated charts.
-- Local metadata/settings.
-- Local Streamlit secrets file.
+`pattern.py` evaluates custom expressions through a restricted AST. Never expose
+arbitrary Python execution. Update validation, runtime context, and UI help
+together when adding expression features.
 
-## Data Folders
+`backtest.py` owns historical entry/exit and portfolio calculations. Backtest
+charts and result navigation should reuse existing chart helpers rather than
+creating another candle-loading path.
 
-### `data/excel/`
+The live screener uses background workers and event queues. Matching rows can be
+published before optional static chart generation completes. Preserve this
+progressive-results behavior.
 
-Holds the market-cap Excel file.
+## Fundamentals and valuation
 
-Default expected filename:
+`monthly_valuation_update.py` collects monthly Screener.in valuation history and
+fundamentals. The monthly GitHub workflow persists:
 
-```text
-data/excel/MCAP_JUGAAD.xlsx
-```
+- `data/metadata/monthly_valuations.parquet`
+- `data/metadata/screener_fundamentals.json`
 
-Behavior:
+`market_snapshots.py` hydrates result rows with current PE and historical
+3-year, 5-year, and 10-year PE medians from local data. `fundamentals.py`
+provides cached company growth and valuation payloads.
 
-- If this file exists, the Data tab shows it as the default Excel.
-- User can upload a new `.xlsx` file to replace it.
-- The app keeps using the previous/default Excel until a new one is uploaded.
+`charting.historical_pe_valuation_state()` drives valuation presentation:
 
-### `data/india/daily/`
+- Favorable/green when current PE is below the relevant historical reference.
+- Unfavorable/red when current PE is above it.
+- Neutral when the comparison is unavailable.
 
-Stores one ten-year daily JSON candle file per India stock.
+Results and Alerts must pass both `PE Ratio` and `ValuationMedians` to the shared
+table renderer for consistent styling.
 
-### `data/us/daily/`
+## Price-alert architecture
 
-Stores one ten-year daily JSON candle file per US stock.
+### Ownership and persistence
 
-### `data/metadata/`
+Authenticated alerts are stored in Supabase `public.user_alerts` and scoped by
+`user_id`. `cloud_storage.py` provides user-scoped UI operations plus server-side
+cron queries. Guest alert writes are disabled when authenticated cloud storage
+is required.
 
-Stores app settings in `app_settings.json`.
+An alert records its symbol, market, target and reference prices, direction,
+status, creation/check dates, trigger candle/date, and acknowledgement state.
 
-This is local persistence for user-entered UI values and last download timestamp.
+### Trigger semantics
 
-## UI Tab Details
+`price_alerts._evaluate_alerts()` is the shared evaluator. Only candles after
+the alert's trigger boundary are eligible. An above alert triggers when a future
+candle reaches the target through its High; a below alert uses its Low. Changed
+alerts update `last_checked_date`; triggered alerts record the triggering candle
+date and become `Triggered`.
 
-### Data Tab
+Do not create a second trigger algorithm. Cron, symbol checks, and manual refresh
+must all use the shared evaluator.
 
-Controls:
+### Automatic cron triggering
 
-- Market selector:
-  - `India`
-  - `US`
-- Last stock data download timestamp display.
-- Download timeframe selectbox:
-  - `DAY`
-  - `WEEK`
-  - `MONTH`
-- Default Excel status.
-- Replace Excel file uploader.
-- Download Top 1000 Stocks button.
+`.github/workflows/streamlit-cron.yml` runs `daily_update.py` twice daily:
 
-Download behavior:
+- 11:30 UTC (17:00 IST), after the Indian close.
+- 23:30 UTC (05:00 IST the following day), after the completed US session.
 
-- Reads `MCAP_JUGAAD.xlsx` for India or `nasdaq_screener_1784114565446.csv` for US.
-- Finds/sorts symbols by market cap if a market-cap-like column exists.
-- Downloads each symbol using yfinance.
-- India symbols use the `.NS` suffix.
-- US symbols use no suffix.
-- India data is stored in `data/india/daily`.
-- US data is stored in `data/us/daily`.
-- Shows progress bar.
-- Shows live text like:
+The job updates candles and R2 snapshots, loads active Supabase alerts by market,
+evaluates them against downloaded candles, and persists changed rows. It needs
+R2 credentials plus `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` as GitHub
+Actions secrets. Never place these values in source or documentation.
 
-```text
-Downloaded 37 of 1000 stocks. Processing 42/1000: RELIANCE
-```
+### Manual refresh and Alerts UI
 
-- Saves last download timestamp after completion.
+The Alerts tab's **Refresh Alerts** button calls
+`price_alerts.refresh_price_alerts_from_cache()`. It loads only the current
+authenticated user's active alerts, reads already materialized daily candles,
+uses the shared evaluator, and persists only that user's changed alerts.
 
-### MA Screener Tab
+The Alerts tables use the Results table renderer. They include PE valuation
+coloring and reusable static chart previews. Static chart generation should
+occur only when needed and should reuse valid cached PNGs.
 
-Controls:
+Alert UI groups are:
 
-- Favorite Filter Set selector.
-- Timeframe selectbox:
-  - `DAY`
-  - `WEEK`
-  - `MONTH`
-- Add Filter dropdown.
-- Dynamically added filter sections.
-- Remove Filter button for each added filter.
-- Favorite Filter Sets save/remove controls.
-- Create charts for matched stocks checkbox.
-- Run Screener button.
+- Active Alerts: monitoring.
+- New Alerts: triggered and not acknowledged.
+- Old Alerts: triggered and acknowledged.
 
-Market behavior:
+## Authentication and personal cloud data
 
-- No market selector is shown here.
-- Screener uses the market selected in Data Management.
-- P/E lookup appends `.NS` and can use Screener.in fallback for India.
-- P/E lookup uses plain Yahoo symbols and skips Screener.in fallback for US.
+`user_auth.py` manages Google login. `cloud_storage.py` is the Supabase boundary.
+The schema is in `supabase_schema.sql`.
 
-Validation:
+Authenticated personal data includes settings, favorite filters, watchlists,
+alerts, and the latest screener result. Shared candle data and shared filter
+definitions are not user-owned.
 
-- At least one filter must be added.
-- Short MA must be less than Long MA in filters that compare or cross short/long MAs.
+All personal reads and writes must remain scoped by `user_id`. The Supabase
+service-role key is server-only. Read `CLOUD_SETUP.md` and the schema before
+changing authentication or personal persistence.
 
-Run behavior:
+## Scheduled workflows
 
-- Scans JSON files from the timeframe-specific folder.
-- Requires every added filter in the selected filter set to pass.
-- If chart creation is enabled, matched stocks get a `ChartPath` pointing to a generated PNG.
-- Shows progress bar.
-- Shows live text like:
+### Daily candles and alerts
 
-```text
-Screened 120 of 1000 stocks. Matches found: 8. Processing: RELIANCE
-```
+`.github/workflows/streamlit-cron.yml` executes `daily_update.py` twice daily and
+does not commit candle data to Git. R2 is the output store.
 
-- Saves matches into `st.session_state["results"]`.
+### Monthly valuation history
 
-### Pattern Screener Tab
+`.github/workflows/monthly-valuations.yml` runs on the second day of each month,
+updates the consolidated valuation/fundamental files, and commits those data
+artifacts when changed.
 
-Placeholder tab.
+Workflow changes must preserve secret names, avoid logging credentials, and keep
+alert evaluation after candle normalization.
 
-Current text:
+## Important module map
 
-```text
-Add Cup&Handle, Double Bottom, Bull Flag scanners here.
-```
+| File | Responsibility |
+|---|---|
+| `app.py` | Streamlit UI, request routing, tab orchestration, cache status |
+| `charting.py` | Static charts, interactive chart renderer, shared table/chart components |
+| `chart_context.py` | Canonical chart URLs, overlays, alert-marker normalization |
+| `r2_stock_data.py` | R2 manifests, revisions, local materialization, candle reads |
+| `stock_data.py` | Unified local symbol/path/data access |
+| `downloader.py` | Universe loading and Yahoo Finance updates |
+| `daily_update.py` | Scheduled multi-market candle, snapshot, and alert update |
+| `screener.py` | Filter definitions and screening engine |
+| `pattern.py` | Safe expression and pattern evaluation |
+| `backtest.py` | Historical strategy evaluation |
+| `market_snapshots.py` | Monthly PE/fundamental snapshot hydration |
+| `fundamentals.py` | Cached company metrics and valuation payloads |
+| `price_alerts.py` | Alert creation, shared evaluation, refresh, acknowledgement |
+| `cloud_storage.py` | Supabase persistence and user scoping |
+| `storage.py` | Shared/local settings and fallback persistence |
+| `user_auth.py` | Google authentication and account controls |
+| `supabase_schema.sql` | Personal cloud-data schema and access restrictions |
 
-No active pattern-scanning logic exists yet.
+## Testing and verification
 
-### Results Tab
-
-Displays the latest screener results from session state. After login, a new
-session restores that user's latest saved result from Supabase.
-
-The result rows represent whichever market was selected when Run Screener was last executed.
-
-Controls:
-
-- Dataframe of filtered stocks.
-- Hover chart table when `ChartPath` is present.
-- Download Results CSV button.
-- Email Results form:
-  - Gmail ID.
-  - Gmail App Password.
-  - Recipient Email.
-  - Subject.
-  - Message.
-  - Send Results Email button.
-
-Email behavior:
-
-- Sends the current filtered results as CSV.
-- Does not save Gmail App Password.
-- Saves non-sensitive email fields for convenience.
-
-### Alerts Tab
-
-Price alerts are created by moving or tapping the interactive-chart crosshair
-and clicking the `+` control at the matching right-side price level. No manual
-price field is used. Alerts are persisted in
-`data/metadata/price_alerts.json`. The target is classified automatically as a
-cross-above or cross-below alert relative to the latest close. Only candles
-after the alert's creation candle are evaluated: `High >= target` triggers an
-above alert and `Low <= target` triggers a below alert.
-Opening an interactive chart from any workspace uses the same session-cached
-alert snapshot, so all active alerts for that chart's stock are visible without
-an additional cloud read per marker.
-
-Every successful manual or scheduled stock download checks alerts for that
-symbol. A triggered alert changes state once, so repeated downloads do not
-produce duplicate triggers. The Alerts tab lists Active and Triggered alerts
-with the trigger candle date, shows a red triggered-count badge, and lets the
-user remove selected rows.
-
-## Runtime State vs Persistent State
-
-### Runtime State
-
-`st.session_state["results"]` stores current screener results for the active Streamlit session.
-
-`st.session_state["switch_to_results_tab"]` is a one-shot flag used after Run Screener completes. On the next rerun, `switch_to_tab(3)` injects a tiny Streamlit component script that clicks the Results tab because native `st.tabs` does not expose a selected-tab API.
-
-If the app reloads or restarts, authenticated users reload their own latest
-saved rows from Supabase. Guest results remain session-only.
-
-### Persistent State
-
-`data/metadata/session_settings.json` stores UI preferences and last download timestamp locally. `data/metadata/app_settings.json` is treated as a legacy settings file.
-
-`user_screener_results` stores one private latest-result payload per
-authenticated user. A completed run replaces that user's previous payload;
-run history is not retained.
-
-`data/metadata/price_alerts.json` stores persistent price-alert definitions and
-their latest Active or Triggered state.
-
-On Streamlit Community Cloud, this local file may not persist across app restarts because the deployment filesystem is ephemeral.
-
-## Scheduled Downloads / Keep Awake
-
-Streamlit Community Cloud does not provide a native cron scheduler for the app. Use an external scheduler such as GitHub Actions, cron-job.org, UptimeRobot, or EasyCron to call protected app URLs.
-
-Token:
-
-- Set `SCHEDULED_DOWNLOAD_TOKEN` in Streamlit secrets or as an environment variable.
-- Do not commit the token.
-
-URLs:
-
-```text
-https://your-app.streamlit.app/?ping=1&token=SECRET
-https://your-app.streamlit.app/?scheduled_download=1&token=SECRET
-https://your-app.streamlit.app/?scheduled_download=1&token=SECRET&market=ALL&timeframe=DAY
-```
-
-Recommended schedule:
-
-- Lightweight ping every 6 hours to avoid the 12-hour inactivity sleep window.
-- Actual scheduled downloads at 5 AM and 5 PM.
-- Use `market=ALL` to refresh both India and US. Omit `market` to use the market saved in app settings.
-
-## Deployment Notes
-
-### Optional Google accounts and Supabase
-
-`user_auth.py` uses Streamlit's Google OIDC login. Guest use remains available,
-but only a verified Google user can save personal favorites or create alerts.
-`cloud_storage.py` stores personal filter sets, UI settings, and alerts in
-Supabase using the verified Google `sub` claim as the stable user ID.
-
-The existing `data/metadata/favourite_filters.json` remains the shared,
-centrally managed favorite library. Stock JSON, fundamentals, results, and
-other market-data files also remain central. Shared favorites are read-only
-from the normal user interface; logged-in users can add and remove only their
-own cloud favorites.
-
-The Supabase service-role key is server-only. Direct browser access is revoked
-by `supabase_schema.sql`, and every application query for personal data is
-filtered by the current verified user ID. See `CLOUD_SETUP.md` and
-`.streamlit/secrets.example.toml` for deployment configuration.
-
-The app can be deployed to Streamlit Community Cloud.
-
-Recommended files to commit:
-
-- `app.py`
-- `config.py`
-- `downloader.py`
-- `screener.py`
-- `storage.py`
-- `emailer.py`
-- `requirements.txt`
-- `.gitignore`
-- `PROJECT_ARCHITECTURE.md`
-- Optionally `data/excel/MCAP_JUGAAD.xlsx`
-
-Do not commit generated downloaded JSON folders unless there is a specific reason. They can become large quickly.
-
-Streamlit Community Cloud is free for community apps, but app filesystem storage should not be treated as permanent.
-
-## Local Run Commands
-
-Known working Codex/runtime Python for checks:
+Use the repository virtual environment when available:
 
 ```powershell
-C:\Users\tusha\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe
+.\.venv\Scripts\python.exe -m py_compile app.py charting.py
+.\.venv\Scripts\python.exe -m unittest discover -p "test_*.py"
+git diff --check
 ```
 
-Use this interpreter when the Windows `py` launcher reports `No installed Python found!`.
+For UI behavior, start Streamlit on a temporary port, verify the affected path,
+then stop the exact verified Streamlit process. Do not leave localhost servers
+running.
 
-Install dependencies:
+Relevant test groups include chart rendering/navigation, alert evaluation and
+cloud persistence, R2 cache behavior, market snapshots, screener pipelines,
+authentication, and UI source invariants.
 
-```powershell
-py -m pip install -r requirements.txt
-```
+## Change checklist
 
-Run app:
+Before implementation:
 
-```powershell
-py -m streamlit run app.py
-```
+1. Read this file and the required supplemental documents from `AGENTS.md`.
+2. Inspect both the producer and consumer of changed data.
+3. Search for existing shared helpers before adding a new path.
+4. Identify whether an interaction can remain browser-side.
+5. Check the worktree and preserve unrelated user changes.
 
-Compile check:
+Before handoff:
 
-```powershell
-py -m py_compile app.py downloader.py screener.py storage.py config.py emailer.py
-```
+1. Run focused tests.
+2. Run the complete test suite for application changes.
+3. Run `git diff --check`.
+4. Verify relevant UI behavior when the change is visual or lifecycle-sensitive.
+5. Stop temporary servers.
+6. Update this document if an architectural invariant or feature set changed.
 
-Codex runtime compile check:
+## Documentation hierarchy
 
-```powershell
-& 'C:\Users\tusha\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -c "from pathlib import Path; [compile(Path(name).read_text(encoding='utf-8'), name, 'exec') for name in ['app.py','downloader.py','screener.py','storage.py','config.py','emailer.py','backtest.py','charting.py','pattern.py']]; print('syntax ok')"
-```
-
-## Known Constraints and Future Improvements
-
-- Downloading top 1000 stocks through yfinance may be slow and may hit network/provider limits.
-- US CSV downloads may include many more symbols than the India default, so yfinance limits can be more noticeable.
-- Streamlit Cloud restarts may clear downloaded JSON files and metadata.
-- Gmail send requires an App Password for most accounts.
-- `app.py` currently mixes UI and orchestration; this is fine for the current size, but future larger features may benefit from moving tab logic into separate modules.
-- Download performance could be improved later with NSE trading-date skip logic, chunked yfinance downloads, a manifest/index file, caching, or retry/backoff logic.
-- Hover charts are implemented with an HTML table because native Streamlit dataframes do not support custom hover popups.
-- If deployed publicly, consider using `st.secrets` or environment-backed settings for non-user-specific credentials. Current design correctly avoids storing the Gmail App Password.
+- `AGENTS.md`: mandatory instructions and reading order.
+- `PROJECT_ARCHITECTURE.md`: canonical current architecture and feature set.
+- `STOCK_DATA_ARCHITECTURE.md`: detailed R2/cache design.
+- `CLOUD_SETUP.md`: Google OAuth, Supabase, R2, and secret configuration.
+- `DATA_MIGRATION.md`: migration procedures.
+- `CONTEXT.md` and `ARCHITECTURE.md`: historical background; they may describe
+  older layouts and must not override this document.

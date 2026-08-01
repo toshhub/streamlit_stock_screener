@@ -1,5 +1,10 @@
 # Repository Context
 
+> Historical context: read `AGENTS.md` and the canonical
+> `PROJECT_ARCHITECTURE.md` before making changes. Where this file describes an
+> older tab count, JSON-first deployed storage, or older chart behavior, the
+> canonical architecture document takes precedence.
+
 This file is intended to give future coding sessions enough context to make safe changes quickly. Read this first before editing code.
 
 ## Project Summary

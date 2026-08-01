@@ -87,7 +87,40 @@ class NavigationUiTests(unittest.TestCase):
         self.assertIn("with tab5:", self.app_source)
         self.assertIn('"Workspace 05 · Market chart"', self.app_source)
         self.assertIn("activate_chart_workspace(", self.app_source)
-        self.assertIn("navigation_callback=handle_chart_navigation", self.app_source)
+        self.assertIn("results_style_chart_workspace(", self.app_source)
+
+    def test_chart_workspace_uses_the_fast_embedded_route(self):
+        charting_source = Path("charting.py").read_text(encoding="utf-8")
+        component_source = Path(
+            "alert_table_component/index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('on_change="ignore"', self.app_source)
+        self.assertNotIn("chart_tab_active", self.app_source)
+        self.assertIn("embedded=True", self.app_source)
+        self.assertIn("chart_embed_url", self.app_source)
+        self.assertIn("def results_style_chart_workspace(", charting_source)
+        self.assertIn('id="chart-workspace-frame"', charting_source)
+        self.assertIn('id="chart-search-form"', charting_source)
+        self.assertIn('id="chart-market"', charting_source)
+        self.assertIn('id="chart-symbol"', charting_source)
+        self.assertIn('id="chart-symbol-suggestions"', charting_source)
+        self.assertIn("function renderSuggestions()", charting_source)
+        self.assertIn(".slice(0, 12)", charting_source)
+        self.assertIn('symbolInput.addEventListener("input", renderSuggestions)', charting_source)
+        self.assertIn("function directChartUrl(symbol, market)", charting_source)
+        self.assertIn("frame.src = chartUrl", charting_source)
+        self.assertIn("function visible()", charting_source)
+        self.assertIn('message.action === "range-change"', charting_source)
+        self.assertIn("function emitChartRequest(message)", component_source)
+
+        chart_tab_source = self.app_source[
+            self.app_source.index("# TAB 5: CHART"):
+            self.app_source.index("# TAB 6: WATCHLISTS")
+        ]
+        self.assertNotIn("st.selectbox(", chart_tab_source)
+        self.assertNotIn("st.rerun()", chart_tab_source)
+        self.assertIn("market_symbols=chart_autocomplete_symbols()", chart_tab_source)
 
     def test_chart_navigation_uses_cached_fundamentals_and_cached_startup(self):
         self.assertNotIn("get_company_fundamentals(", self.app_source)

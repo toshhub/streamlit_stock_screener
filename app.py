@@ -35,6 +35,7 @@ from charting import (
     create_stock_chart,
     image_to_data_uri,
     render_interactive_stock_chart,
+    results_style_chart_workspace,
     sortable_results_table,
 )
 
@@ -77,6 +78,7 @@ from price_alerts import (
     configure_cloud_alerts,
     create_price_alert,
     load_price_alerts,
+    refresh_price_alerts_from_cache,
     remove_price_alerts,
     set_current_alert_user,
     sort_price_alerts,
@@ -416,6 +418,40 @@ def available_symbols_for_market(market):
         str(symbols_file),
         symbols_file.stat().st_mtime_ns,
     )
+
+
+@st.cache_data(show_spinner=False)
+def cached_chart_autocomplete_symbols(manifest_path, manifest_mtime_ns):
+    """Read compact market symbol lists from the local R2 manifest."""
+    del manifest_mtime_ns
+    try:
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    markets = manifest.get("markets") or {}
+    return {
+        market.upper(): tuple(sorted({
+            str(symbol or "").strip().upper()
+            for symbol in ((markets.get(market) or {}).get("symbols") or [])
+            if str(symbol or "").strip()
+        }))
+        for market in ("india", "us")
+    }
+
+
+def chart_autocomplete_symbols():
+    manifest_path = get_r2_store().manifest_cache_path
+    if manifest_path.exists():
+        symbols = cached_chart_autocomplete_symbols(
+            str(manifest_path),
+            manifest_path.stat().st_mtime_ns,
+        )
+        if symbols:
+            return symbols
+    return {
+        MARKET_INDIA: available_symbols_for_market(MARKET_INDIA),
+        MARKET_US: available_symbols_for_market(MARKET_US),
+    }
 
 
 def download_limit_for_market(market, symbols_file):
@@ -2283,7 +2319,7 @@ def chart_file_needs_regeneration(chart_path):
         return True
 
 
-def alert_static_chart_path(symbol, market, *, generate=False):
+def alert_static_chart_path(symbol, market, *, generate=False, pe_ratio=None):
     """Return a reusable static hover chart for an Alerts table symbol."""
     symbol = str(symbol or "").strip().upper()
     market = normalize_market(market)
@@ -2328,6 +2364,7 @@ def alert_static_chart_path(symbol, market, *, generate=False):
                 stock_file,
                 DEFAULT_FILTER_SET,
                 output_dir=alert_chart_dir,
+                pe_ratio=pe_ratio,
             )
     except (OSError, ValueError):
         return ""
@@ -5359,73 +5396,30 @@ with tab5:
     )
 
     chart_workspace = st.session_state.get("_chart_workspace_context")
-    if not isinstance(chart_workspace, dict) or not chart_workspace.get("symbol"):
-        st.info(
-            "Search a stock below, or open its interactive chart from Results, "
-            "Backtest, Watchlists, or Alerts."
-        )
-        search_market_col, search_symbol_col = st.columns([1, 2.2])
-        with search_market_col:
-            chart_search_market = st.selectbox(
-                "Market",
-                [MARKET_INDIA, MARKET_US],
-                format_func=market_label,
-                key="chart_workspace_search_market",
-            )
-        chart_search_dir = timeframe_config(
-            "DAY",
-            chart_search_market,
-        )["target_dir"].resolve()
-        chart_search_symbols = [
-            symbol_from_path(path)
-            for path in list_symbol_paths(
-                chart_search_dir,
-                include_index=False,
-            )
-        ]
-        with search_symbol_col:
-            chart_search_symbol = st.selectbox(
-                "Stock name",
-                chart_search_symbols,
-                index=None,
-                placeholder="Type a stock symbol",
-                key=f"chart_workspace_search_{chart_search_market}",
-            )
-        if chart_search_symbol and activate_chart_workspace(
-            {
-                "symbol": chart_search_symbol,
-                "market": chart_search_market,
-                "symbols": [],
-                "index": -1,
-            },
-            fallback_market=chart_search_market,
-            origin_tab=CHART_TAB_INDEX,
-        ):
-            st.rerun()
-    else:
-        chart_symbol = str(chart_workspace.get("symbol", "")).strip().upper()
-        chart_market = normalize_market(
-            chart_workspace.get("market", MARKET_INDIA)
-        )
-        chart_symbols = [
-            str(item or "").strip().upper()
-            for item in chart_workspace.get("symbols", [])
-            if str(item or "").strip()
-        ]
-        try:
-            chart_index = int(chart_workspace.get("index", -1))
-        except (TypeError, ValueError):
-            chart_index = -1
-        if not (
-            0 <= chart_index < len(chart_symbols)
-            and chart_symbols[chart_index] == chart_symbol
-        ):
-            chart_index = (
-                chart_symbols.index(chart_symbol)
-                if chart_symbol in chart_symbols
-                else -1
-            )
+    chart_workspace = (
+        chart_workspace if isinstance(chart_workspace, dict) else {}
+    )
+    chart_symbol = str(chart_workspace.get("symbol", "")).strip().upper()
+    chart_market = normalize_market(
+        chart_workspace.get("market", MARKET_INDIA)
+    )
+    chart_symbols = [
+        str(item or "").strip().upper()
+        for item in chart_workspace.get("symbols", [])
+        if str(item or "").strip()
+    ]
+    try:
+        chart_index = int(chart_workspace.get("index", -1))
+    except (TypeError, ValueError):
+        chart_index = -1
+    if chart_symbol and chart_symbol in chart_symbols:
+        chart_index = chart_symbols.index(chart_symbol)
 
+    chart_range = str(
+        chart_workspace.get("initial_range", "252") or "252"
+    ).lower()
+    chart_embed_url = ""
+    if chart_symbol:
         chart_target_dir = timeframe_config(
             "DAY",
             chart_market,
@@ -5438,173 +5432,44 @@ with tab5:
             chart_stock_file.parent != chart_target_dir
             or not stock_exists(chart_stock_file)
         ):
-            st.error(
-                f"Daily chart data is unavailable for {chart_symbol}."
+            st.warning(
+                f"Daily chart data is unavailable for {chart_symbol}. "
+                "Type another symbol below."
             )
         else:
-            chart_overlay, chart_alert_markers = chart_alert_context(
-                session_price_alerts(),
+            chart_overlay, _ = chart_alert_context(
+                [],
                 chart_symbol,
                 chart_market,
                 chart_workspace.get("trade_overlay"),
             )
-            chart_growth = get_cached_company_growth_metrics(
+            chart_embed_url = interactive_chart_query(
                 chart_symbol,
                 chart_market,
-            )
-            chart_valuations = get_cached_company_valuation_medians(
-                chart_symbol,
-                chart_market,
-            )
-            workspace_watchlists = None
-            if app_user is not None and cloud_store is not None:
-                if "_cached_personal_watchlists" in st.session_state:
-                    workspace_watchlists = deepcopy(
-                        st.session_state["_cached_personal_watchlists"]
-                    )
-                else:
-                    try:
-                        workspace_watchlists = cloud_store.load_watchlists(
-                            app_user.id
-                        )
-                    except CloudStorageError as exc:
-                        st.error(str(exc))
-                        workspace_watchlists = []
-                    else:
-                        st.session_state[
-                            "_cached_personal_watchlists"
-                        ] = deepcopy(workspace_watchlists)
-
-            def handle_chart_navigation(event):
-                action = str(event.get("action", ""))
-                updated = deepcopy(chart_workspace)
-                if action in {"previous", "next"}:
-                    offset = -1 if action == "previous" else 1
-                    next_index = chart_index + offset
-                    if 0 <= next_index < len(chart_symbols):
-                        updated["index"] = next_index
-                        updated["symbol"] = chart_symbols[next_index]
-                        updated["trade_overlay"] = {}
-                elif action in {"symbol-select", "symbol-search"}:
-                    requested = str(
-                        event.get("symbol", "")
-                    ).strip().upper()
-                    requested_file = symbol_path(
-                        chart_target_dir,
-                        requested,
-                    ).resolve()
-                    if (
-                        requested_file.parent != chart_target_dir
-                        or not stock_exists(requested_file)
-                    ):
-                        st.toast(
-                            f"No downloaded {chart_market} data for "
-                            f"{requested}.",
-                            icon="⚠️",
-                        )
-                        return
-                    updated["symbol"] = requested
-                    updated["index"] = (
-                        chart_symbols.index(requested)
-                        if requested in chart_symbols
-                        else -1
-                    )
-                    updated["trade_overlay"] = {}
-                elif action == "close":
-                    st.session_state.pop("_chart_workspace_context", None)
-                    origin = int(chart_workspace.get("origin_tab", 3))
-                    origin = max(0, min(len(MAIN_TAB_LABELS) - 1, origin))
-                    st.session_state["_main_workspace_tab"] = (
-                        MAIN_TAB_LABELS[origin]
-                    )
-                    st.session_state["_pending_main_tab_switch"] = origin
-                    st.session_state["_fast_workspace_navigation"] = True
-                    st.rerun()
-                    return
-                else:
-                    return
-                st.session_state["_chart_workspace_context"] = updated
-                st.session_state["_fast_workspace_navigation"] = True
-                st.rerun()
-
-            def add_workspace_chart_to_watchlist(event):
-                watchlist_id = str(event.get("watchlistId", "") or "")
-                selected = next(
-                    (
-                        item
-                        for item in (workspace_watchlists or [])
-                        if str(item.get("id", "")) == watchlist_id
-                    ),
-                    None,
-                )
-                if selected is None or app_user is None or cloud_store is None:
-                    st.toast("Select an available watchlist.", icon="⚠️")
-                    return
-                existing_items = selected.get("items", [])
-                if any(
-                    str(item.get("symbol", "")).strip().upper()
-                    == chart_symbol
-                    and normalize_market(
-                        item.get("market", MARKET_INDIA)
-                    )
-                    == chart_market
-                    for item in existing_items
-                ):
-                    st.toast(
-                        f"{chart_symbol} is already in {selected['name']}."
-                    )
-                    return
-                try:
-                    cloud_store.save_watchlist_item(
-                        app_user.id,
-                        watchlist_id,
-                        chart_symbol,
-                        chart_market,
-                        "",
-                        len(existing_items),
-                    )
-                except CloudStorageError as exc:
-                    st.error(str(exc))
-                    return
-                selected.setdefault("items", []).append({
-                    "symbol": chart_symbol,
-                    "market": chart_market,
-                    "note": "",
-                    "position": len(existing_items),
-                })
-                st.session_state["_cached_personal_watchlists"] = deepcopy(
-                    workspace_watchlists
-                )
-                st.toast(
-                    f"Added {chart_symbol} to {selected['name']}.",
-                    icon="⭐",
-                )
-
-            render_interactive_stock_chart(
-                chart_symbol,
-                chart_stock_file,
                 ma_periods=chart_workspace.get("ma_periods") or None,
-                match_position=chart_index + 1 if chart_index >= 0 else None,
-                match_total=len(chart_symbols) if chart_index >= 0 else None,
-                has_previous=chart_index > 0,
-                has_next=(
-                    chart_index >= 0
-                    and chart_index < len(chart_symbols) - 1
-                ),
-                initial_range=chart_workspace.get(
-                    "initial_range",
-                    "252",
-                ),
-                growth_metrics=chart_growth,
-                valuation_medians=chart_valuations,
                 trade_overlay=chart_overlay,
-                alert_markers=chart_alert_markers,
-                alert_market=chart_market,
-                height=820,
-                watchlists=workspace_watchlists,
-                watchlist_add_callback=add_workspace_chart_to_watchlist,
-                navigation_callback=handle_chart_navigation,
+                embedded=True,
+                initial_range=chart_range,
             )
+            chart_embed_url += (
+                "&embed_height=820"
+                f"&position={chart_index + 1 if chart_index >= 0 else 0}"
+                f"&total={len(chart_symbols) if chart_index >= 0 else 0}"
+                f"&has_previous={1 if chart_index > 0 else 0}"
+                f"&has_next={1 if chart_index >= 0 and chart_index < len(chart_symbols) - 1 else 0}"
+            )
+
+    results_style_chart_workspace(
+        chart_embed_url,
+        height=860,
+        initial_range=chart_range,
+        initial_market=chart_market,
+        initial_symbol=chart_symbol,
+        market_symbols=chart_autocomplete_symbols(),
+        navigation_symbols=chart_symbols,
+        navigation_index=chart_index,
+        component_key="chart_workspace_results_renderer",
+    )
 
 
 # =====================================================================
@@ -5836,6 +5701,46 @@ with tab7:
     elif cloud_store is None:
         st.warning("Cloud storage is not configured, so personal alerts are unavailable.")
 
+    refresh_alerts = st.button(
+        "Refresh Alerts",
+        key="refresh_price_alerts_from_server_cache",
+        type="secondary",
+        disabled=app_user is None or cloud_store is None,
+        help=(
+            "Check all active alerts against daily candles currently available "
+            "in the server cache."
+        ),
+    )
+    if refresh_alerts:
+        try:
+            with st.spinner("Checking active alerts against cached candles..."):
+                refresh_result = refresh_price_alerts_from_cache()
+        except PermissionError as exc:
+            st.session_state["price_alert_feedback"] = ("error", str(exc))
+            st.session_state["price_alert_login_required"] = True
+        except (CloudStorageError, OSError, RuntimeError, ValueError) as exc:
+            st.session_state["price_alert_feedback"] = (
+                "error",
+                f"Could not refresh alerts: {exc}",
+            )
+        else:
+            triggered_count = len(refresh_result["triggered"])
+            unavailable_count = len(refresh_result["unavailable_alerts"])
+            message = (
+                f"Checked {refresh_result['active_alerts']} active alert(s); "
+                f"{triggered_count} triggered."
+            )
+            if unavailable_count:
+                message += (
+                    f" Cached candles were unavailable for "
+                    f"{unavailable_count} alert(s)."
+                )
+            st.session_state["price_alert_feedback"] = ("success", message)
+            st.session_state.pop("_cached_price_alerts", None)
+            st.session_state.pop("_cached_price_alerts_at", None)
+        st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[ALERTS_TAB_INDEX]
+        st.rerun()
+
     alerts = session_price_alerts()
     sorted_alerts = sort_price_alerts(alerts)
     active_alerts = [
@@ -5913,12 +5818,34 @@ with tab7:
                 st.session_state.pop("_cached_price_alerts_at", None)
             st.session_state["_main_workspace_tab"] = MAIN_TAB_LABELS[ALERTS_TAB_INDEX]
 
+        alert_table_valuation_cache = {}
+
         def alert_table_dataframe(table_alerts, *, acknowledge=False):
             table_rows = []
             generate_static_charts = (
                 st.session_state.get("_main_workspace_tab")
                 == MAIN_TAB_LABELS[ALERTS_TAB_INDEX]
             )
+            alerts_by_market = {}
+            for alert in table_alerts:
+                symbol = str(alert.get("symbol", "") or "").strip().upper()
+                market = normalize_market(alert.get("market", MARKET_INDIA))
+                if (
+                    symbol
+                    and (market, symbol) not in alert_table_valuation_cache
+                ):
+                    alerts_by_market.setdefault(market, set()).add(symbol)
+            for market, symbols in alerts_by_market.items():
+                valuation_rows = hydrate_result_valuations(
+                    [{"Symbol": symbol} for symbol in sorted(symbols)],
+                    market,
+                )
+                for valuation_row in valuation_rows:
+                    symbol = str(
+                        valuation_row.get("Symbol", "") or ""
+                    ).strip().upper()
+                    alert_table_valuation_cache[(market, symbol)] = valuation_row
+
             for alert in table_alerts:
                 alert_id = str(alert.get("id", ""))
                 symbol = str(alert.get("symbol", "") or "").strip().upper()
@@ -5938,13 +5865,24 @@ with tab7:
                         "acknowledge",
                         alert_id,
                     )
+                valuation = alert_table_valuation_cache.get(
+                    (market, symbol),
+                    {},
+                )
+                pe_ratio = valuation.get("PE Ratio", "")
                 static_chart_path = alert_static_chart_path(
                     symbol,
                     market,
                     generate=generate_static_charts,
+                    pe_ratio=pe_ratio,
                 )
                 table_rows.append({
                     "Symbol": symbol,
+                    "PE Ratio": pe_ratio,
+                    "ValuationMedians": valuation.get(
+                        "ValuationMedians",
+                        {},
+                    ),
                     "Alert": (
                         f"{market_label(market)} · {direction} · Target "
                         f"{alert_number_for_table(alert.get('target_price'))} / "

@@ -456,6 +456,27 @@ class SupabaseCloudStorage:
         except Exception as exc:
             raise CloudStorageError(f"Could not update triggered cloud alerts: {exc}") from exc
 
+    def update_user_alerts(self, user_id, alerts):
+        """Persist alert changes for one authenticated user only."""
+        user_id = self._require_user(user_id)
+        rows = [
+            {**self._without_user_id(alert), "user_id": user_id}
+            for alert in alerts
+            if alert.get("id")
+        ]
+        if not rows:
+            return
+        try:
+            (
+                self.client.table("user_alerts")
+                .upsert(rows, on_conflict="user_id,id")
+                .execute()
+            )
+        except Exception as exc:
+            raise CloudStorageError(
+                f"Could not update personal price alerts: {exc}"
+            ) from exc
+
     @staticmethod
     def _without_user_id(row):
         clean = dict(row)

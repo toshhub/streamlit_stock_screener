@@ -13,6 +13,7 @@ from price_alerts import (
     configure_cloud_alerts,
     create_price_alert,
     load_price_alerts,
+    refresh_price_alerts_from_cache,
     remove_price_alerts,
     set_current_alert_user,
     sort_price_alerts,
@@ -253,8 +254,58 @@ class PriceAlertTests(unittest.TestCase):
             "2026-01-02",
         )
 
+    def test_manual_refresh_checks_only_current_users_alerts_from_cache(self):
+        class FakeUserAlerts:
+            def __init__(self):
+                self.updated_user = None
+                self.updated = []
+
+            def load_alerts(self, user_id):
+                self.loaded_user = user_id
+                return [{
+                    "id": "alert-1",
+                    "symbol": "TEST",
+                    "market": "INDIA",
+                    "target_price": 110,
+                    "direction": "above",
+                    "status": "Active",
+                    "created_candle_date": "2026-01-01",
+                    "last_checked_date": "2026-01-01",
+                }]
+
+            def update_user_alerts(self, user_id, alerts):
+                self.updated_user = user_id
+                self.updated.extend(alerts)
+
+        self._write_candles([
+            {"Date": "2026-01-01", "Open": 98, "High": 105, "Low": 97, "Close": 100},
+            {"Date": "2026-01-02", "Open": 101, "High": 112, "Low": 100, "Close": 111},
+        ])
+        backend = FakeUserAlerts()
+        configure_cloud_alerts(backend, require_auth=True)
+        set_current_alert_user("google-user-a")
+
+        with patch("price_alerts._stock_file", return_value=self.stock_file):
+            result = refresh_price_alerts_from_cache()
+
+        self.assertEqual(backend.loaded_user, "google-user-a")
+        self.assertEqual(backend.updated_user, "google-user-a")
+        self.assertEqual(result["active_alerts"], 1)
+        self.assertEqual(len(result["triggered"]), 1)
+        self.assertEqual(backend.updated[0]["status"], "Triggered")
+        self.assertEqual(
+            backend.updated[0]["triggered_candle_date"],
+            "2026-01-02",
+        )
+
 
 class AlertTabPerformanceTests(unittest.TestCase):
+    def test_alert_tab_has_manual_server_cache_refresh(self):
+        app_source = Path("app.py").read_text(encoding="utf-8")
+
+        self.assertIn('"Refresh Alerts"', app_source)
+        self.assertIn("refresh_price_alerts_from_cache()", app_source)
+
     def test_alert_tab_reuses_session_snapshot_without_click_rerun(self):
         app_source = Path("app.py").read_text(encoding="utf-8")
 
@@ -282,6 +333,10 @@ class AlertTabPerformanceTests(unittest.TestCase):
             app_source,
         )
         self.assertIn("generate=generate_static_charts", app_source)
+        self.assertIn("valuation_rows = hydrate_result_valuations(", app_source)
+        self.assertIn('"PE Ratio": pe_ratio', app_source)
+        self.assertIn('"ValuationMedians": valuation.get(', app_source)
+        self.assertIn("pe_ratio=pe_ratio", app_source)
         self.assertIn(
             "== MAIN_TAB_LABELS[ALERTS_TAB_INDEX]",
             app_source,

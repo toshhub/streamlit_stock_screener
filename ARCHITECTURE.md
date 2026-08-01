@@ -1,5 +1,9 @@
 # NSE Stock Screener — Architecture & Implementation
 
+> Historical document: the current canonical architecture and required
+> engineering constraints are in `PROJECT_ARCHITECTURE.md`. Future Codex work
+> must follow the reading order in `AGENTS.md`.
+
 ## Overview
 
 A **Streamlit** web application that screens stocks listed on the **National Stock Exchange of India (NSE)** using a combination of **technical indicators** (moving averages, candle patterns) and **fundamental metrics** (PE ratio). Users can compose custom filter sets, detect swing patterns via user-written expressions, visualize results with charts, and export/email screener results.

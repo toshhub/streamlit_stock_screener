@@ -305,6 +305,68 @@ def check_price_alerts_for_market_candles(candles, market):
     return triggered
 
 
+def refresh_price_alerts_from_cache():
+    """Recheck the current user's active alerts using cached daily candles."""
+    user_id = _CURRENT_USER_ID.get()
+    if _REQUIRE_AUTH_FOR_WRITES and not user_id:
+        raise PermissionError("Sign in with Google to refresh price alerts.")
+    if _CLOUD_BACKEND is None:
+        if _REQUIRE_AUTH_FOR_WRITES:
+            raise RuntimeError("Cloud alert storage is not configured.")
+        with _ALERTS_LOCK:
+            alerts = _read_alerts_unlocked()
+    else:
+        if not user_id:
+            raise PermissionError("Sign in with Google to refresh price alerts.")
+        if not hasattr(_CLOUD_BACKEND, "update_user_alerts"):
+            raise RuntimeError(
+                "The cloud alert backend does not support personal alert refresh."
+            )
+        alerts = [dict(alert) for alert in _CLOUD_BACKEND.load_alerts(user_id)]
+
+    active_alerts = [
+        alert for alert in alerts if alert.get("status") == "Active"
+    ]
+    alerts_by_symbol = {}
+    for alert in active_alerts:
+        market = _normalize_market(alert.get("market"))
+        symbol = _normalize_symbol(alert.get("symbol"))
+        alerts_by_symbol.setdefault((market, symbol), []).append(alert)
+
+    triggered = []
+    changed = []
+    unavailable = []
+    checked_symbols = 0
+    for (market, symbol), symbol_alerts in alerts_by_symbol.items():
+        candles = _load_candles(_stock_file(market, symbol))
+        if not candles:
+            unavailable.extend(str(alert.get("id") or "") for alert in symbol_alerts)
+            continue
+        checked_symbols += 1
+        symbol_triggered, symbol_changed = _evaluate_alerts(
+            symbol_alerts,
+            candles,
+            symbol,
+            market,
+        )
+        triggered.extend(symbol_triggered)
+        changed.extend(symbol_changed)
+
+    if changed:
+        if _CLOUD_BACKEND is not None:
+            _CLOUD_BACKEND.update_user_alerts(user_id, changed)
+        else:
+            with _ALERTS_LOCK:
+                _write_alerts_unlocked(alerts)
+
+    return {
+        "active_alerts": len(active_alerts),
+        "symbols_checked": checked_symbols,
+        "triggered": triggered,
+        "unavailable_alerts": unavailable,
+    }
+
+
 def remove_price_alerts(alert_ids):
     remove_ids = {str(alert_id) for alert_id in alert_ids if alert_id}
     if not remove_ids:
