@@ -1,5 +1,6 @@
 import json
 import re
+import statistics
 import threading
 import time
 import urllib.error
@@ -380,8 +381,45 @@ def parse_screener_valuation_history_payload(payload):
     return rows
 
 
-def fetch_screener_valuation_history(symbol, days=3652):
-    """Fetch the native Screener.in PE and Market Cap/Sales chart series."""
+def _valuation_medians_from_history(rows):
+    dated_rows = []
+    for row in rows:
+        try:
+            row_date = datetime.fromisoformat(str(row.get("Month", ""))[:10])
+        except (TypeError, ValueError):
+            continue
+        dated_rows.append((row_date, row))
+    if not dated_rows:
+        return {}
+    reference = max(row_date for row_date, _ in dated_rows)
+    metric_fields = {
+        "Median PE": "PE",
+        "Median Market Cap to Sales": "MarketCapToSales",
+    }
+    medians = {}
+    for output_name, field in metric_fields.items():
+        period_values = {}
+        for period, days in VALUATION_PERIOD_DAYS.items():
+            cutoff = reference - timedelta(days=days)
+            values = []
+            for row_date, row in dated_rows:
+                if row_date < cutoff or row_date > reference:
+                    continue
+                try:
+                    value = float(row.get(field))
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    values.append(value)
+            if values:
+                period_values[period] = round(float(statistics.median(values)), 4)
+        if period_values:
+            medians[output_name] = period_values
+    return medians
+
+
+def fetch_screener_company_snapshot(symbol, days=3652):
+    """Fetch valuation history and fundamentals from one Screener.in page pass."""
     page_html = _fetch_screener_page(symbol)
     context = parse_screener_company_chart_context(page_html)
     if not context:
@@ -414,7 +452,53 @@ def fetch_screener_valuation_history(symbol, days=3652):
     rows = parse_screener_valuation_history_payload(payload)
     if not rows:
         raise ValueError(f"Screener.in returned no valuation history for {symbol}")
+    return (
+        rows,
+        parse_screener_growth_html(page_html),
+        _valuation_medians_from_history(rows),
+    )
+
+
+def fetch_screener_growth_metrics(symbol):
+    """Fetch growth fundamentals without re-downloading valuation history."""
+    return parse_screener_growth_html(_fetch_screener_page(symbol))
+
+
+def fetch_screener_valuation_history(symbol, days=3652):
+    """Fetch the native Screener.in PE and Market Cap/Sales chart series."""
+    rows, _, _ = fetch_screener_company_snapshot(symbol, days=days)
     return rows
+
+
+def save_company_fundamentals_snapshots(snapshots):
+    """Persist cron-fetched fundamentals in one lock-protected local update."""
+    snapshots = list(snapshots or [])
+    if not snapshots:
+        return 0
+    with _CACHE_LOCK:
+        cache = load_fundamentals()
+        for snapshot in snapshots:
+            market = normalize_market(snapshot.get("market", MARKET_INDIA))
+            symbol = str(snapshot.get("symbol", "") or "").strip().upper()
+            if market != MARKET_INDIA or not symbol:
+                continue
+            entry = cache.get(_cache_key(symbol, market), {})
+            if not isinstance(entry, dict):
+                entry = {}
+            fetched_at = str(
+                snapshot.get("fetched_at")
+                or datetime.now(timezone.utc).isoformat()
+            )
+            entry["fetched_at"] = fetched_at
+            entry["metrics"] = snapshot.get("metrics", {}) or {}
+            entry["valuation_fetched_at"] = fetched_at
+            entry["valuation_medians"] = (
+                snapshot.get("valuation_medians", {}) or {}
+            )
+            entry["source_policy"] = _SOURCE_POLICY
+            cache[_cache_key(symbol, market)] = entry
+        save_fundamentals(cache)
+    return len(snapshots)
 
 
 def _fetch_valuation_medians(page_html, symbol):

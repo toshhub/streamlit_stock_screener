@@ -6,18 +6,25 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 import pandas as pd
 
 from config import META_DIR
 from downloader import MARKET_INDIA, normalize_market
-from fundamentals import fetch_screener_valuation_history
+from fundamentals import (
+    _valuation_medians_from_history,
+    fetch_screener_company_snapshot,
+    fetch_screener_growth_metrics,
+    save_company_fundamentals_snapshots,
+)
 from storage import load_fundamentals, load_pe_ratios
 from stock_data import latest_stock_row, list_symbol_paths, symbol_from_path
 
 
 LATEST_VALUES_FILE = META_DIR / "latest_stock_values.parquet"
 MONTHLY_VALUATIONS_FILE = META_DIR / "monthly_valuations.parquet"
+_FULL_SNAPSHOT_LIMIT = threading.BoundedSemaphore(2)
 
 
 def _write_atomic(df, path):
@@ -91,7 +98,11 @@ def _merge_valuation_rows(existing, new_rows):
     return merged.sort_values(["Market", "Symbol", "Month"]).reset_index(drop=True)
 
 
-def collect_monthly_valuations(symbols_by_market, month=None):
+def collect_monthly_valuations(
+    symbols_by_market,
+    month=None,
+    fundamentals_first_cut=False,
+):
     """Refresh ten years of native Screener.in valuation history each month.
 
     The consolidated Parquet contains every Indian stock. Individual failures
@@ -100,7 +111,10 @@ def collect_monthly_valuations(symbols_by_market, month=None):
     """
     month_date = pd.Timestamp(month or datetime.now()).to_period("M").to_timestamp()
     existing = _existing_monthly()
+    fundamentals_cache = load_fundamentals()
     completed = set()
+    local_valuation_symbols = set()
+    local_valuation_medians = {}
     if not existing.empty:
         source = (
             existing["Source"].astype(str)
@@ -122,6 +136,15 @@ def collect_monthly_valuations(symbols_by_market, month=None):
                 & source.eq("Screener.in")
             ].itertuples()
         }
+        local_rows = existing[source.eq("Screener.in")]
+        for (row_market, row_symbol), symbol_rows in local_rows.groupby(
+            ["Market", "Symbol"]
+        ):
+            key = (str(row_market), str(row_symbol).upper())
+            local_valuation_symbols.add(key)
+            local_valuation_medians[key] = _valuation_medians_from_history(
+                symbol_rows.to_dict("records")
+            )
     new_rows = []
     failures = []
     pending = []
@@ -133,42 +156,97 @@ def collect_monthly_valuations(symbols_by_market, month=None):
             continue
         for symbol in symbols:
             symbol = str(symbol).strip().upper()
-            if (market, symbol) in completed:
+            fundamentals_entry = fundamentals_cache.get(
+                f"{market}:{symbol}",
+                {},
+            )
+            fundamentals_complete = (
+                isinstance(fundamentals_entry, dict)
+                and bool(fundamentals_entry.get("metrics"))
+                and bool(fundamentals_entry.get("valuation_medians"))
+            )
+            valuation_complete = (market, symbol) in completed
+            if fundamentals_complete and (
+                fundamentals_first_cut or valuation_complete
+            ):
                 continue
-            pending.append((market, symbol))
+            # Before the first combined monthly cron, fill missing fundamentals
+            # from the company page and reuse any existing valuation first cut,
+            # even if that valuation history was collected last month.
+            reuse_local_valuation = (
+                not fundamentals_complete
+                and (market, symbol) in local_valuation_symbols
+            )
+            pending.append((market, symbol, reuse_local_valuation))
 
     def fetch_one(market_symbol):
-        market, symbol = market_symbol
+        market, symbol, reuse_local_valuation = market_symbol
         collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        rows = fetch_screener_valuation_history(symbol)
-        return [{
-            **row,
-            "Month": pd.Timestamp(row["Month"]),
-            "Market": market,
-            "Symbol": symbol,
-            "Source": "Screener.in",
-            "CollectedAt": collected_at,
-        } for row in rows]
+        if reuse_local_valuation:
+            # First-cut fundamentals can reuse the valuation history already
+            # committed locally. This avoids downloading the same ten-year
+            # chart a second time before the first monthly combined refresh.
+            metrics = fetch_screener_growth_metrics(symbol)
+            valuation_medians = local_valuation_medians.get(
+                (market, symbol),
+                {},
+            )
+            valuation_rows = []
+        else:
+            # A full snapshot makes both page and chart requests. Keep that
+            # heavier path at the original concurrency even when the lighter
+            # first-cut fundamentals bootstrap uses extra workers.
+            with _FULL_SNAPSHOT_LIMIT:
+                rows, metrics, valuation_medians = fetch_screener_company_snapshot(
+                    symbol
+                )
+            valuation_rows = [{
+                **row,
+                "Month": pd.Timestamp(row["Month"]),
+                "Market": market,
+                "Symbol": symbol,
+                "Source": "Screener.in",
+                "CollectedAt": collected_at,
+            } for row in rows]
+        fundamentals_snapshot = {
+            "market": market,
+            "symbol": symbol,
+            "metrics": metrics,
+            "valuation_medians": valuation_medians,
+            "fetched_at": collected_at,
+        }
+        return valuation_rows, fundamentals_snapshot
 
-    # Match fundamentals.py's bounded request policy and avoid hammering the
-    # public Screener.in endpoint.
+    # Twelve workers keep the one-page fundamentals bootstrap moving. Full chart
+    # snapshots remain capped at two above, while fundamentals.py's global
+    # request-start limiter applies to both paths.
     checkpoint_rows = []
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    checkpoint_fundamentals = []
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {
             executor.submit(fetch_one, item): item
             for item in pending
         }
         processed = 0
         for future in as_completed(futures):
-            market, symbol = futures[future]
+            market, symbol, _ = futures[future]
             try:
-                symbol_rows = future.result()
+                symbol_rows, fundamentals_snapshot = future.result()
                 new_rows.extend(symbol_rows)
                 checkpoint_rows.extend(symbol_rows)
-                if len(checkpoint_rows) >= 5_000:
-                    existing = _merge_valuation_rows(existing, checkpoint_rows)
-                    _write_atomic(existing, MONTHLY_VALUATIONS_FILE)
+                checkpoint_fundamentals.append(fundamentals_snapshot)
+                if (
+                    len(checkpoint_rows) >= 5_000
+                    or len(checkpoint_fundamentals) >= 75
+                ):
+                    if checkpoint_rows:
+                        existing = _merge_valuation_rows(existing, checkpoint_rows)
+                        _write_atomic(existing, MONTHLY_VALUATIONS_FILE)
+                    save_company_fundamentals_snapshots(
+                        checkpoint_fundamentals
+                    )
                     checkpoint_rows.clear()
+                    checkpoint_fundamentals.clear()
             except Exception as exc:
                 failures.append({"Market": market, "Symbol": symbol, "Error": str(exc)})
             processed += 1
@@ -181,6 +259,8 @@ def collect_monthly_valuations(symbols_by_market, month=None):
     if checkpoint_rows:
         existing = _merge_valuation_rows(existing, checkpoint_rows)
         _write_atomic(existing, MONTHLY_VALUATIONS_FILE)
+    if checkpoint_fundamentals:
+        save_company_fundamentals_snapshots(checkpoint_fundamentals)
     return new_rows, failures
 
 
@@ -318,15 +398,13 @@ def hydrate_result_valuations(rows, market):
                 f"{market}:{symbol}",
                 pe_values.get(symbol, ""),
             )
-        if not display_row.get("ValuationMedians"):
-            fundamentals_entry = fundamentals.get(f"{market}:{symbol}", {})
-            display_row["ValuationMedians"] = (
-                monthly_medians.get(symbol)
-                or (
-                    fundamentals_entry.get("valuation_medians", {})
-                    if isinstance(fundamentals_entry, dict)
-                    else {}
-                )
-            )
+        fundamentals_entry = fundamentals.get(f"{market}:{symbol}", {})
+        local_medians = monthly_medians.get(symbol) or (
+            fundamentals_entry.get("valuation_medians", {})
+            if isinstance(fundamentals_entry, dict)
+            else {}
+        )
+        if local_medians:
+            display_row["ValuationMedians"] = local_medians
         hydrated.append(display_row)
     return hydrated

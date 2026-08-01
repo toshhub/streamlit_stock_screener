@@ -775,8 +775,6 @@ def interactive_stock_chart_html(
         valuation_state_html = (
             f'<span class="chart-valuation-status">{valuation_label}</span>'
         )
-    fundamentals_drawer_html = ""
-    fundamentals_button_html = ""
     cards = []
     growth_sections = (
         ("Compounded Sales Growth", "Sales growth", "sales"),
@@ -845,15 +843,22 @@ def interactive_stock_chart_html(
                     f"<h3>{html.escape(display_title)}</h3>"
                     f"{''.join(rows)}</article>"
                 )
+    fundamentals_disabled = "" if cards else " disabled aria-disabled=\"true\""
+    fundamentals_title = (
+        "Open fundamentals"
+        if cards
+        else "Fundamentals unavailable in the local monthly data"
+    )
+    fundamentals_button_html = (
+        '<button class="chart-insight-button fundamentals-toggle" '
+        'id="fundamentals-toggle" type="button" '
+        'aria-controls="fundamentals-panel" aria-expanded="false" '
+        f'title="{fundamentals_title}"{fundamentals_disabled}>'
+        '<span class="fundamentals-toggle__icon" aria-hidden="true">F</span>'
+        '<span>Fundamentals</span></button>'
+    )
+    fundamentals_drawer_html = ""
     if cards:
-        fundamentals_button_html = (
-            '<button class="chart-insight-button fundamentals-toggle" '
-            'id="fundamentals-toggle" type="button" '
-            'aria-controls="fundamentals-panel" aria-expanded="false" '
-            'title="Open fundamentals">'
-            '<span class="fundamentals-toggle__icon" aria-hidden="true">F</span>'
-            '<span>Fundamentals</span></button>'
-        )
         fundamentals_drawer_html = (
             '<div class="fundamentals-drawer" id="fundamentals-drawer">'
             '<button class="fundamentals-scrim" id="fundamentals-scrim" type="button" '
@@ -865,21 +870,27 @@ def interactive_stock_chart_html(
             '<h2>Growth &amp; valuation snapshot</h2>'
             '<span class="growth-snapshot__source">Source: Screener.in</span></div>'
             '<button class="fundamentals-close" id="fundamentals-close" type="button" '
-            'aria-label="Minimize fundamentals" title="Minimize fundamentals">&times;</button>'
+            'aria-label="Close fundamentals" title="Close fundamentals">&times;</button>'
             "</div>"
             f'<div class="growth-grid">{"".join(cards)}</div>'
             "</aside></div>"
         )
-    valuation_drawer_html = ""
-    valuation_button_html = ""
+    valuation_disabled = (
+        "" if monthly_valuations else " disabled aria-disabled=\"true\""
+    )
+    valuation_title = (
+        "Open monthly valuation chart"
+        if monthly_valuations
+        else "Valuation history unavailable in the local monthly data"
+    )
+    valuation_button_html = (
+        '<button class="chart-insight-button valuation-toggle" '
+        'id="valuation-toggle" type="button" '
+        'aria-controls="valuation-panel" aria-expanded="false" '
+        f'title="{valuation_title}"{valuation_disabled}>'
+        '<span aria-hidden="true">V</span><span>Valuation</span></button>'
+    )
     if monthly_valuations:
-        valuation_button_html = (
-            '<button class="chart-insight-button valuation-toggle" '
-            'id="valuation-toggle" type="button" '
-            'aria-controls="valuation-panel" aria-expanded="false" '
-            'title="Open monthly valuation chart">'
-            '<span aria-hidden="true">V</span><span>Valuation</span></button>'
-        )
         valuation_drawer_html = (
             '<div class="valuation-drawer" id="valuation-drawer">'
             '<button class="valuation-scrim" id="valuation-scrim" type="button" '
@@ -915,6 +926,8 @@ def interactive_stock_chart_html(
             '<span id="valuation-price-legend">━ Price</span></div>'
             '</aside></div>'
         )
+    else:
+        valuation_drawer_html = ""
     price_alert_html = (
         '<div class="chart-price-alert-form">'
         f'<button class="chart-cursor-alert" id="price-alert-at-cursor" type="button" '
@@ -1586,33 +1599,25 @@ def interactive_stock_chart_html(
           pointer-events: none;
         }}
         .valuation-drawer {{ position: absolute; inset: 0; z-index: 21; pointer-events: none; }}
-        .valuation-toggle {{
-          position: absolute; top: 70%; left: 8px; z-index: 3;
-          display: flex; align-items: center; gap: 6px; min-height: 108px;
-          padding: 10px 7px; border: 1px solid #8b82db; border-radius: 0 10px 10px 0;
-          background: linear-gradient(180deg, #6558d9, #4f46b8); color: #fff;
-          box-shadow: 0 8px 22px rgba(79,70,184,.25); cursor: pointer;
-          font-size: 10px; font-weight: 800; letter-spacing: .04em;
-          writing-mode: vertical-rl; pointer-events: auto;
-        }}
-        .valuation-scrim {{ position:absolute; inset:8px; border:0; border-radius:14px;
-          background:rgba(15,35,52,.30); opacity:0; pointer-events:none; }}
-        .valuation-panel {{ position:absolute; inset:8px auto 8px 8px; z-index:2;
-          width:min(760px,calc(100% - 16px)); padding:14px; overflow:auto;
+        .valuation-scrim {{ position:absolute; inset:0; border:0; border-radius:0;
+          background:rgba(15,35,52,.30); opacity:0; pointer-events:none;
+          transition:opacity .18s ease; }}
+        .valuation-panel {{ position:absolute; top:50%; left:50%; z-index:2;
+          width:min(760px,calc(100% - 24px)); max-height:calc(100% - 86px);
+          padding:14px; overflow:auto;
           border:1px solid #d8d5f2; border-radius:14px; background:#fff;
-          box-shadow:12px 0 34px rgba(16,36,62,.18); pointer-events:none;
-          transform:translateX(calc(-100% - 18px)); transition:transform .24s ease; }}
+          box-shadow:0 18px 48px rgba(16,36,62,.24); pointer-events:none;
+          opacity:0; visibility:hidden;
+          transform:translate(-50%,-50%) scale(.96);
+          transition:opacity .18s ease, transform .18s ease, visibility .18s ease; }}
         .valuation-panel__header {{ display:flex; justify-content:space-between; gap:10px;
           padding-bottom:10px; border-bottom:1px solid #e5e7eb; }}
         .valuation-panel h2 {{ margin:1px 0 0; color:#17334c; font-size:15px; }}
-        .valuation-drawer.is-open .valuation-toggle {{
-          border-color:#7c72d4;
-          background:linear-gradient(180deg,#7668e8,#4f46b8);
-          opacity:1;
-          pointer-events:auto;
-        }}
         .valuation-drawer.is-open .valuation-scrim {{ opacity:1; pointer-events:auto; }}
-        .valuation-drawer.is-open .valuation-panel {{ pointer-events:auto; transform:translateX(0); }}
+        .valuation-drawer.is-open .valuation-panel {{
+          opacity:1; visibility:visible; pointer-events:auto;
+          transform:translate(-50%,-50%) scale(1);
+        }}
         .valuation-chart-wrap {{ min-height:300px; margin-top:12px; }}
         #valuation-chart {{ width:100%; height:300px; overflow:visible; touch-action:none;
           outline:none; }}
@@ -1643,34 +1648,6 @@ def interactive_stock_chart_html(
           font-size:12px; line-height:1.55; pointer-events:none; }}
         .valuation-tooltip__date {{ color:#697586; font-size:11px; }}
         .valuation-tooltip strong {{ color:#202939; font-size:14px; }}
-        .fundamentals-toggle {{
-          position: absolute;
-          top: 50%;
-          left: 8px;
-          z-index: 3;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          min-height: 112px;
-          padding: 10px 7px;
-          border: 1px solid #8ab5c2;
-          border-radius: 0 10px 10px 0;
-          background: linear-gradient(180deg, #176b87, #10536a);
-          box-shadow: 0 8px 22px rgba(16, 53, 76, 0.25);
-          color: #ffffff;
-          cursor: pointer;
-          font-size: 10px;
-          font-weight: 800;
-          letter-spacing: 0.04em;
-          pointer-events: auto;
-          transform: translateY(-50%);
-          transition: opacity 0.18s ease, transform 0.18s ease;
-          writing-mode: vertical-rl;
-        }}
-        .fundamentals-toggle:hover {{
-          background: linear-gradient(180deg, #168297, #10536a);
-          transform: translateY(-50%) translateX(2px);
-        }}
         .fundamentals-toggle:focus-visible,
         .fundamentals-close:focus-visible {{
           outline: 3px solid rgba(23, 107, 135, 0.24);
@@ -1689,11 +1666,11 @@ def interactive_stock_chart_html(
         }}
         .fundamentals-scrim {{
           position: absolute;
-          inset: 8px;
+          inset: 0;
           z-index: 1;
           padding: 0;
           border: 0;
-          border-radius: 14px;
+          border-radius: 0;
           background: rgba(15, 35, 52, 0.30);
           cursor: default;
           opacity: 0;
@@ -1702,36 +1679,33 @@ def interactive_stock_chart_html(
         }}
         .fundamentals-panel {{
           position: absolute;
-          top: 8px;
-          left: 8px;
-          bottom: 8px;
+          top: 50%;
+          left: 50%;
           z-index: 2;
-          width: min(430px, calc(100% - 16px));
+          width: min(430px, calc(100% - 24px));
+          max-height: calc(100% - 86px);
           padding: 14px;
           overflow-x: hidden;
           overflow-y: auto;
           border: 1px solid #cbdce5;
           border-radius: 14px;
           background: #f6f9fb;
-          box-shadow: 12px 0 34px rgba(16, 36, 62, 0.18);
+          box-shadow: 0 18px 48px rgba(16, 36, 62, 0.24);
           pointer-events: none;
-          transform: translateX(calc(-100% - 18px));
-          transition: transform 0.24s ease;
-        }}
-        .fundamentals-drawer.is-open .fundamentals-toggle {{
-          border-color: #69a7b8;
-          background: linear-gradient(180deg, #168297, #10536a);
-          opacity: 1;
-          pointer-events: auto;
-          transform: translateY(-50%);
+          opacity: 0;
+          visibility: hidden;
+          transform: translate(-50%, -50%) scale(0.96);
+          transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
         }}
         .fundamentals-drawer.is-open .fundamentals-scrim {{
           opacity: 1;
           pointer-events: auto;
         }}
         .fundamentals-drawer.is-open .fundamentals-panel {{
+          opacity: 1;
+          visibility: visible;
           pointer-events: auto;
-          transform: translateX(0);
+          transform: translate(-50%, -50%) scale(1);
         }}
         .fundamentals-panel__header {{
           position: sticky;
@@ -1884,6 +1858,15 @@ def interactive_stock_chart_html(
           transform: none;
           filter: brightness(.98);
         }}
+        .chart-insight-actions .chart-insight-button:disabled {{
+          border-color: #cbd5df;
+          background: #eef1f4;
+          color: #8a98a8;
+          box-shadow: none;
+          cursor: not-allowed;
+          filter: none;
+          opacity: 1;
+        }}
         .chart-insight-button[aria-expanded="true"] {{
           box-shadow: inset 0 0 0 1px currentColor;
         }}
@@ -1894,6 +1877,8 @@ def interactive_stock_chart_html(
           font-size: 10px;
         }}
         .chart-watchlist-section {{
+          position: relative;
+          z-index: 30;
           align-items: center;
           flex-direction: row;
           gap: 6px;
@@ -1967,22 +1952,17 @@ def interactive_stock_chart_html(
             padding: 6px 8px;
             font-size: 9px;
           }}
-          .fundamentals-toggle {{ left: 0; }}
-          .valuation-toggle {{ left: 0; top: 72%; }}
           .fundamentals-scrim {{ inset: 0; border-radius: 0; }}
-          .fundamentals-panel {{
-            top: 8px;
-            left: 34px;
-            bottom: 8px;
-            width: calc(100% - 42px);
+          .fundamentals-panel,
+          .valuation-panel {{
+            inset: auto;
+            top: 50%;
+            left: 50%;
+            width: calc(100% - 20px);
+            max-height: calc(100dvh - 86px);
             border-radius: 12px;
           }}
           .valuation-scrim {{ inset:0; border-radius:0; }}
-          .valuation-panel {{
-            inset:8px 8px 8px 34px;
-            width:auto;
-            border-radius:12px;
-          }}
           .valuation-controls {{ align-items:stretch; }}
           .valuation-metrics {{ width:100%; }}
           .valuation-metrics button {{ flex:1; }}
@@ -2191,7 +2171,15 @@ def interactive_stock_chart_html(
           .chart-legend {{ min-height:34px; padding:3px 6px; gap:6px; font-size:9px; }}
           #chart {{ min-height:0; }}
           .chart-footer {{ display:none; }}
-          .valuation-panel {{ inset:0 auto 0 0; width:100%; border-radius:0; }}
+          .fundamentals-panel,
+          .valuation-panel {{
+            inset:auto;
+            top:50%;
+            left:50%;
+            width:calc(100% - 20px);
+            max-height:calc(100dvh - 54px);
+            border-radius:12px;
+          }}
           .valuation-chart-wrap, #valuation-chart {{ min-height:180px; height:calc(100dvh - 118px); }}
         }}
         @media (prefers-reduced-motion: reduce) {{

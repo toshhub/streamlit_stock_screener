@@ -32,10 +32,19 @@ class DailyUpdateWorkflowTests(unittest.TestCase):
         self.assertIn('- cron: "15 2 2 * *"', workflow)
         self.assertIn("python monthly_valuation_update.py", workflow)
         self.assertIn(
-            "git add -- data/metadata/monthly_valuations.parquet",
+            "git add -- data/metadata/monthly_valuations.parquet "
+            "data/metadata/screener_fundamentals.json",
             workflow,
         )
         self.assertIn("git push", workflow)
+
+        gitignore = (Path(__file__).parent / ".gitignore").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "!data/metadata/screener_fundamentals.json",
+            gitignore,
+        )
 
     def test_daily_entrypoint_delegates_to_r2_update(self):
         from unittest.mock import patch

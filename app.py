@@ -66,7 +66,6 @@ from downloader import (
 from fundamentals import (
     get_cached_company_growth_metrics,
     get_cached_company_valuation_medians,
-    prefetch_company_fundamentals,
 )
 from market_snapshots import (
     hydrate_result_valuations,
@@ -662,7 +661,6 @@ def run_interactive_chart_view():
     )
     growth_metrics = get_cached_company_growth_metrics(symbol, market)
     valuation_medians = get_cached_company_valuation_medians(symbol, market)
-    prefetch_company_fundamentals(symbol, market)
     embedded_layout_css = (
         """
         html, body,
@@ -5458,7 +5456,6 @@ with tab5:
                 chart_symbol,
                 chart_market,
             )
-            prefetch_company_fundamentals(chart_symbol, chart_market)
             workspace_watchlists = None
             if app_user is not None and cloud_store is not None:
                 if "_cached_personal_watchlists" in st.session_state:

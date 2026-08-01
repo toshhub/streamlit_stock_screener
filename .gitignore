@@ -17,5 +17,6 @@ data/charts/
 data/metadata/*
 !data/metadata/latest_stock_values.parquet
 !data/metadata/monthly_valuations.parquet
+!data/metadata/screener_fundamentals.json
 
 .streamlit/secrets.toml

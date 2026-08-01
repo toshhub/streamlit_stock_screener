@@ -8,6 +8,7 @@ import pandas as pd
 from fundamentals import (
     _fetch_screener_page,
     _read_url_with_retries,
+    _valuation_medians_from_history,
     _valuation_medians_complete,
     apply_fundamentals_to_result,
     get_company_fundamentals,
@@ -200,6 +201,31 @@ class ScreenerFundamentalsTests(unittest.TestCase):
         self.assertEqual(rows[1]["Sales"], 640.0)
         self.assertEqual(rows[1]["MedianPE"], 11.7)
         self.assertEqual(rows[1]["MedianMarketCapToSales"], 1.5)
+
+    def test_monthly_history_builds_local_period_medians(self):
+        rows = [
+            {
+                "Month": month,
+                "PE": pe,
+                "MarketCapToSales": sales_ratio,
+            }
+            for month, pe, sales_ratio in (
+                ("2016-09-01", 8.0, 1.0),
+                ("2021-09-01", 12.0, 1.5),
+                ("2023-09-01", 18.0, 2.0),
+                ("2026-08-01", 24.0, 2.5),
+            )
+        ]
+
+        medians = _valuation_medians_from_history(rows)
+
+        self.assertEqual(medians["Median PE"]["3 Years"], 21.0)
+        self.assertEqual(medians["Median PE"]["5 Years"], 18.0)
+        self.assertEqual(medians["Median PE"]["10 Years"], 15.0)
+        self.assertEqual(
+            medians["Median Market Cap to Sales"]["3 Years"],
+            2.25,
+        )
 
     def test_transient_screener_error_is_retried(self):
         throttled = urllib.error.HTTPError(

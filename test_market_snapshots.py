@@ -59,9 +59,16 @@ class MonthlyValuationTests(unittest.TestCase):
             with (
                 patch.object(market_snapshots, "MONTHLY_VALUATIONS_FILE", output),
                 patch(
-                    "market_snapshots.fetch_screener_valuation_history",
-                    return_value=history,
+                    "market_snapshots.fetch_screener_company_snapshot",
+                    return_value=(
+                        history,
+                        {"Compounded Sales Growth": {"3 Years": 12.0}},
+                        {"Median PE": {"3 Years": 16.0}},
+                    ),
                 ) as fetch,
+                patch(
+                    "market_snapshots.save_company_fundamentals_snapshots"
+                ) as save_fundamentals,
             ):
                 rows, failures = market_snapshots.collect_monthly_valuations(
                     {
@@ -79,6 +86,106 @@ class MonthlyValuationTests(unittest.TestCase):
         self.assertEqual(set(stored["Source"]), {"Screener.in"})
         self.assertIn("EPS", stored.columns)
         self.assertIn("Sales", stored.columns)
+        save_fundamentals.assert_called_once()
+        saved_snapshot = save_fundamentals.call_args.args[0][0]
+        self.assertEqual(saved_snapshot["symbol"], "TEST")
+        self.assertTrue(saved_snapshot["metrics"])
+        self.assertTrue(saved_snapshot["valuation_medians"])
+
+    def test_first_cut_fundamentals_reuses_current_local_valuations(self):
+        existing = pd.DataFrame([
+            {
+                "Month": "2026-01-01",
+                "Market": MARKET_INDIA,
+                "Symbol": "TEST",
+                "PE": 18.0,
+                "MarketCapToSales": 2.2,
+                "Source": "Screener.in",
+                "CollectedAt": "2026-01-10T09:00:00+05:30",
+            }
+        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "monthly.parquet"
+            existing.to_parquet(output, index=False)
+            with (
+                patch.object(market_snapshots, "MONTHLY_VALUATIONS_FILE", output),
+                patch("market_snapshots.load_fundamentals", return_value={}),
+                patch(
+                    "market_snapshots.fetch_screener_growth_metrics",
+                    return_value={
+                        "Compounded Sales Growth": {"3 Years": 12.0}
+                    },
+                ) as fetch_growth,
+                patch(
+                    "market_snapshots.fetch_screener_company_snapshot"
+                ) as fetch_full,
+                patch(
+                    "market_snapshots.save_company_fundamentals_snapshots"
+                ) as save_fundamentals,
+            ):
+                rows, failures = market_snapshots.collect_monthly_valuations(
+                    {MARKET_INDIA: ["TEST"]},
+                    month="2026-02-15",
+                )
+
+        self.assertEqual(rows, [])
+        self.assertFalse(failures)
+        fetch_growth.assert_called_once_with("TEST")
+        fetch_full.assert_not_called()
+        snapshot = save_fundamentals.call_args.args[0][0]
+        self.assertTrue(snapshot["metrics"])
+        self.assertEqual(
+            snapshot["valuation_medians"]["Median PE"]["3 Years"],
+            18.0,
+        )
+
+    def test_first_cut_skips_complete_fundamentals_with_old_valuations(self):
+        existing = pd.DataFrame([{
+            "Month": "2026-01-01",
+            "Market": MARKET_INDIA,
+            "Symbol": "TEST",
+            "PE": 18.0,
+            "MarketCapToSales": 2.2,
+            "Source": "Screener.in",
+            "CollectedAt": "2026-01-10T09:00:00+05:30",
+        }])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "monthly.parquet"
+            existing.to_parquet(output, index=False)
+            with (
+                patch.object(market_snapshots, "MONTHLY_VALUATIONS_FILE", output),
+                patch(
+                    "market_snapshots.load_fundamentals",
+                    return_value={
+                        "INDIA:TEST": {
+                            "metrics": {"Sales": {"3 Years": 12.0}},
+                            "valuation_medians": {
+                                "Median PE": {"3 Years": 18.0}
+                            },
+                        }
+                    },
+                ),
+                patch(
+                    "market_snapshots.fetch_screener_growth_metrics"
+                ) as fetch_growth,
+                patch(
+                    "market_snapshots.fetch_screener_company_snapshot"
+                ) as fetch_full,
+                patch(
+                    "market_snapshots.save_company_fundamentals_snapshots"
+                ) as save_fundamentals,
+            ):
+                rows, failures = market_snapshots.collect_monthly_valuations(
+                    {MARKET_INDIA: ["TEST"]},
+                    month="2026-02-15",
+                    fundamentals_first_cut=True,
+                )
+
+        self.assertEqual(rows, [])
+        self.assertFalse(failures)
+        fetch_growth.assert_not_called()
+        fetch_full.assert_not_called()
+        save_fundamentals.assert_not_called()
 
     def test_local_pe_medians_support_result_table_coloring(self):
         rows = pd.DataFrame([
@@ -148,7 +255,13 @@ class MonthlyValuationTests(unittest.TestCase):
             ),
         ):
             hydrated = market_snapshots.hydrate_result_valuations(
-                [{"Symbol": "test", "PE Ratio": ""}],
+                [{
+                    "Symbol": "test",
+                    "PE Ratio": "",
+                    "ValuationMedians": {
+                        "Median PE": {"3 Years": 999.0},
+                    },
+                }],
                 MARKET_INDIA,
             )
 

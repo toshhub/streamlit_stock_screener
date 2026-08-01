@@ -99,6 +99,7 @@ class NavigationUiTests(unittest.TestCase):
             "get_cached_company_valuation_medians(",
             self.app_source,
         )
+        self.assertNotIn("prefetch_company_fundamentals", self.app_source)
         self.assertIn(
             'st.session_state["_fast_workspace_navigation"] = True',
             self.app_source,

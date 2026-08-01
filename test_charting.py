@@ -181,8 +181,10 @@ class InteractiveChartTests(unittest.TestCase):
         self.assertIn('aria-expanded="false"', result)
         self.assertIn('aria-hidden="true" inert', result)
         self.assertIn('class="fundamentals-panel"', result)
-        self.assertIn("transform: translateX(calc(-100% - 18px))", result)
-        self.assertIn("width: calc(100% - 42px)", result)
+        self.assertIn("visibility: hidden", result)
+        self.assertIn("transform: translate(-50%, -50%) scale(0.96)", result)
+        self.assertIn("transform: translate(-50%, -50%) scale(1)", result)
+        self.assertIn("width: calc(100% - 20px)", result)
         self.assertIn("border-radius: 12px", result)
         self.assertIn("setFundamentalsOpen(false)", result)
         self.assertIn(
@@ -201,7 +203,7 @@ class InteractiveChartTests(unittest.TestCase):
             "if (open && fundamentalsDrawer) setFundamentalsOpen(false)",
             result,
         )
-        self.assertIn("left: 34px", result)
+        self.assertIn("z-index: 30", result)
         self.assertIn("height:clamp(240px,44dvh,420px)", result)
         self.assertIn('id="price-alert-at-cursor"', result)
         self.assertIn('aria-label="Add price alert at cursor"', result)
@@ -552,7 +554,7 @@ class InteractiveChartTests(unittest.TestCase):
             list(range(1, 20)),
         )
 
-    def test_growth_section_is_hidden_when_values_are_unavailable(self):
+    def test_insight_buttons_remain_available_when_values_are_unavailable(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "TEST.json"
             path.write_text(json.dumps(self._price_rows(300)), encoding="utf-8")
@@ -579,6 +581,20 @@ class InteractiveChartTests(unittest.TestCase):
 
         self.assertNotIn('class="growth-snapshot"', result)
         self.assertNotIn('class="fundamentals-drawer"', result)
+        self.assertNotIn('class="valuation-drawer"', result)
+        self.assertIn('id="fundamentals-toggle"', result)
+        self.assertIn('id="valuation-toggle"', result)
+        self.assertIn(
+            'title="Fundamentals unavailable in the local monthly data" '
+            'disabled aria-disabled="true"',
+            result,
+        )
+        self.assertIn(
+            'title="Valuation history unavailable in the local monthly data" '
+            'disabled aria-disabled="true"',
+            result,
+        )
+        self.assertIn("cursor: not-allowed", result)
         self.assertNotIn("Source: Screener.in", result)
         self.assertIn('<div class="chart-title">', result)
         self.assertNotIn('<div class="chart-title valuation-favorable">', result)
