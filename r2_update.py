@@ -27,6 +27,7 @@ from r2_stock_data import (
     get_r2_store,
     manifest_entry,
     normalize_candles,
+    sha256_bytes,
 )
 from price_alerts import check_price_alerts_for_market_candles
 
@@ -53,6 +54,26 @@ def _read_remote_json(store, key):
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise R2DataError(f"Invalid existing monthly JSON {key}: {exc}") from exc
     return normalize_candles(pd.DataFrame(rows))
+
+
+def _upload_verified_object(store, key, payload, content_type):
+    """Upload immutable bytes and verify them before manifest publication."""
+    store.client.put_object(
+        Bucket=store.settings.bucket,
+        Key=key,
+        Body=payload,
+        ContentType=content_type,
+    )
+    try:
+        uploaded = store._object_bytes(key)
+    except Exception as exc:
+        raise R2DataError(
+            f"Could not verify uploaded R2 object {key}: {exc}"
+        ) from exc
+    if sha256_bytes(uploaded) != sha256_bytes(payload):
+        raise R2DataError(
+            f"Uploaded R2 object failed checksum verification: {key}"
+        )
 
 
 def _download_symbol(symbol, market, start, end):
@@ -84,8 +105,20 @@ def update_market_month(store, manifest, market, *, now=None, symbols=None):
     market_key = _market_key(market)
     reliable_date = last_reliable_completed_candle(now=now, market=market)
     month = reliable_date.strftime("%Y-%m")
-    key = store.key(f"{market_key}/current/{month}.json")
-    existing = _read_remote_json(store, key)
+    market_manifest = manifest.setdefault("markets", {}).setdefault(
+        market_key,
+        {},
+    )
+    market_manifest.setdefault("yearly", {})
+    current_entries = market_manifest.setdefault("current", {})
+    legacy_key = store.key(f"{market_key}/current/{month}.json")
+    existing_entry = current_entries.get(month)
+    existing_key = (
+        store._entry_key(existing_entry)
+        if existing_entry
+        else legacy_key
+    )
+    existing = _read_remote_json(store, existing_key)
     month_start = reliable_date.replace(day=1)
     download_start = (
         month_start
@@ -144,19 +177,13 @@ def update_market_month(store, manifest, market, *, now=None, symbols=None):
     if combined.empty:
         raise R2DataError(f"No valid {market} candles were produced for {month}.")
     payload = dataframe_json_bytes(combined)
-    store.client.put_object(
-        Bucket=store.settings.bucket,
-        Key=key,
-        Body=payload,
-        ContentType="application/json",
+    payload_sha256 = sha256_bytes(payload)
+    key = store.key(
+        f"{market_key}/current/{month}-{payload_sha256[:16]}.json"
     )
+    _upload_verified_object(store, key, payload, "application/json")
 
-    market_manifest = manifest.setdefault("markets", {}).setdefault(
-        market_key,
-        {},
-    )
-    market_manifest.setdefault("yearly", {})
-    market_manifest.setdefault("current", {})[month] = manifest_entry(
+    current_entries[month] = manifest_entry(
         key,
         payload,
         rows=len(combined),
@@ -213,11 +240,11 @@ def finalize_year(store, manifest, market, year):
     )
     payload = buffer.getvalue()
     key = store.key(f"{market_key}/yearly/{year_key}.parquet")
-    store.client.put_object(
-        Bucket=store.settings.bucket,
-        Key=key,
-        Body=payload,
-        ContentType="application/octet-stream",
+    _upload_verified_object(
+        store,
+        key,
+        payload,
+        "application/octet-stream",
     )
     market_manifest.setdefault("yearly", {})[year_key] = manifest_entry(
         key,

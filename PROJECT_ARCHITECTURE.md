@@ -49,13 +49,20 @@ Cloudflare R2 is the deployed source of truth for candles. The remote layout is:
 stock-data/
   manifest.json
   india/yearly/YYYY.parquet
-  india/current/YYYY-MM.json
+  india/current/YYYY-MM-<checksum>.json
   us/yearly/YYYY.parquet
-  us/current/YYYY-MM.json
+  us/current/YYYY-MM-<checksum>.json
 ```
 
 `r2_stock_data.py` owns manifest validation, downloads, revisions, atomic local
 cache activation, and local per-symbol materialization.
+
+Current-month objects are immutable and content-addressed. `r2_update.py`
+uploads a checksum-versioned object, reads it back, verifies its SHA-256, and
+only then publishes a manifest pointing to it. Never overwrite an object already
+referenced by a manifest: doing so creates a checksum race for readers holding
+the previous manifest. Legacy `YYYY-MM.json` entries remain readable and are
+replaced by the versioned form on the next successful update.
 
 The Streamlit server uses two forms of local materialized cache:
 

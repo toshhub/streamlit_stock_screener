@@ -3,8 +3,11 @@
 Remote layout::
 
     stock-data/{india,us}/yearly/YYYY.parquet
-    stock-data/{india,us}/current/YYYY-MM.json
+    stock-data/{india,us}/current/YYYY-MM-<checksum>.json
     stock-data/manifest.json
+
+Legacy manifests may still reference current/YYYY-MM.json. Readers follow the
+manifest key and therefore support both forms.
 
 The public helpers are intentionally independent of Streamlit.  The app,
 GitHub Actions, and tests can therefore share the same manifest and validation

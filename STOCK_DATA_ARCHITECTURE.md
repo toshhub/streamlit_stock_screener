@@ -10,10 +10,10 @@ inputs, but no candle files.
 stock-data/
   india/
     yearly/YYYY.parquet
-    current/YYYY-MM.json
+    current/YYYY-MM-<checksum>.json
   us/
     yearly/YYYY.parquet
-    current/YYYY-MM.json
+    current/YYYY-MM-<checksum>.json
   manifest.json
 ```
 
@@ -22,9 +22,16 @@ monthly JSON arrays containing `Symbol`, `Date`, OHLC, adjusted close, and
 volume. `Symbol + Date` is the unique candle key.
 
 The manifest records each object key, checksum, byte size, row count, update
-time, market symbols, latest date, and an overall version. Writers upload and
-validate candle objects before publishing the new manifest, so readers never
-observe a manifest pointing at an incomplete upload.
+time, market symbols, latest date, and an overall version. Current-month object
+keys include a prefix of their SHA-256 and are immutable. Writers upload each
+new object, read it back, validate its complete SHA-256, and only then publish
+the new manifest. Therefore a reader holding the previous manifest continues
+to read the previous immutable object while publication is in progress.
+
+Legacy `current/YYYY-MM.json` objects remain readable for migrations and old
+manifests. The next successful daily update publishes that month under the
+content-addressed key. Never overwrite an object referenced by any published
+manifest.
 
 ## Streamlit server cache
 
@@ -77,9 +84,10 @@ need to rebuild after a container replacement or redeployment.
 ## Twice-daily update
 
 `.github/workflows/streamlit-cron.yml` runs after the India and US sessions. It
-downloads the current monthly object, fetches overlapping Yahoo candles, keeps
-only completed sessions, validates and deduplicates rows, uploads the month,
-and publishes the manifest. After publication, the same cron loads active
+downloads the manifest-selected monthly object, fetches overlapping Yahoo
+candles, keeps only completed sessions, validates and deduplicates rows,
+uploads and verifies a new immutable monthly object, and publishes the manifest.
+After publication, the same cron loads active
 Supabase price alerts once per market, evaluates them against the finalized
 candles, and persists triggered or last-checked changes in a batch. Local server
 cache synchronization never evaluates alerts.
