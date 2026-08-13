@@ -242,6 +242,14 @@ Authenticated personal data includes settings, favorite filters, watchlists,
 alerts, and the latest screener result. Shared candle data and shared filter
 definitions are not user-owned.
 
+In the Screener workspace, selecting a personal favorite keeps it selected
+while its working filters are edited. The UI always offers **Save Filters** to
+create a new personal favorite and, when the selected personal favorite has
+unsaved changes, offers **Update Filter** to replace that favorite in place.
+Shared favorites remain read-only and can only be saved as a new personal
+favorite. Unsaved edits are treated as a custom filter set when recording
+screener results.
+
 All personal reads and writes must remain scoped by `user_id`. The Supabase
 service-role key is server-only. Read `CLOUD_SETUP.md` and the schema before
 changing authentication or personal persistence.

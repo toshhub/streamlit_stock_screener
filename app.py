@@ -1825,11 +1825,23 @@ def filter_set_matches_favorite(filter_set, filter_name):
 
 
 def mark_current_filter_custom():
+    """Keep a selected favorite available for an explicit update after edits."""
     active_name = st.session_state.get("_active_favorite_filter_name")
     if active_name:
         if app_user is None:
             st.session_state["_favorite_edit_login_required"] = True
-    st.session_state["_active_favorite_filter_name"] = None
+
+
+def favorite_filter_payload(filter_set, lookback_days, reversal_pct):
+    """Build the persisted form shared by save-as and update actions."""
+    return {
+        "ma_filter_set": filter_set,
+        "pattern": {
+            "lookback_days": lookback_days,
+            "reversal_pct": reversal_pct,
+            "expressions": custom_filter_expressions(filter_set),
+        },
+    }
 
 
 def apply_filter_selection_to_state(filter_name):
@@ -4582,23 +4594,30 @@ def render_screener_workspace():
     active_filter_count = len(filter_set)
 
     active_favorite_name = st.session_state.get("_active_favorite_filter_name")
-    if (
+    favorite_has_unsaved_changes = bool(
         active_favorite_name
         and not filter_set_matches_favorite(filter_set, active_favorite_name)
-    ):
-        mark_current_filter_custom()
-        active_favorite_name = None
-
-    current_filter_label = active_favorite_name or CUSTOM_FILTER_NAME
-    current_filter_status_class = (
-        "is-favorite" if active_favorite_name else "is-custom"
     )
-    current_filter_status_icon = "⭐" if active_favorite_name else "✦"
+    current_filter_label = active_favorite_name or CUSTOM_FILTER_NAME
+    if favorite_has_unsaved_changes:
+        current_filter_label += " · edited"
+    current_filter_status_class = (
+        "is-favorite"
+        if active_favorite_name and not favorite_has_unsaved_changes
+        else "is-custom"
+    )
+    current_filter_status_icon = (
+        "⭐" if active_favorite_name and not favorite_has_unsaved_changes else "✦"
+    )
     save_custom_favorite = False
     inline_favorite_name = ""
+    update_active_favorite = False
+    active_personal_favorite_name = personal_favorite_keys.get(
+        active_favorite_name
+    )
     with current_filter_heading.container():
-        heading_col, save_strategy_col = st.columns(
-            [12, 1],
+        heading_col, save_strategy_col, update_strategy_col = st.columns(
+            [10, 1, 1],
             vertical_alignment="center",
         )
         with heading_col:
@@ -4612,26 +4631,42 @@ def render_screener_workspace():
                 unsafe_allow_html=True,
             )
         with save_strategy_col:
-            if not active_favorite_name:
-                with st.popover(
-                    "Save Filters",
-                    key="save_custom_strategy_popover",
+            with st.popover(
+                "Save Filters",
+                key="save_custom_strategy_popover",
+                use_container_width=True,
+                disabled=not active_filter_count,
+                help="Save these filters as a new personal favorite.",
+            ):
+                st.markdown("**Save as new strategy**")
+                inline_favorite_name = st.text_input(
+                    "Strategy name",
+                    key="_inline_favorite_name",
+                    placeholder="e.g. Golden Cross + PE",
+                )
+                save_custom_favorite = st.button(
+                    "Save",
+                    key="save_custom_strategy",
+                    type="primary",
                     use_container_width=True,
-                    disabled=not active_filter_count,
-                    help="Save this custom filter set as a personal favorite.",
-                ):
-                    st.markdown("**Save custom strategy**")
-                    inline_favorite_name = st.text_input(
-                        "Strategy name",
-                        key="_inline_favorite_name",
-                        placeholder="e.g. Golden Cross + PE",
-                    )
-                    save_custom_favorite = st.button(
-                        "Save",
-                        key="save_custom_strategy",
-                        type="primary",
-                        use_container_width=True,
-                    )
+                )
+        with update_strategy_col:
+            if active_favorite_name:
+                update_active_favorite = st.button(
+                    "Update Filter",
+                    key="update_active_favorite_filter",
+                    use_container_width=True,
+                    disabled=(
+                        not active_filter_count
+                        or not favorite_has_unsaved_changes
+                        or not active_personal_favorite_name
+                    ),
+                    help=(
+                        "Save these changes to the selected personal favorite."
+                        if active_personal_favorite_name
+                        else "Shared favorites cannot be changed. Save as a new personal favorite instead."
+                    ),
+                )
 
     if not fragment_fast_favorite_selection:
         update_changed_settings({
@@ -4668,14 +4703,11 @@ def render_screener_workspace():
             st.error("A personal strategy with that name already exists. Choose a new name.")
         else:
             clean_name = inline_favorite_name.strip()
-            favorite_data = {
-                "ma_filter_set": filter_set,
-                "pattern": {
-                    "lookback_days": pattern_lookback_days,
-                    "reversal_pct": pattern_reversal_pct,
-                    "expressions": custom_filter_expressions(filter_set),
-                },
-            }
+            favorite_data = favorite_filter_payload(
+                filter_set,
+                pattern_lookback_days,
+                pattern_reversal_pct,
+            )
             try:
                 cloud_store.save_filter_set(app_user.id, clean_name, favorite_data)
             except (CloudStorageError, ValueError) as exc:
@@ -4687,6 +4719,43 @@ def render_screener_workspace():
                 st.session_state.pop("_favorite_select_widget", None)
                 st.session_state.pop("_inline_favorite_name", None)
                 st.toast(f"Saved personal strategy: {clean_name}", icon="⭐")
+                st.rerun()
+
+    if update_active_favorite:
+        if app_user is None:
+            render_login_prompt(
+                "Sign in with Google before updating a personal strategy.",
+                key="active_favorite_update_login",
+                error=True,
+            )
+        elif cloud_store is None:
+            st.error("Cloud storage is not configured, so this strategy cannot be updated.")
+        elif not active_personal_favorite_name:
+            st.error("Only personal strategies can be updated. Save this as a new personal strategy instead.")
+        else:
+            favorite_data = favorite_filter_payload(
+                filter_set,
+                pattern_lookback_days,
+                pattern_reversal_pct,
+            )
+            try:
+                cloud_store.save_filter_set(
+                    app_user.id,
+                    active_personal_favorite_name,
+                    favorite_data,
+                )
+            except (CloudStorageError, ValueError) as exc:
+                st.error(str(exc))
+            else:
+                update_settings({
+                    "selected_favorite_filter_set": active_favorite_name,
+                    "screener_filter_set": filter_set,
+                    "pattern_expressions": custom_filter_expressions(filter_set),
+                })
+                st.toast(
+                    f"Updated personal strategy: {active_personal_favorite_name}",
+                    icon="⭐",
+                )
                 st.rerun()
 
     # ===== RUN SCREENER LOGIC =====
@@ -4747,7 +4816,11 @@ def render_screener_workspace():
         active_name = st.session_state.get("_active_favorite_filter_name")
         result_filter_name = (
             active_name
-            if active_name and active_name in favorite_filter_sets
+            if (
+                active_name
+                and active_name in favorite_filter_sets
+                and filter_set_matches_favorite(filter_set, active_name)
+            )
             else CUSTOM_FILTER_NAME
         )
         latest_summary = data_availability_summary(

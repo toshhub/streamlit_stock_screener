@@ -27,12 +27,15 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
             "from mobile_filter_proxy import st",
             self.app_source,
         )
-        self.assertIn(
-            'with st.popover(\n                    "Save Filters"',
-            self.app_source,
-        )
+        self.assertIn('with st.popover(', self.app_source)
+        self.assertIn('"Save Filters",', self.app_source)
         self.assertIn('key="save_custom_strategy_popover"', self.app_source)
         self.assertIn('key="save_custom_strategy"', self.app_source)
+        self.assertIn('"Update Filter"', self.app_source)
+        self.assertIn('key="update_active_favorite_filter"', self.app_source)
+        self.assertIn('active_personal_favorite_name', self.app_source)
+        self.assertIn('favorite_has_unsaved_changes', self.app_source)
+        self.assertIn('"**Save as new strategy**"', self.app_source)
         self.assertIn(
             "removable_options=personal_favorite_keys.keys()",
             self.app_source,
@@ -51,6 +54,16 @@ class ScreenerFavoriteUiTests(unittest.TestCase):
             "This saved filter setup cannot be recovered.",
             self.app_source,
         )
+
+    def test_selected_personal_favorite_can_stay_selected_after_an_edit(self):
+        start = self.app_source.index("def mark_current_filter_custom():")
+        end = self.app_source.index("\ndef favorite_filter_payload", start)
+        edit_handler = self.app_source[start:end]
+        self.assertNotIn(
+            'st.session_state["_active_favorite_filter_name"] = None',
+            edit_handler,
+        )
+        self.assertIn('"Update Filter"', self.app_source)
 
         proxy_source = (
             Path(__file__).parent / "streamlit_filter_proxy.py"
